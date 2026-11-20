@@ -137,7 +137,8 @@ def main():
 
     step("Hikvision machine add + test (unreachable IP must give a clear error)")
     post(s, "/devices/save", {"name": "Lobby Hik", "brand": "HIKVISION", "ip_address": "127.0.0.1", "port": "9",
-                              "username": "admin", "password": "x", "approved": "1", "enabled": "1"}, must="saved")
+                              "username": "admin", "password": "x", "approved": "1", "enabled": "1"},
+         must="connection test failed: cannot reach", must_not=None)
     hik = re.findall(r"/devices/(\d+)/test", page(s, "/devices").text)
     ok(hik, "Hikvision test button missing")
     r = post(s, f"/devices/{hik[0]}/test", must_not=None)
