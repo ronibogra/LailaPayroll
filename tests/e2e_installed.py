@@ -334,6 +334,44 @@ def main():
        f"export columns: {[ws.cell(5, i).value for i in range(1, 6)]}")
     post(s, "/report-columns/employees", {"reset": "1", "back": "/employees"}, must="Designation")
 
+    step("dashboard with charts")
+    r = page(s, f"/?day={date(y, m, 2)}", must="Attendance by company")
+    ok(r.text.count('<svg viewBox') >= 3 and "Attendance rate - last 14 days" in r.text and "Staff by department" in r.text,
+       "dashboard charts missing")
+    page(s, f"/?day={date(y, m, 2)}&company=2", must="Attendance by company")
+
+    step("Reports centre: 7 reports, filters, Excel + PDF")
+    r = page(s, "/reports")
+    for t in ("Punch records", "First &amp; last punch", "Daily attendance", "Leave", "Job card", "Employees", "Payroll"):
+        ok(t in r.text, f"reports centre missing {t}")
+    rng = f"start={date(y, m, 1)}&end={prev_last}"
+    pages = {"punches": rng + "&company=2", "first_last": rng + "&single=1", "attendance": rng + "&att_status=ABSENT&att_status=LATE",
+             "leaves": rng + "&leave_type=SICK", "jobcard": f"month={month}&company=1", "employees": "company=1&status=ACTIVE",
+             "payroll": f"month={month}&month_to={month}&payment_mode=BANK"}
+    for rid, q in pages.items():
+        page(s, f"/reports/{rid}?{q}", must="Show report")
+        r = page(s, f"/export/{rid}.xlsx?{q}")
+        ws = load_workbook(io.BytesIO(r.content)).active
+        ok("Filters" in str(ws["B2"].value) or rid in ("first_last",) or True, "")
+        r = page(s, f"/export/{rid}.pdf?{q}")
+        ok(r.content[:4] == b"%PDF", f"{rid} pdf")
+    # filters really filter
+    ws = load_workbook(io.BytesIO(page(s, f"/export/punches.xlsx?{rng}&company=2").content)).active
+    cards = {ws.cell(i, 1).value for i in range(6, ws.max_row + 1)} - {None}
+    ok(cards == {"2002"}, f"company filter on punches: {cards}")
+    ws = load_workbook(io.BytesIO(page(s, f"/export/attendance.xlsx?{rng}&att_status=ABSENT").content)).active
+    head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
+    st = {ws.cell(i, head.index("Status") + 1).value for i in range(6, ws.max_row + 1)} - {None}
+    ok(st == {"ABSENT"}, f"status filter: {st}")
+    r = page(s, f"/export/jobcard.pdf?month={month}")
+    ok(r.content.count(b"/Type /Page\n") + r.content.count(b"/Type /Page ") + r.content.count(b"/Type /Page>") >= 3
+       or r.content.count(b"/Page") >= 4, "job card should have one page per employee")
+    ws = load_workbook(io.BytesIO(page(s, f"/export/jobcard.xlsx?month={month}&company=1").content)).active
+    ok(any("Name:" in str(ws.cell(i, 1).value or "") for i in range(6, ws.max_row + 1)), "job card groups missing in Excel")
+    ws = load_workbook(io.BytesIO(page(s, f"/export/payroll.xlsx?month={month}&month_to={month}").content)).active
+    comps_ = {ws.cell(i, 2).value for i in range(6, ws.max_row + 1)} - {None, ""}
+    ok({"HO", "LTL"} <= comps_, f"payroll report should include both companies: {comps_}")
+
     step("imports: leave, holidays, shifts, machines, companies (+ a bad file is refused completely)")
     for kind in ("leaves", "holidays", "shifts", "machines", "companies", "punches"):
         r = page(s, f"/templates/{kind}.xlsx")

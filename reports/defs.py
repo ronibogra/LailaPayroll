@@ -1,14 +1,17 @@
 """All reports (lists) of the program with their selectable columns. Screen, Excel and PDF all use these."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from sqlalchemy import func, or_, select
 
-from models import (AttendanceLog, AuditLog, Company, DailyAttendance, Device, Employee, ErrorLog, Holiday, Leave,
-                    PayrollRun, Shift)
+from models import (AttendanceLog, AuditLog, Company, DailyAttendance, Department, Device, Employee, ErrorLog, Holiday,
+                    Leave, PayrollLine, PayrollRun, Shift)
 from reports.engine import Col, Report
+from reports.filters import emp_conditions, has_emp_filter
 from timeutil import now_local
+
+EMP_F = ["company", "department", "designation", "section", "shift", "status", "q"]
 
 DEVICE_TYPES = {"ZKTECO": "ZKTeco (by IP)", "ZKTECO_PUSH": "ZKTeco (push)", "HIKVISION": "Hikvision"}
 
@@ -96,18 +99,9 @@ EMP_COLS = [
 
 
 def fetch_employees(db, user, p, export):
-    cid = _company(user, p)
-    stmt = select(Employee)
-    if cid:
-        stmt = stmt.where(Employee.company_id == cid)
-    if p.get("status"):
-        stmt = stmt.where(Employee.employment_status == p["status"])
-    if p.get("q"):
-        like = f"%{p['q'].strip()}%"
-        stmt = stmt.where(or_(Employee.employee_code.ilike(like), Employee.full_name.ilike(like),
-                              Employee.card_no.ilike(like)))
+    stmt = select(Employee).where(*emp_conditions(p, user))
     rows, total = _page(stmt.order_by(Employee.company_id, Employee.employee_code), db, p, export, 50)
-    return rows, f"{total} employees{_comp_name(db, cid)}", total
+    return rows, f"{total} employees{_comp_name(db, _company(user, p))}", total
 
 
 # ------------------------------------------------------------ punches
@@ -142,13 +136,16 @@ PUNCH_COLS = [
 def fetch_punches(db, user, p, export):
     from services.punch_reports import punch_query
     s, e = _dates(p)
-    cid = _company(user, p)
-    stmt = punch_query(db, s, e, cid, p.get("q", ""), int(p["machine"]) if str(p.get("machine", "")).isdigit() else None,
+    stmt = punch_query(db, s, e, None, "", int(p["machine"]) if str(p.get("machine", "")).isdigit() else None,
                        p.get("source", ""), bool(p.get("unknown")))
+    if has_emp_filter(p, user):
+        stmt = stmt.where(AttendanceLog.card_no.in_(select(Employee.card_no).where(*emp_conditions(p, user))))
+    if p.get("direction"):
+        stmt = stmt.where(AttendanceLog.direction == p["direction"])
     stmt = stmt.order_by(AttendanceLog.punch_time.desc() if not export else AttendanceLog.punch_time, AttendanceLog.card_no)
     rows, total = _page(stmt, db, p, export, 200)
     emps = _emp_map(db, rows)
-    return [PunchRow(r, emps.get(r.card_no)) for r in rows], f"{s:%d/%m/%Y} - {e:%d/%m/%Y}{_comp_name(db, cid)}", total
+    return [PunchRow(r, emps.get(r.card_no)) for r in rows], f"{s:%d/%m/%Y} - {e:%d/%m/%Y}{_comp_name(db, _company(user, p))}", total
 
 
 # ------------------------------------------------------------ first & last
@@ -174,9 +171,17 @@ FL_COLS = [
 def fetch_first_last(db, user, p, export):
     from services.punch_reports import first_last
     s, e = _dates(p)
-    cid = _company(user, p)
-    rows = first_last(db, s, e, cid, p.get("q", ""), include_unknown=not cid)
-    return (rows if export else rows[:3000]), f"{s:%d/%m/%Y} - {e:%d/%m/%Y}{_comp_name(db, cid)}", len(rows)
+    filtered = has_emp_filter(p, user)
+    rows = first_last(db, s, e, include_unknown=not filtered, emp_conds=emp_conditions(p, user) if filtered else None)
+    if p.get("single"):
+        rows = [r for r in rows if r["count"] == 1]
+    if p.get("late_after"):
+        t = time.fromisoformat(p["late_after"])
+        rows = [r for r in rows if r["first"].time() > t]
+    if p.get("early_before"):
+        t = time.fromisoformat(p["early_before"])
+        rows = [r for r in rows if r["count"] > 1 and r["last"].time() < t]
+    return rows, f"{s:%d/%m/%Y} - {e:%d/%m/%Y}{_comp_name(db, _company(user, p))}", len(rows)
 
 
 # ------------------------------------------------------------ daily attendance
@@ -200,16 +205,83 @@ ATT_COLS = [
 ]
 
 
+def _att_stmt(p, user, s, e):
+    stmt = (select(DailyAttendance).join(Employee).where(DailyAttendance.work_date >= s, DailyAttendance.work_date <= e,
+                                                         *emp_conditions(p, user)))
+    st = p.get("att_status")
+    st = st if isinstance(st, list) else [x for x in str(st or "").split(",") if x]
+    if st:
+        stmt = stmt.where(DailyAttendance.status.in_(st))
+    if p.get("late_only"):
+        stmt = stmt.where(DailyAttendance.late_minutes > 0)
+    if p.get("ot_only"):
+        stmt = stmt.where((DailyAttendance.ot_minutes + DailyAttendance.extra_ot_minutes) > 0)
+    return stmt
+
+
 def fetch_attendance(db, user, p, export):
-    s, e = _dates({"start": p.get("day") or p.get("start"), "end": p.get("end") or p.get("day")})
-    cid = _company(user, p)
-    stmt = select(DailyAttendance).join(Employee).where(DailyAttendance.work_date >= s, DailyAttendance.work_date <= e)
-    if cid:
-        stmt = stmt.where(Employee.company_id == cid)
-    if p.get("status"):
-        stmt = stmt.where(DailyAttendance.status == p["status"])
-    rows = db.scalars(stmt.order_by(DailyAttendance.work_date, Employee.company_id, Employee.employee_code)).all()
-    sub = f"{s:%d/%m/%Y}" + (f" - {e:%d/%m/%Y}" if e != s else "") + _comp_name(db, cid) + (f" · {p['status']}" if p.get("status") else "")
+    s, e = _dates({"start": p.get("start") or p.get("day"), "end": p.get("end") or p.get("day")})
+    rows = db.scalars(_att_stmt(p, user, s, e).order_by(DailyAttendance.work_date, Employee.company_id,
+                                                       Employee.employee_code)).all()
+    sub = f"{s:%d/%m/%Y}" + (f" - {e:%d/%m/%Y}" if e != s else "") + _comp_name(db, _company(user, p))
+    return rows, sub, len(rows)
+
+
+# ------------------------------------------------------------ job card (one block per employee)
+def _month_range(p):
+    if p.get("start") or p.get("end"):
+        return _dates(p)
+    y, m = (int(x) for x in (p.get("month") or f"{now_local():%Y-%m}").split("-")[:2])
+    first = date(y, m, 1)
+    nxt = date(y + (m == 12), m % 12 + 1, 1)
+    return first, nxt - timedelta(days=1)
+
+
+JOB_COLS = [
+    Col("date", "Date", lambda r: r.work_date, kind="date"),
+    Col("day", "Day", lambda r: r.work_date.strftime("%a")),
+    Col("shift", "Shift", lambda r: r.shift_code),
+    Col("status", "Status", lambda r: r.status),
+    Col("in", "In", lambda r: r.in_time, kind="time"),
+    Col("out", "Out", lambda r: r.out_time, kind="time"),
+    Col("late", "Late (min)", lambda r: r.late_minutes or None, kind="num"),
+    Col("early", "Early leave (min)", lambda r: r.early_leave_minutes or None, kind="num"),
+    Col("worked", "Worked h", lambda r: round(r.worked_minutes / 60, 2) if r.worked_minutes else None, kind="hours"),
+    Col("ot", "OT h", lambda r: round(r.ot_minutes / 60, 2) if r.ot_minutes else None, kind="hours"),
+    Col("extra_ot", "Extra OT h", lambda r: round(r.extra_ot_minutes / 60, 2) if r.extra_ot_minutes else None, False, kind="hours"),
+    Col("total_ot", "Total OT h", lambda r: round((r.ot_minutes + r.extra_ot_minutes) / 60, 2) if r.ot_minutes or r.extra_ot_minutes else None, False, kind="hours"),
+    Col("punches", "Punches", lambda r: r.punch_count, False, kind="num"),
+    Col("code", "Employee code", lambda r: r.employee.employee_code, False),
+    Col("name", "Name", lambda r: r.employee.full_name, False),
+]
+
+
+def _job_title(r):
+    e = r.employee
+    return [("Name", e.full_name), ("Code", e.employee_code), ("Card", e.card_no),
+            ("Company", e.company.code if e.company else ""), ("Department", e.department.name if e.department else "-"),
+            ("Designation", e.designation or "-"),
+            ("Joined", e.joined_on.strftime("%d/%m/%Y") if e.joined_on else "-")]
+
+
+def _job_summary(rows):
+    cnt = lambda *st: sum(1 for r in rows if r.status in st)  # noqa: E731
+    worked = sum(r.worked_minutes for r in rows) / 60
+    ot = sum(r.ot_minutes for r in rows) / 60
+    extra = sum(r.extra_ot_minutes for r in rows) / 60
+    return [("Present", cnt("PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK")), ("Late", sum(1 for r in rows if r.late_minutes)),
+            ("Absent", cnt("ABSENT")), ("Leave", cnt("LEAVE_PAID", "LEAVE_UNPAID")), ("Off days", cnt("OFFDAY")),
+            ("Worked h", f"{worked:.2f}"), ("OT h", f"{ot:.2f}"), ("Extra OT h", f"{extra:.2f}")]
+
+
+def fetch_jobcard(db, user, p, export):
+    s, e = _month_range(p)
+    if (e - s).days > 92:
+        raise Problem("Choose at most 3 months at a time")
+    rows = db.scalars(_att_stmt(p, user, s, e).order_by(Employee.company_id, Employee.employee_code,
+                                                       DailyAttendance.work_date)).all()
+    n = len({r.employee_id for r in rows})
+    sub = f"{s:%d/%m/%Y} - {e:%d/%m/%Y} · {n} employees{_comp_name(db, _company(user, p))}"
     return rows, sub, len(rows)
 
 
@@ -231,12 +303,13 @@ def fetch_leaves(db, user, p, export):
     s, e = _dates({"start": p.get("start") or str(now_local().date() - timedelta(days=60)),
                    "end": p.get("end") or str(now_local().date() + timedelta(days=30))})
     stmt = (select(Leave, Employee).join(Employee, Employee.id == Leave.employee_id)
-            .where(Leave.end_date >= s, Leave.start_date <= e).order_by(Leave.start_date.desc()))
-    cid = _company(user, p)
-    if cid:
-        stmt = stmt.where(Employee.company_id == cid)
-    rows = db.execute(stmt).all()
-    return rows, f"{s:%d/%m/%Y} - {e:%d/%m/%Y}{_comp_name(db, cid)}", len(rows)
+            .where(Leave.end_date >= s, Leave.start_date <= e, *emp_conditions(p, user)))
+    if p.get("leave_type"):
+        stmt = stmt.where(Leave.leave_type == p["leave_type"])
+    if p.get("paid") in ("0", "1"):
+        stmt = stmt.where(Leave.paid == (p["paid"] == "1"))
+    rows = db.execute(stmt.order_by(Leave.start_date.desc())).all()
+    return rows, f"{s:%d/%m/%Y} - {e:%d/%m/%Y}{_comp_name(db, _company(user, p))}", len(rows)
 
 
 # ------------------------------------------------------------ holidays, shifts, machines
@@ -294,6 +367,9 @@ def fetch_devices(db, user, p, export):
 
 # ------------------------------------------------------------ payroll lines (one company, one month)
 PAY_COLS = [
+    Col("month", "Month", lambda l: f"{l.run.year}-{l.run.month:02d}"),
+    Col("company", "Company", lambda l: l.run.company.code if l.run.company else ""),
+    Col("run_status", "Payroll status", lambda l: l.run.status, False),
     Col("code", "Code", lambda l: l.employee_code, link=lambda l: f"/employees/{l.employee_id}"),
     Col("name", "Name", lambda l: l.full_name, link=lambda l: f"/employees/{l.employee_id}"),
     Col("department", "Dept", lambda l: l.department), Col("designation", "Designation", lambda l: l.designation, False),
@@ -331,16 +407,35 @@ PAY_COLS = [
 
 
 def fetch_payroll(db, user, p, export):
-    from calendar import month_name
+    """Salary lines of one or more months, one or all companies (as allowed), with filters."""
+    from calendar import month_abbr
+    y1, m1 = (int(x) for x in (p.get("month") or f"{now_local():%Y-%m}").split("-")[:2])
+    y2, m2 = (int(x) for x in (p.get("month_to") or f"{y1}-{m1:02d}").split("-")[:2])
+    a, b = sorted((y1 * 12 + m1, y2 * 12 + m2))
+    if b - a > 23:
+        raise Problem("Choose at most 24 months")
+    stmt = (select(PayrollLine).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
+            .where((PayrollRun.year * 12 + PayrollRun.month) >= a, (PayrollRun.year * 12 + PayrollRun.month) <= b))
     cid = _company(user, p)
-    y, m = (int(x) for x in (p.get("month") or f"{now_local():%Y-%m}").split("-")[:2])
-    if not cid:
-        first = db.scalar(select(Company.id).order_by(Company.code))
-        cid = first
-    run = db.scalar(select(PayrollRun).where(PayrollRun.company_id == cid, PayrollRun.year == y, PayrollRun.month == m))
-    rows = sorted(run.lines, key=lambda l: (l.department, l.employee_code)) if run else []
-    sub = f"{run.company.name if run else ''} · {month_name[m]} {y}" + (f" · {run.status}" if run else " · not processed")
-    return rows, sub, len(rows)
+    if cid:
+        stmt = stmt.where(PayrollRun.company_id == cid)
+    if p.get("run_status"):
+        stmt = stmt.where(PayrollRun.status == p["run_status"])
+    if str(p.get("department") or "").isdigit():
+        d = db.get(Department, int(p["department"]))
+        stmt = stmt.where(PayrollLine.department == (d.name if d else ""))
+    for k, col in (("designation", PayrollLine.designation), ("payment_mode", PayrollLine.payment_mode)):
+        if p.get(k):
+            stmt = stmt.where(col == p[k])
+    if str(p.get("q") or "").strip():
+        q = p["q"].strip()
+        stmt = stmt.where(or_(PayrollLine.employee_code == q, PayrollLine.full_name.ilike(f"%{q}%")))
+    if p.get("warnings"):
+        stmt = stmt.where(PayrollLine.warnings != "")
+    rows = db.scalars(stmt.order_by(PayrollRun.year, PayrollRun.month, PayrollRun.company_id, PayrollLine.department,
+                                    PayrollLine.employee_code)).all()
+    period = (f"{month_abbr[(a - 1) % 12 + 1]} {(a - 1) // 12}" + (f" - {month_abbr[(b - 1) % 12 + 1]} {(b - 1) // 12}" if b != a else ""))
+    return rows, f"{period}{_comp_name(db, cid)} · {len(rows)} salary lines", len(rows)
 
 
 # ------------------------------------------------------------ logs
@@ -371,17 +466,39 @@ def fetch_errors(db, user, p, export):
 
 
 REPORTS: dict[str, Report] = {r.id: r for r in [
-    Report("employees", "Employees", "employees.view", EMP_COLS, fetch_employees),
-    Report("punches", "Punch records", "punches.view", PUNCH_COLS, fetch_punches),
-    Report("first_last", "First & last punch", "punches.view", FL_COLS, fetch_first_last),
-    Report("attendance", "Daily attendance", "attendance.view", ATT_COLS, fetch_attendance),
-    Report("leaves", "Leave", "attendance.view", LEAVE_COLS, fetch_leaves, landscape=False),
+    Report("punches", "Punch records", "punches.view", PUNCH_COLS, fetch_punches,
+           filters=["start", "end"] + EMP_F + ["machine", "source", "direction", "unknown"],
+           description="Every punch from every machine, file, manual entry and mobile, with machine and source.",
+           preview_limit=200),
+    Report("first_last", "First & last punch", "punches.view", FL_COLS, fetch_first_last,
+           filters=["start", "end"] + EMP_F + ["single", "late_after", "early_before"],
+           description="One row per employee per day: first punch, last punch, punches and hours."),
+    Report("attendance", "Daily attendance", "attendance.view", ATT_COLS, fetch_attendance,
+           filters=["start", "end"] + EMP_F + ["att_status", "late_only", "ot_only"],
+           description="Processed attendance per day with shift rules: status, in/out, late, worked hours, overtime."),
+    Report("leaves", "Leave", "attendance.view", LEAVE_COLS, fetch_leaves, landscape=False,
+           filters=["start", "end"] + EMP_F + ["leave_type", "paid"],
+           description="Leave taken or planned in a period, by type, paid or unpaid."),
+    Report("jobcard", "Job card", "attendance.view", JOB_COLS, fetch_jobcard, landscape=False,
+           filters=["month", "start", "end"] + EMP_F + ["att_status", "late_only", "ot_only"],
+           description="Monthly attendance card per employee - every day with in/out, late, overtime, and a summary. "
+                       "PDF: one employee per page with signature lines.",
+           group_key=lambda r: r.employee_id, group_title=_job_title, group_summary=_job_summary,
+           page_per_group=True, preview_limit=400),
+    Report("employees", "Employees", "employees.view", EMP_COLS, fetch_employees,
+           filters=EMP_F + ["gender", "blood", "payment_mode", "mobile", "joined_from", "joined_to"],
+           description="Employee list with job, personal and (if allowed) salary details."),
+    Report("payroll", "Payroll", "payroll.view", PAY_COLS, fetch_payroll,
+           filters=["month", "month_to", "company", "department", "designation", "q", "payment_mode", "run_status",
+                    "warnings"],
+           description="Salary lines for one or many months and companies: earnings, overtime, deductions, net pay.",
+           totals=["gross", "basic", "house_rent", "medical", "transport", "food", "earned", "absent_ded", "ot",
+                   "bonus", "addition", "advance", "other_ded", "tax", "stamp", "deductions", "net"]),
     Report("holidays", "Holidays", "attendance.view", HOLIDAY_COLS, fetch_holidays, landscape=False),
     Report("shifts", "Shifts", "attendance.view", SHIFT_COLS, fetch_shifts),
     Report("machines", "Machines", "machines.manage", DEVICE_COLS, fetch_devices),
-    Report("payroll", "Salary sheet", "payroll.view", PAY_COLS, fetch_payroll,
-           totals=["gross", "basic", "house_rent", "medical", "transport", "food", "earned", "absent_ded", "ot",
-                   "bonus", "addition", "advance", "other_ded", "tax", "stamp", "deductions", "net"]),
     Report("audit", "Activity log", "logs.view", AUDIT_COLS, fetch_audit),
     Report("errors", "Error log", "logs.view", ERROR_COLS, fetch_errors),
 ]}
+
+CENTRE = ["punches", "first_last", "attendance", "leaves", "jobcard", "employees", "payroll"]

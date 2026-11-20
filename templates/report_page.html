@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% from "_report.html" import report_bar, report_table with context %}
+{% block title %}{{ rep.title }}{% endblock %}{% block heading %}<a href="/reports" style="text-decoration:none;color:var(--muted);font-weight:400">Reports ›</a> {{ rep.title }}{% endblock %}
+{% block content %}
+<div class="panel"><form method="get" class="filter-grid">
+{% for x in fl %}{% set f = x.f %}<div class="{{ 'wide' if f.kind == 'multi' }}">
+{% if f.kind == 'check' %}<label class="chk"><input type="checkbox" name="{{ f.key }}" value="1" {{ 'checked' if x.val }}> {{ f.label }}</label>
+{% else %}<label>{{ f.label }}</label>
+{% if f.kind in ('date','month','time','text') %}<input type="{{ 'search' if f.kind == 'text' else f.kind }}" name="{{ f.key }}" value="{{ x.val }}" {{ ('placeholder="' ~ f.help ~ '"')|safe if f.help }}>
+{% elif f.kind == 'multi' %}<div class="multi">{% for v, l in x.opts %}<label class="chk"><input type="checkbox" name="{{ f.key }}" value="{{ v }}" {{ 'checked' if v in x.val }}> {{ l }}</label>{% endfor %}</div>
+{% else %}<select name="{{ f.key }}"><option value="">All</option>{% for v, l in x.opts %}<option value="{{ v }}" {{ 'selected' if v|string == x.val|string }}>{{ l }}</option>{% endfor %}</select>{% endif %}
+{% endif %}</div>{% endfor %}
+<div class="actions"><button>Show report</button> <a class="btn sec" href="/reports/{{ rep.id }}">Clear filters</a></div>
+</form></div>
+{{ report_bar(r, qs=export_qs) }}
+{% if filters_text %}<p class="hint" style="margin:-4px 0 10px">Filters: {{ filters_text }}</p>{% endif %}
+{% if r.total > preview|length and rep.id != 'punches' %}<div class="alert info">Showing the first {{ preview|length }} of {{ '{:,}'.format(r.total) }} rows on screen - Excel and PDF contain all of them.</div>{% endif %}
+{% if grouped is not none %}
+  {% for key, grp in grouped %}{% set info = rep.group_title(grp[0]) %}
+  <div class="group-head">{% for a, b in info %}<span><small>{{ a }}</small> {{ b }}</span>{% endfor %}</div>
+  {{ report_table({'cols': r.cols, 'rows': grp}) }}
+  <div class="group-sum">{% for a, b in rep.group_summary(grp) %}<span><small>{{ a }}</small> <b>{{ b }}</b></span>{% endfor %}</div>
+  {% else %}<p class="hint">No data for these filters.</p>{% endfor %}
+{% else %}
+  {{ report_table({'cols': r.cols, 'rows': preview}, empty='No data for these filters.') }}
+{% endif %}
+{% if pages > 1 %}<div class="pager">{% set base = request.url.query|replace('page=' ~ page, '') %}{% if page > 1 %}<a class="btn sec" href="?{{ base }}&page={{ page-1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }}</span>
+{% if page < pages %}<a class="btn sec" href="?{{ base }}&page={{ page+1 }}">Next ›</a>{% endif %}</div>{% endif %}
+{% endblock %}

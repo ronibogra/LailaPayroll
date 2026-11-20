@@ -45,6 +45,13 @@ class Report:
     fetch: Callable[..., tuple[list, str]]      # (db, user, params, export) -> (rows, subtitle)
     landscape: bool = True
     totals: list[str] = field(default_factory=list)
+    filters: list[str] = field(default_factory=list)        # keys of reports/filters.py FILTERS
+    description: str = ""
+    group_key: Callable[[Any], Any] | None = None           # e.g. job card: one group per employee
+    group_title: Callable[[Any], list[tuple[str, str]]] | None = None
+    group_summary: Callable[[list], list[tuple[str, str]]] | None = None
+    page_per_group: bool = False
+    preview_limit: int = 500
 
     def allowed_cols(self, user: dict) -> list[Col]:
         return [c for c in self.cols if not c.perm or c.perm in user["perms"]]
@@ -68,6 +75,16 @@ def fmt(v, kind: str = "text") -> str:
     if isinstance(v, float):
         return f"{v:,.2f}"
     return str(v)
+
+
+def groups(report: Report, rows: list):
+    """[(key, rows)] in order; a single group when the report is not grouped."""
+    if not report.group_key:
+        return [(None, rows)]
+    out: dict = {}
+    for r in rows:
+        out.setdefault(report.group_key(r), []).append(r)
+    return list(out.items())
 
 
 # ------------------------------------------------------------ column choice per user
@@ -142,25 +159,46 @@ def to_excel(report: Report, cols: list[Col], rows: list, subtitle: str = "") ->
         cell.fill, cell.font, cell.border = HEAD_FILL, Font(bold=True, color="FFFFFF"), BOX
         cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
     ws.row_dimensions[hr].height = 30
-    for r_i, row in enumerate(rows, start=hr + 1):
-        for c_i, c in enumerate(cols, start=1):
-            cell = ws.cell(r_i, c_i, _xl_value(c.value(row), c.kind))
-            cell.border = BOX
-            if c.kind in NUMFMT:
-                cell.number_format = NUMFMT[c.kind]
-    if report.totals and rows:
-        tr = hr + len(rows) + 1
+    r_i = hr + 1
+    group_fill = PatternFill("solid", fgColor="FDECEB")
+    sum_fill = PatternFill("solid", fgColor="EEF7F1")
+    first_data = r_i
+    for key, grp in groups(report, rows):
+        if report.group_key:
+            title = "   ".join(f"{a}: {b}" for a, b in (report.group_title(grp[0]) if report.group_title else [("", key)]))
+            ws.cell(r_i, 1, title).font = Font(bold=True, color="8F1714")
+            for c_i in range(1, len(cols) + 1):
+                ws.cell(r_i, c_i).fill = group_fill
+            r_i += 1
+        g_start = r_i
+        for row in grp:
+            for c_i, c in enumerate(cols, start=1):
+                cell = ws.cell(r_i, c_i, _xl_value(c.value(row), c.kind))
+                cell.border = BOX
+                if c.kind in NUMFMT:
+                    cell.number_format = NUMFMT[c.kind]
+            r_i += 1
+        if report.group_key and report.group_summary:
+            ws.cell(r_i, 1, "   ".join(f"{a}: {b}" for a, b in report.group_summary(grp))).font = Font(bold=True)
+            for c_i in range(1, len(cols) + 1):
+                ws.cell(r_i, c_i).fill = sum_fill
+            r_i += 2
+        del g_start
+    last_data = r_i - 1
+    if report.totals and rows and not report.group_key:
+        tr = last_data + 1
         ws.cell(tr, 1, "TOTAL").font = Font(bold=True)
         for c_i, c in enumerate(cols, start=1):
             if c.key in report.totals:
                 L = get_column_letter(c_i)
-                cell = ws.cell(tr, c_i, f"=SUM({L}{hr + 1}:{L}{tr - 1})")
+                cell = ws.cell(tr, c_i, f"=SUM({L}{first_data}:{L}{last_data})")
                 cell.font, cell.number_format = Font(bold=True), NUMFMT.get(c.kind, "#,##0.00")
     for c_i, c in enumerate(cols, start=1):
         width = max([len(c.label)] + [len(c.text(r)) for r in rows[:300]]) + 2
         ws.column_dimensions[get_column_letter(c_i)].width = min(max(width, 8), 45)
     ws.freeze_panes = ws.cell(hr + 1, 1)
-    ws.auto_filter.ref = f"A{hr}:{get_column_letter(len(cols))}{hr + max(len(rows), 1)}"
+    if not report.group_key:
+        ws.auto_filter.ref = f"A{hr}:{get_column_letter(len(cols))}{hr + max(len(rows), 1)}"
     ws.print_title_rows = f"{hr}:{hr}"
     ws.page_setup.orientation = "landscape" if report.landscape else "portrait"
     ws.page_setup.fitToWidth = 1
@@ -175,7 +213,7 @@ def to_pdf(report: Report, cols: list[Col], rows: list, subtitle: str = "") -> b
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
+    from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     from config import settings
     wide = report.landscape or len(cols) > 7
@@ -190,29 +228,48 @@ def to_pdf(report: Report, cols: list[Col], rows: list, subtitle: str = "") -> b
     def esc(t: str) -> str:
         return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    data = [[Paragraph(esc(c.label), head) for c in cols]]
-    for row in rows:
-        data.append([Paragraph(esc(c.text(row)), right if c.kind in ("money", "num", "hours") else cell) for c in cols])
-    if report.totals and rows:
-        tot = []
-        for i, c in enumerate(cols):
-            if c.key in report.totals:
-                s = sum(float(c.value(r) or 0) for r in rows)
-                tot.append(Paragraph(f"<b>{fmt(s, 'money')}</b>", right))
-            else:
-                tot.append(Paragraph("<b>TOTAL</b>" if i == 0 else "", cell))
-        data.append(tot)
-    # column widths: proportional to content length, within limits
     lens = [max([len(c.label)] + [len(c.text(r)) for r in rows[:200]]) for c in cols]
     lens = [min(max(x, 4), 40) for x in lens]
     widths = [width * x / sum(lens) for x in lens]
-    t = Table(data, colWidths=widths, repeatRows=1)
     style = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8332F")),
              ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#BBBBBB")),
              ("VALIGN", (0, 0), (-1, -1), "TOP"),
              ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F7F9")]),
              ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]
-    t.setStyle(TableStyle(style))
+    gtitle = ParagraphStyle("g", parent=cell, fontName="Helvetica-Bold", fontSize=size + 2, leading=(size + 2) * 1.3,
+                            textColor=colors.HexColor("#8F1714"), spaceBefore=4, spaceAfter=3)
+    gsum = ParagraphStyle("s", parent=cell, fontName="Helvetica-Bold", fontSize=size + 0.5, spaceBefore=3, spaceAfter=8)
+    story = []
+    all_groups = groups(report, rows)
+    for gi, (key, grp) in enumerate(all_groups):
+        if report.group_key:
+            if gi and report.page_per_group:
+                story.append(PageBreak())
+            info = report.group_title(grp[0]) if report.group_title else [("", str(key))]
+            story.append(Paragraph(esc("     ".join(f"{a}: {b}" if a else b for a, b in info)), gtitle))
+        data = [[Paragraph(esc(c.label), head) for c in cols]]
+        for row in grp:
+            data.append([Paragraph(esc(c.text(row)), right if c.kind in ("money", "num", "hours") else cell) for c in cols])
+        if report.totals and grp and not report.group_key:
+            tot = []
+            for i, c in enumerate(cols):
+                if c.key in report.totals:
+                    s_ = sum(float(c.value(r) or 0) for r in grp)
+                    tot.append(Paragraph(f"<b>{fmt(s_, 'money')}</b>", right))
+                else:
+                    tot.append(Paragraph("<b>TOTAL</b>" if i == 0 else "", cell))
+            data.append(tot)
+        t = Table(data, colWidths=widths, repeatRows=1)
+        t.setStyle(TableStyle(style))
+        story.append(t)
+        if report.group_key and report.group_summary:
+            story.append(Paragraph(esc("     ".join(f"{a}: {b}" for a, b in report.group_summary(grp))), gsum))
+        if report.group_key and report.page_per_group:
+            story.append(Spacer(1, 18 * mm))
+            story.append(Table([["Employee signature: ____________________", "Authorised signature: ____________________"]],
+                               colWidths=[width / 2, width / 2], style=[("FONTSIZE", (0, 0), (-1, -1), 8)]))
+    if not rows:
+        story.append(Paragraph("No data for these filters.", cell))
     printed = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     def decorate(canv, doc):
@@ -241,5 +298,5 @@ def to_pdf(report: Report, cols: list[Col], rows: list, subtitle: str = "") -> b
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=page, leftMargin=10 * mm, rightMargin=10 * mm, topMargin=25 * mm,
                             bottomMargin=13 * mm, title=report.title, author=BRAND["name"])
-    doc.build([t], onFirstPage=decorate, onLaterPages=decorate)
+    doc.build(story, onFirstPage=decorate, onLaterPages=decorate)
     return buf.getvalue()

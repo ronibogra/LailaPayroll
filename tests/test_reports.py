@@ -51,3 +51,16 @@ def test_generic_import_templates_open():
         assert rows and rows[0]["_row"] == 2
     rows = read_table("h.csv", b"date,name\n2026-12-16,Victory Day\n\n")
     assert rows == [{"date": "2026-12-16", "name": "Victory Day", "_row": 2}]
+
+
+def test_charts_render_valid_svg():
+    import xml.dom.minidom
+    from services import charts
+    svgs = [charts.columns(["05", "06"], [3, 250]), charts.line(["a", "b", "c"], [90, None, 95.5], top=100),
+            charts.stacked_hbars(["HO", "LAILA"], [("Present", "#0ca30c", [10, 0]), ("Late", "#fab219", [2, 1])]),
+            charts.stacked_columns(["Jun", "Jul"], [("HO", "#2a78d6", [1e6, 0]), ("BAND", "#eb6834", [5e5, 2e5])]),
+            charts.hbars(["Sewing"], [180]), charts.columns([], []), charts.line(["x"], [None])]
+    for s in svgs:
+        xml.dom.minidom.parseString(s)          # well-formed
+    assert 'data-tip="HO · Present: 10"' in svgs[2]
+    assert charts.ticks(250) == [0, 50, 100, 150, 200, 250]

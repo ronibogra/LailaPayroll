@@ -1,29 +1,100 @@
-{% extends "base.html" %}{% block title %}Dashboard{% endblock %}{% block heading %}Dashboard · {{ today.strftime('%d %b %Y') }}{% endblock %}
+{% extends "base.html" %}{% block title %}Dashboard{% endblock %}{% block heading %}Dashboard{% endblock %}
 {% block content %}
-<div class="cards">
-  <div class="metric"><span>Active employees</span><strong>{{ total.active }}</strong></div>
-  <div class="metric g"><span>Present today</span><strong>{{ total.present }}</strong></div>
-  <div class="metric a"><span>Late today</span><strong>{{ total.late }}</strong></div>
-  <div class="metric r"><span>Absent today</span><strong>{{ total.absent }}</strong></div>
-  <div class="metric"><span>On leave</span><strong>{{ total.leave }}</strong></div>
-  <div class="metric"><span>Punches received today</span><strong>{{ punches_today }}</strong></div>
+<div class="dash-hero">
+  <div>
+    <div class="hero-kicker">{{ brand.name }}</div>
+    <h2>{{ 'Today' if day == today else day.strftime('%A') }}, {{ day.strftime('%d %B %Y') }}</h2>
+    <p>{{ total.active }} active staff in {{ per|length }} compan{{ 'y' if per|length == 1 else 'ies' }} · {{ total.punches }} punches{{ ' (' ~ total.mobile ~ ' mobile)' if total.mobile }}</p>
+    <form method="get" class="hero-form">
+      <input type="date" name="day" value="{{ day }}">
+      {% if companies|length > 1 %}<select name="company"><option value="">All companies</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == company }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select>{% endif %}
+      <button>Show</button>{% if day != today or company %}<a class="btn sec" href="/">Today</a>{% endif %}
+    </form>
+  </div>
+  <div class="hero-rate">
+    <div class="ring" style="--p:{{ total.rate or 0 }}"><span>{{ total.rate ~ '%' if total.rate is not none else '—' }}</span></div>
+    <small>attendance rate</small>
+  </div>
 </div>
-{% if pending and 'machines.manage' in user.perms %}<div class="alert info">{{ pending }} punch machine(s) are waiting for approval. <a href="/devices">Open Punch machines</a></div>{% endif %}
-{% if not processed and total.active and 'attendance.process' in user.perms %}<div class="alert info">Today's attendance hasn't been processed yet, so the counts above are zero. Click <b>Process month</b> on the Daily attendance page.</div>{% endif %}
-{% if not total.active and 'machines.manage' in user.perms %}<div class="panel"><h3>Getting started</h3><ol class="hint" style="font-size:13px;line-height:1.9;margin:0;padding-left:18px">
-<li><a href="/devices">Connect the punch machines</a> (ZKTeco: set the server address on the machine; Hikvision: add by IP).</li>
-<li><a href="/settings">Check companies, holidays and the pay policy.</a></li><li><a href="/shifts">Create the shifts.</a></li>
-<li><a href="/employees">Import employees from Excel</a> (Card no. = user ID on the machines).</li></ol></div>{% endif %}
-<div class="grid2">
-<div class="panel"><h3>Today by company</h3><div class="table-wrap"><table><tr><th>Company</th><th class="num">Staff</th><th class="num">Present</th><th class="num">Late</th><th class="num">Absent</th><th class="num">Leave</th></tr>
-{% for p in per %}<tr><td><b>{{ p.company.code }}</b> {{ p.company.name }}</td><td class="num">{{ p.active }}</td><td class="num">{{ p.present }}</td><td class="num">{{ p.late }}</td><td class="num">{{ p.absent }}</td><td class="num">{{ p.leave }}</td></tr>{% endfor %}</table></div></div>
-<div class="panel"><h3>Punch machines</h3><div class="table-wrap"><table><tr><th>Machine</th><th>Status</th><th>Last contact</th></tr>
-{% for d in devices %}<tr><td>{{ d.name }} <span class="hint">{{ d.brand }}</span></td><td>{% if not d.approved %}<span class="tag DRAFT">PENDING</span>{% elif d.enabled %}<span class="tag yes">ACTIVE</span>{% else %}<span class="tag">DISABLED</span>{% endif %}</td>
-<td>{{ d.last_seen.strftime('%d/%m %H:%M') if d.last_seen else 'never' }}</td></tr>{% else %}<tr><td colspan="3" class="hint">No machines connected yet.</td></tr>{% endfor %}</table></div></div>
+
+{% if pending and 'machines.manage' in user.perms %}<div class="alert info">⚠ {{ pending }} punch machine(s) waiting for approval - <a href="/devices">open Machines</a></div>{% endif %}
+{% if not processed and total.active and 'attendance.process' in user.perms %}<div class="alert info">ℹ Attendance for this day is not processed yet, so the counts are zero. <a href="/attendance?day={{ day }}">Daily attendance → Process month</a></div>{% endif %}
+
+<div class="kpis">
+  <a class="kpi k-blue" href="/employees"><span class="k-ico">👥</span><small>Active staff</small><b>{{ total.active }}</b></a>
+  <a class="kpi k-green" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=PRESENT&att_status=LATE&att_status=MISSING_OUT&att_status=OFFDAY_WORK"><span class="k-ico">✔</span><small>Present</small><b>{{ total.present }}</b></a>
+  <a class="kpi k-amber" href="/reports/attendance?start={{ day }}&end={{ day }}&late_only=1"><span class="k-ico">⏰</span><small>Late</small><b>{{ total.late }}</b></a>
+  <a class="kpi k-red" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=ABSENT"><span class="k-ico">✖</span><small>Absent</small><b>{{ total.absent }}</b></a>
+  <a class="kpi k-violet" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=LEAVE_PAID&att_status=LEAVE_UNPAID"><span class="k-ico">🌴</span><small>On leave</small><b>{{ total.leave }}</b></a>
+  <a class="kpi k-teal" href="/punches?start={{ day }}&end={{ day }}"><span class="k-ico">🕘</span><small>Punches</small><b>{{ total.punches }}</b></a>
+  <a class="kpi k-slate" href="/devices"><span class="k-ico">📟</span><small>Machines online</small><b>{{ online }}<span class="of"> / {{ devices|length }}</span></b></a>
 </div>
-{% if 'payroll.view' in user.perms %}<div class="panel"><h3>Month-end steps</h3>
-<ol class="hint" style="font-size:13px;line-height:1.9;margin:0;padding-left:18px">
-<li>Check holidays (Settings) and leave.</li><li>Fix single-punch days with manual punches.</li>
-<li>Process the month on <a href="/attendance">Daily attendance</a>.</li><li>On <a href="/payroll">Payroll</a>, pick the company, upload advances / deductions, process.</li>
-<li>Check the draft salary sheet, then Accounts finalizes that company's month.</li></ol></div>{% endif %}
+
+<div class="dash-grid">
+  <div class="card-chart">
+    <div class="cc-head"><h3>Attendance by company</h3>{{ status_legend|safe }}</div>
+    {% if status_chart %}{{ status_chart|safe }}
+    <details class="tbl"><summary>Table</summary><table><tr><th>Company</th><th class="num">Staff</th><th class="num">Present</th><th class="num">Late</th><th class="num">Absent</th><th class="num">Leave</th><th class="num">Off</th></tr>
+    {% for x in per %}<tr><td>{{ x.company.code }} - {{ x.company.name }}</td><td class="num">{{ x.active }}</td><td class="num">{{ x.present }}</td><td class="num">{{ x.late }}</td><td class="num">{{ x.absent }}</td><td class="num">{{ x.leave }}</td><td class="num">{{ x.off }}</td></tr>{% endfor %}</table></details>
+    {% else %}<p class="empty">No attendance for this day yet.</p>{% endif %}
+  </div>
+  <div class="card-chart">
+    <div class="cc-head"><h3>Attendance rate - last 14 days</h3><span class="hint">present ÷ (present + absent + leave)</span></div>
+    {% if trend_chart %}{{ trend_chart|safe }}
+    <details class="tbl"><summary>Table</summary><table><tr><th>Day</th><th class="num">Present</th><th class="num">Absent</th><th class="num">Late</th><th class="num">Rate</th></tr>
+    {% for d_, p_, a_, l_, r_ in trend_table %}<tr><td>{{ d_ }}</td><td class="num">{{ p_ }}</td><td class="num">{{ a_ }}</td><td class="num">{{ l_ }}</td><td class="num">{{ (r_ ~ '%') if r_ is not none else '' }}</td></tr>{% endfor %}</table></details>
+    {% else %}<p class="empty">No processed attendance in the last 14 days.</p>{% endif %}
+  </div>
+  <div class="card-chart">
+    <div class="cc-head"><h3>Punches per hour</h3><span class="hint">{{ day.strftime('%d %b') }}</span></div>
+    {% if hour_chart %}{{ hour_chart|safe }}
+    <details class="tbl"><summary>Table</summary><table><tr><th>Hour</th><th class="num">Punches</th></tr>{% for h, v in hour_table if v %}<tr><td>{{ h }}:00</td><td class="num">{{ v }}</td></tr>{% endfor %}</table></details>
+    {% else %}<p class="empty">No punches on this day.</p>{% endif %}
+  </div>
+  <div class="card-chart">
+    <div class="cc-head"><h3>Staff by department</h3></div>
+    {% if dept_chart %}{{ dept_chart|safe }}
+    <details class="tbl"><summary>Table</summary><table><tr><th>Department</th><th class="num">Staff</th></tr>{% for n, c in dept_table %}<tr><td>{{ n }}</td><td class="num">{{ c }}</td></tr>{% endfor %}</table></details>
+    {% else %}<p class="empty">No employees yet.</p>{% endif %}
+  </div>
+  {% if 'payroll.view' in user.perms %}
+  <div class="card-chart wide">
+    <div class="cc-head"><h3>Net pay by company - last 6 months</h3>{{ pay_legend|safe }}</div>
+    {% if pay_chart %}{{ pay_chart|safe }}
+    <details class="tbl"><summary>Table</summary><table><tr><th>Month</th>{% for c in pay_codes %}<th class="num">{{ c }}</th>{% endfor %}<th class="num">Total</th></tr>
+    {% for lab, vs in pay_table %}<tr><td>{{ lab }}</td>{% for v in vs %}<td class="num">{{ '{:,.0f}'.format(v) }}</td>{% endfor %}<td class="num"><b>{{ '{:,.0f}'.format(vs|sum) }}</b></td></tr>{% endfor %}</table></details>
+    {% else %}<p class="empty">No payroll processed in the last 6 months.</p>{% endif %}
+  </div>{% endif %}
+  <div class="card-chart">
+    <div class="cc-head"><h3>Latest punches</h3><a class="hint" href="/punches">all →</a></div>
+    <ul class="feed">{% for p in recent %}{% set e = recent_emps.get(p.card_no) %}
+      <li><span class="av">{% if e and e.photo %}<img src="/employees/{{ e.id }}/photo" alt="">{% else %}{{ (e.full_name if e else p.card_no)[:1] }}{% endif %}</span>
+      <div><b>{{ e.full_name if e else 'ID ' ~ p.card_no }}</b><small>{{ e.company.code if e and e.company }} · {{ p.device or p.source }}{{ ' · ' ~ p.direction if p.direction }}</small></div>
+      <time>{{ p.punch_time.strftime('%H:%M') }}<small>{{ p.punch_time.strftime('%d %b') }}</small></time></li>
+    {% else %}<li class="empty">No punches yet.</li>{% endfor %}</ul>
+  </div>
+  <div class="card-chart">
+    <div class="cc-head"><h3>Late {{ 'today' if day == today else day.strftime('%d %b') }}</h3><a class="hint" href="/reports/attendance?start={{ day }}&end={{ day }}&late_only=1">all →</a></div>
+    <ul class="feed">{% for r in late_rows %}
+      <li><span class="av late">{{ r.employee.full_name[:1] }}</span><div><b><a href="/employees/{{ r.employee.id }}">{{ r.employee.full_name }}</a></b><small>{{ r.employee.company.code if r.employee.company }} · {{ r.employee.department.name if r.employee.department }}</small></div>
+      <time>{{ r.late_minutes }} min<small>in {{ r.in_time.strftime('%H:%M') if r.in_time }}</small></time></li>
+    {% else %}<li class="empty">Nobody late. 🎉</li>{% endfor %}</ul>
+  </div>
+  {% if 'machines.manage' in user.perms %}
+  <div class="card-chart wide">
+    <div class="cc-head"><h3>Machines</h3><a class="hint" href="/devices">manage →</a></div>
+    <div class="machines">{% for m in devices %}{% set on = m.enabled and m.approved and m.last_seen and (today == m.last_seen.date()) %}
+      <div class="mch {{ 'on' if on else ('pend' if not m.approved else 'off') }}"><b>{{ m.name }}</b><small>{{ m.ip_address or m.serial_number or '' }}</small>
+      <span>{{ '● online' if on else ('◌ waiting approval' if not m.approved else '○ no contact today') }}</span><small class="st">{{ m.last_status or '' }}</small></div>
+    {% else %}<p class="empty">No machines yet. <a href="/devices?new=1">Add one</a></p>{% endfor %}</div>
+  </div>{% endif %}
+</div>
+<div id="tip" class="tip"></div>
+<script>
+(function(){const tip=document.getElementById('tip');
+document.querySelectorAll('svg.chart .mark').forEach(m=>{
+  m.addEventListener('mousemove',e=>{tip.textContent=m.dataset.tip;tip.style.display='block';
+    tip.style.left=(e.clientX+14)+'px';tip.style.top=(e.clientY-12)+'px';m.classList.add('hot');});
+  m.addEventListener('mouseleave',()=>{tip.style.display='none';m.classList.remove('hot');});});})();
+</script>
 {% endblock %}

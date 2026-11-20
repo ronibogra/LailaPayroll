@@ -1,5 +1,5 @@
 {# Shared report building blocks: column picker + Excel/PDF buttons, and the table. #}
-{% macro report_bar(r, extra='') %}
+{% macro report_bar(r, extra='', qs=none) %}{% set q = qs if qs is not none else request.url.query %}
 <div class="report-bar">
   <details class="colpick"><summary class="btn sec">Columns ({{ r.cols|length }})</summary>
     <form method="post" action="/report-columns/{{ r.rep.id }}" class="colpick-box">
@@ -10,8 +10,8 @@
       <button>Apply</button> <button class="sec" name="reset" value="1">Default columns</button>
     </form></details>
   {% if 'reports.export' in user.perms %}
-  <a class="btn sec" href="/export/{{ r.rep.id }}.xlsx?{{ request.url.query }}">⬇ Excel</a>
-  <a class="btn sec" href="/export/{{ r.rep.id }}.pdf?{{ request.url.query }}" target="_blank">⬇ PDF</a>{% endif %}
+  <a class="btn sec" href="/export/{{ r.rep.id }}.xlsx?{{ q }}">⬇ Excel</a>
+  <a class="btn sec" href="/export/{{ r.rep.id }}.pdf?{{ q }}" target="_blank">⬇ PDF</a>{% endif %}
   {{ extra|safe }}
   <span class="hint">{{ r.subtitle }}</span>
 </div>

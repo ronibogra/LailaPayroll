@@ -11,6 +11,7 @@
 <aside class="sidebar">
   <div class="brand"><img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><div><b>{{ brand.name }}</b><small>Attendance &amp; Payroll</small></div></div>
   {% if 'dashboard.view' in pm %}<a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>{% endif %}
+  {% if 'punches.view' in pm or 'attendance.view' in pm or 'employees.view' in pm or 'payroll.view' in pm %}<a href="/reports" class="{{ 'active' if path.startswith('/reports') }}">📊 Reports</a>{% endif %}
   {% if 'punches.view' in pm or 'machines.manage' in pm %}<div class="nav-label">PUNCH</div>{% endif %}
   {% if 'punches.view' in pm %}<a href="/punches" class="{{ 'active' if path == '/punches' }}">Punch records</a>
   <a href="/punches/first-last" class="{{ 'active' if path.startswith('/punches/first-last') }}">First &amp; last punch</a>{% endif %}

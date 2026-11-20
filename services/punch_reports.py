@@ -37,9 +37,12 @@ def employees_by_card(db: Session, cards) -> dict[str, Employee]:
 
 
 def first_last(db: Session, start: date, end: date, company_id: int | None = None, q: str = "",
-               include_unknown: bool = True) -> list[dict]:
+               include_unknown: bool = True, emp_conds: list | None = None) -> list[dict]:
     """One row per employee ID per calendar day: first punch, last punch, number of punches, hours between."""
-    stmt = punch_query(db, start, end, company_id, q).with_only_columns(
+    stmt = punch_query(db, start, end, company_id, q)
+    if emp_conds:
+        stmt = stmt.where(AttendanceLog.card_no.in_(select(Employee.card_no).where(*emp_conds)))
+    stmt = stmt.with_only_columns(
         AttendanceLog.card_no, AttendanceLog.punch_time, AttendanceLog.device).order_by(
         AttendanceLog.card_no, AttendanceLog.punch_time)
     groups: "OrderedDict[tuple, dict]" = OrderedDict()

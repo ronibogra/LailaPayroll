@@ -33,7 +33,9 @@ from services.errors import log_error
 from services.photos import save_photo, photo_path, bulk_photos
 from integration import generic_import
 from services.punch_reports import punch_query, first_last, employees_by_card
-from reports.defs import REPORTS, Problem as ReportProblem
+from reports.defs import REPORTS, CENTRE, Problem as ReportProblem
+from reports.filters import FILTERS, options as filter_options, describe as describe_filters
+from reports.engine import groups as report_groups
 from reports.engine import chosen_cols, save_cols, to_excel, to_pdf
 from services.audit import audit
 from services.payroll_service import run_payroll, finalize_payroll, get_run, PayrollLocked
@@ -213,6 +215,17 @@ async def settings_headoffice(request: Request, user=Depends(page_user), db: Ses
     return go("/settings", msg="Head Office saved")
 
 
+def qparams(request: Request) -> dict:
+    """Query parameters as a dict; repeated keys (multi-select filters) become lists."""
+    p: dict = {}
+    for k in request.query_params.keys():
+        vals = [v for v in request.query_params.getlist(k) if v != ""]
+        if not vals:
+            continue
+        p[k] = vals if (k in FILTERS and FILTERS[k].kind == "multi") else vals[-1]
+    return p
+
+
 def report_ctx(db: Session, user: dict, rid: str, params: dict) -> dict:
     """Rows + chosen columns for a report shown on a page (see reports/defs.py)."""
     rep = REPORTS[rid]
@@ -224,6 +237,43 @@ def report_ctx(db: Session, user: dict, rid: str, params: dict) -> dict:
             "cols": chosen_cols(db, user, rep), "all_cols": rep.allowed_cols(user)}
 
 
+@app.get("/reports", response_class=HTMLResponse)
+def reports_centre(request: Request, user=Depends(page_user)):
+    items = [REPORTS[k] for k in CENTRE if REPORTS[k].perm in user["perms"]]
+    if not items:
+        raise HTTPException(403, "Your role does not allow any reports")
+    return render(request, "reports.html", user, items=items)
+
+
+@app.get("/reports/{rid}", response_class=HTMLResponse)
+def report_page(request: Request, rid: str, page: int = 1, user=Depends(page_user), db: Session = Depends(get_db)):
+    rep = REPORTS.get(rid)
+    if not rep or rid not in CENTRE:
+        raise HTTPException(404, "Unknown report")
+    need(user, rep.perm)
+    p = qparams(request)
+    today = now_local().date()
+    if "start" in rep.filters and not p.get("start") and not p.get("month"):      # sensible default period
+        p.setdefault("start", str(today.replace(day=1)) if rid in ("attendance", "leaves", "first_last") else str(today))
+        p.setdefault("end", str(today))
+    if rid == "jobcard" and not p.get("month") and not p.get("start"):
+        p["month"] = f"{today:%Y-%m}"
+    r = report_ctx(db, user, rid, p)
+    fl = []
+    for k in rep.filters:
+        f = FILTERS[k]
+        if k == "company" and user.get("company_id"):
+            continue
+        opts = filter_options(db, user, f.options) if f.options else f.choices
+        val = p.get(k, [] if f.kind == "multi" else "")
+        fl.append({"f": f, "opts": opts, "val": val})
+    preview = r["rows"][:rep.preview_limit]
+    grouped = report_groups(rep, preview) if rep.group_key else None
+    return render(request, "report_page.html", user, r=r, rep=rep, fl=fl, p=p, preview=preview, grouped=grouped,
+                  page=max(page, 1), pages=max(1, -(-r["total"] // 200)) if rid == "punches" else 1,
+                  filters_text=describe_filters(p, db, user), export_qs=urlencode(p, doseq=True))
+
+
 @app.get("/export/{rid}.{fmt}")
 def export_report(request: Request, rid: str, fmt: str, user=Depends(page_user), db: Session = Depends(get_db)):
     """Excel or PDF of any report with the user's chosen columns and the same filters as the page."""
@@ -231,9 +281,12 @@ def export_report(request: Request, rid: str, fmt: str, user=Depends(page_user),
     if not rep or fmt not in ("xlsx", "pdf"):
         raise HTTPException(404, "Unknown report")
     need(user, rep.perm, "reports.export")
-    params = dict(request.query_params)
+    params = qparams(request)
     try:
         rows, subtitle, _ = rep.fetch(db, user, params, True)
+        extra = describe_filters(params, db, user)
+        if extra:
+            subtitle = f"{subtitle} · {extra}"
     except (ReportProblem, ValueError) as exc:
         raise HTTPException(400, str(exc))
     cols = chosen_cols(db, user, rep, params.get("cols"))
@@ -408,36 +461,150 @@ def logout():
 
 # ---------------------------------------------------------------- dashboard
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+def dashboard(request: Request, day: str = "", company: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    """Colourful overview with charts. All numbers follow the user's company limit and the company filter."""
     need(user, "dashboard.view")
+    from collections import Counter
+    from calendar import month_abbr
+    from services import charts
     today = now_local().date()
+    d = date.fromisoformat(day) if day else today
     comps = visible_companies(db, user)
-    ids = [c.id for c in comps]
+    cid = company_filter(user, company)
+    ids = [cid] if cid else [c.id for c in comps]
+    emp_ids = select(Employee.id).where(Employee.company_id.in_(ids or [0]))
+    cards = select(Employee.card_no).where(Employee.company_id.in_(ids or [0]))
+    present_st = ("PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK")
+
+    # --- today by company
     rows = db.execute(select(Employee.company_id, DailyAttendance.status, func.count())
                       .join(Employee, Employee.id == DailyAttendance.employee_id)
-                      .where(DailyAttendance.work_date == today, Employee.company_id.in_(ids or [0]))
+                      .where(DailyAttendance.work_date == d, Employee.company_id.in_(ids or [0]))
                       .group_by(Employee.company_id, DailyAttendance.status)).all()
     active = dict(db.execute(select(Employee.company_id, func.count()).where(
         Employee.employment_status == "ACTIVE", Employee.company_id.in_(ids or [0])).group_by(Employee.company_id)).all())
-    per = {c.id: {"company": c, "active": active.get(c.id, 0), "present": 0, "late": 0, "absent": 0, "leave": 0}
-           for c in comps}
-    for cid, status, n in rows:
-        p = per[cid]
-        if status in ("PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK"):
-            p["present"] += n
-        if status == "LATE":
-            p["late"] += n
-        if status == "ABSENT":
-            p["absent"] += n
-        if status in ("LEAVE_PAID", "LEAVE_UNPAID"):
-            p["leave"] += n
-    total = {k: sum(p[k] for p in per.values()) for k in ("active", "present", "late", "absent", "leave")}
-    since = datetime.combine(today, time.min)
-    punches = db.scalar(select(func.count(AttendanceLog.id)).where(AttendanceLog.punch_time >= since)) or 0
+    per = {c.id: {"company": c, "active": active.get(c.id, 0), "present": 0, "late": 0, "absent": 0, "leave": 0, "off": 0}
+           for c in comps if c.id in ids}
+    for c_id, st, n in rows:
+        x = per.get(c_id)
+        if not x:
+            continue
+        if st in present_st:
+            x["present"] += n
+        if st == "LATE":
+            x["late"] += n
+        if st == "ABSENT":
+            x["absent"] += n
+        if st in ("LEAVE_PAID", "LEAVE_UNPAID"):
+            x["leave"] += n
+        if st == "OFFDAY":
+            x["off"] += n
+    total = {k: sum(x[k] for x in per.values()) for k in ("active", "present", "late", "absent", "leave", "off")}
+    expected = total["present"] + total["absent"] + total["leave"]
+    total["rate"] = round(100 * total["present"] / expected) if expected else None
+    since = datetime.combine(d, time.min)
+    until = since + timedelta(days=1)
+    day_punches = db.execute(select(AttendanceLog.punch_time).where(
+        AttendanceLog.punch_time >= since, AttendanceLog.punch_time < until,
+        or_(AttendanceLog.card_no.in_(cards), AttendanceLog.card_no.not_in(select(Employee.card_no))) if not user.get("company_id") and not cid
+        else AttendanceLog.card_no.in_(cards))).scalars().all()
+    total["punches"] = len(day_punches)
+    total["mobile"] = db.scalar(select(func.count(AttendanceLog.id)).where(
+        AttendanceLog.punch_time >= since, AttendanceLog.punch_time < until, AttendanceLog.source == "MOBILE",
+        AttendanceLog.card_no.in_(cards))) or 0
+
+    names = [x["company"].code for x in per.values()]
+    vals = list(per.values())
+    status_chart = charts.stacked_hbars(names, [
+        ("Present", charts.STATUS["Present"], [x["present"] - x["late"] for x in vals]),
+        ("Late", charts.STATUS["Late"], [x["late"] for x in vals]),
+        ("Absent", charts.STATUS["Absent"], [x["absent"] for x in vals]),
+        ("Leave", charts.STATUS["Leave"], [x["leave"] for x in vals])]) if vals else ""
+
+    # --- 14-day attendance rate trend
+    start14 = d - timedelta(days=13)
+    trend_rows = db.execute(select(DailyAttendance.work_date, DailyAttendance.status, func.count())
+                            .where(DailyAttendance.work_date >= start14, DailyAttendance.work_date <= d,
+                                   DailyAttendance.employee_id.in_(emp_ids))
+                            .group_by(DailyAttendance.work_date, DailyAttendance.status)).all()
+    by_day: dict = {}
+    for wd, st, n in trend_rows:
+        x = by_day.setdefault(wd, Counter())
+        x[st] += n
+    t_labels, t_rate, t_table = [], [], []
+    for i in range(14):
+        wd = start14 + timedelta(days=i)
+        c = by_day.get(wd, Counter())
+        pres = sum(c[k] for k in present_st)
+        exp = pres + c["ABSENT"] + c["LEAVE_PAID"] + c["LEAVE_UNPAID"]
+        rate = round(100 * pres / exp, 1) if exp else None
+        t_labels.append(wd.strftime("%d %b"))
+        t_rate.append(rate)
+        t_table.append((wd.strftime("%a %d %b"), pres, c["ABSENT"], c["LATE"], rate))
+    trend_chart = charts.line(t_labels, t_rate, charts.CAT[0], "%", top=100) if any(v is not None for v in t_rate) else ""
+
+    # --- punches per hour on the day
+    hours = Counter(t.hour for t in day_punches)
+    h_from = min([5] + list(hours)) if hours else 5
+    h_to = max([22] + list(hours)) if hours else 22
+    hour_labels = [f"{h:02d}" for h in range(h_from, h_to + 1)]
+    hour_vals = [hours.get(h, 0) for h in range(h_from, h_to + 1)]
+    hour_chart = charts.columns(hour_labels, hour_vals, charts.CAT[0], " punches") if day_punches else ""
+
+    # --- headcount by department
+    dept_rows = db.execute(select(Department.name, func.count(Employee.id)).join(Employee, Employee.department_id == Department.id)
+                           .where(Employee.employment_status == "ACTIVE", Employee.company_id.in_(ids or [0]))
+                           .group_by(Department.name).order_by(func.count(Employee.id).desc())).all()
+    no_dept = db.scalar(select(func.count(Employee.id)).where(Employee.employment_status == "ACTIVE",
+                                                            Employee.department_id.is_(None),
+                                                            Employee.company_id.in_(ids or [0]))) or 0
+    dept = [(n or "-", c) for n, c in dept_rows][:9]
+    rest = sum(c for _, c in dept_rows[9:]) + no_dept
+    if rest:
+        dept.append(("Other / none", rest))
+    dept_chart = charts.hbars([x[0] for x in dept], [x[1] for x in dept], charts.CAT[2]) if dept else ""
+
+    # --- payroll net pay, last 6 months, by company
+    pay_chart, pay_table, pay_legend = "", [], ""
+    if "payroll.view" in user["perms"]:
+        months = []
+        y_, m_ = d.year, d.month
+        for _ in range(6):
+            months.insert(0, (y_, m_))
+            y_, m_ = (y_ - 1, 12) if m_ == 1 else (y_, m_ - 1)
+        runs = db.execute(select(PayrollRun.company_id, PayrollRun.year, PayrollRun.month, func.sum(PayrollLine.net_pay))
+                          .join(PayrollLine, PayrollLine.run_id == PayrollRun.id)
+                          .where(PayrollRun.company_id.in_(ids or [0]), (PayrollRun.year * 12 + PayrollRun.month) >=
+                                 months[0][0] * 12 + months[0][1])
+                          .group_by(PayrollRun.company_id, PayrollRun.year, PayrollRun.month)).all()
+        net = {(c_, yy, mm): float(v or 0) for c_, yy, mm, v in runs}
+        comp_list = [c for c in comps if c.id in ids]
+        color = {c.id: charts.CAT[i % len(charts.CAT)] for i, c in enumerate(sorted(comps, key=lambda c: c.id))}
+        series = [(c.code, color[c.id], [net.get((c.id, yy, mm), 0) for yy, mm in months]) for c in comp_list]
+        if any(v for _, _, vals in series for v in vals):
+            labels = [f"{month_abbr[mm]} {str(yy)[2:]}" for yy, mm in months]
+            pay_chart = charts.stacked_columns(labels, series, " Tk", height=300, width=1280)
+            pay_legend = charts.legend([(c.code, color[c.id]) for c in comp_list])
+            pay_table = [(lab, [vals[i] for _, _, vals in series]) for i, lab in enumerate(labels)]
+
+    # --- machines, latest punches, late today
     devs = db.scalars(select(Device).order_by(Device.name)).all()
-    return render(request, "dashboard.html", user, per=list(per.values()), total=total, today=today,
-                  punches_today=punches, devices=devs, processed=bool(rows),
-                  pending=sum(1 for d in devs if not d.approved))
+    now = now_local()
+    online = sum(1 for x in devs if x.enabled and x.approved and x.last_seen and (now - x.last_seen).total_seconds() < 900)
+    recent = db.scalars(select(AttendanceLog).where(AttendanceLog.card_no.in_(cards))
+                        .order_by(AttendanceLog.punch_time.desc()).limit(8)).all()
+    recent_emps = employees_by_card(db, [r.card_no for r in recent])
+    late_rows = db.scalars(select(DailyAttendance).where(DailyAttendance.work_date == d, DailyAttendance.late_minutes > 0,
+                                                         DailyAttendance.employee_id.in_(emp_ids))
+                           .order_by(DailyAttendance.late_minutes.desc()).limit(8)).all()
+    return render(request, "dashboard.html", user, per=vals, total=total, day=d, today=today, devices=devs,
+                  online=online, processed=bool(rows), pending=sum(1 for x in devs if not x.approved),
+                  status_chart=status_chart, status_legend=charts.legend([(k, v) for k, v in charts.STATUS.items()]),
+                  trend_chart=trend_chart, trend_table=t_table, hour_chart=hour_chart,
+                  hour_table=list(zip(hour_labels, hour_vals)), dept_chart=dept_chart, dept_table=dept,
+                  pay_chart=pay_chart, pay_table=pay_table, pay_legend=pay_legend,
+                  pay_codes=[c.code for c in comps if c.id in ids], recent=recent, recent_emps=recent_emps,
+                  late_rows=late_rows, companies=comps, company=cid or "")
 
 
 # ---------------------------------------------------------------- employees
@@ -810,7 +977,7 @@ def attendance_page(request: Request, user=Depends(page_user), db: Session = Dep
     d = date.fromisoformat(p["day"]) if p.get("day") else now_local().date()
     p["day"] = str(d)
     r = report_ctx(db, user, "attendance", p)
-    return render(request, "attendance.html", user, r=r, day=d, status=p.get("status", ""),
+    return render(request, "attendance.html", user, r=r, day=d, status=p.get("att_status", ""),
                   company=company_filter(user, p.get("company")) or "", companies=visible_companies(db, user))
 
 
