@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse, PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, func, or_
@@ -15,18 +15,22 @@ from sqlalchemy.orm import Session
 
 from config import settings, DATA_DIR
 from database import Base, engine, get_db, SessionLocal
-from integration import hikvision
-from integration.csv_import import import_attendance_csv, insert_punches, parse_dt
+from integration.csv_import import insert_punches, parse_dt
+from integration.punch_import import read_punch_file, ImportProblem
 from integration.employee_import import import_employees, template_bytes
-from integration.zk_adms import options_response, parse_attlog
+from integration.zk_adms import options_response
 from models import (Company, Department, Employee, Shift, Device, AttendanceLog, DailyAttendance, Holiday, Leave,
-                    PayrollAdjustment, PayrollRun, User, AuditLog)
+                    PayrollAdjustment, PayrollRun, PayrollLine, User, AuditLog, ErrorLog)
 from payroll.engine import split_gross
-from reports.excel import salary_sheet, attendance_month, attendance_day
+from reports.excel import (salary_sheet, attendance_month, attendance_day, punches_sheet, first_last_sheet,
+                           combined_salary)
 from reports.payslip import payslips_pdf
 from security import (hash_password, verify_password, create_token, decode_token, page_user,
                       LoginRequired, COOKIE, ROLES)
-from services import mobile, devices, maintenance
+from services import mobile, devices, maintenance, migrate
+from services.errors import log_error
+from services.photos import save_photo, photo_path
+from services.punch_reports import punch_query, first_last, employees_by_card
 from services.audit import audit
 from services.payroll_service import run_payroll, finalize_payroll, get_run, PayrollLocked
 from services.policy import (load_policy, save_policy, policy_rows, get_setting, set_setting, weekend_set,
@@ -40,6 +44,7 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 OPEN_PATHS = ("/setup", "/static", "/iclock", "/health", "/m")
 
 Base.metadata.create_all(bind=engine)
+migrate.upgrade(engine, Base.metadata)
 
 app = FastAPI(title=settings.app_name, version="3.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -125,6 +130,20 @@ async def first_run_redirect(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def catch_errors(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:  # noqa: BLE001 - every unexpected error is logged and shown politely
+        log_error("PAGE", f"{request.method} {request.url.path}: {exc}", exc=exc)
+        if "text/html" in request.headers.get("accept", ""):
+            return templates.TemplateResponse(request, "error.html", {
+                "request": request, "code": 500,
+                "detail": f"Something went wrong ({exc.__class__.__name__}). It was saved in the Error log."},
+                status_code=500)
+        return JSONResponse({"detail": "internal error - see Error log"}, status_code=500)
+
+
 @app.exception_handler(LoginRequired)
 async def _login_redirect(request: Request, exc: LoginRequired):
     return RedirectResponse("/login", status_code=303)
@@ -132,7 +151,7 @@ async def _login_redirect(request: Request, exc: LoginRequired):
 
 @app.exception_handler(HTTPException)
 async def _http_error(request: Request, exc: HTTPException):
-    if "text/html" in request.headers.get("accept", "") and exc.status_code in (403, 404):
+    if "text/html" in request.headers.get("accept", "") and exc.status_code in (400, 403, 404):
         return templates.TemplateResponse(request, "error.html",
                                           {"request": request, "code": exc.status_code, "detail": exc.detail},
                                           status_code=exc.status_code)
@@ -298,132 +317,224 @@ async def employees_import(file: UploadFile = File(...), user=Depends(page_user)
         result = import_employees(db, await file.read(), user.get("company_id"))
     except Exception as exc:
         db.rollback()
+        log_error("IMPORT", f"employee file {file.filename}: {str(exc)[:450]}", detail=str(exc),
+                  username=user["username"])
         return go("/employees", err=str(exc)[:1500])
     audit(db, user, "EMPLOYEE_IMPORT", f"{file.filename}: {result}")
     return go("/employees", msg=f"Import done: {result['added']} added, {result['updated']} updated")
 
 
+PROFILE_FIELDS = ("father_name", "mother_name", "spouse_name", "gender", "blood_group", "religion", "marital_status",
+                  "nid", "phone", "email", "emergency_contact", "present_address", "permanent_address", "education",
+                  "notes")
+
+
+def _emp_or_404(db: Session, user: dict, emp_id: int) -> Employee:
+    emp = db.get(Employee, emp_id)
+    if not emp:
+        raise HTTPException(404, "Employee not found")
+    check_company(user, emp.company_id)
+    return emp
+
+
 @app.get("/employees/new", response_class=HTMLResponse)
 def employee_new(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    return employee_form(request, None, user, db)
+    need(user, "HR")
+    return render(request, "employee_form.html", user, e=None, companies=visible_companies(db, user),
+                  shifts=db.scalars(select(Shift).order_by(Shift.code)).all(),
+                  departments=db.scalars(select(Department).order_by(Department.name)).all())
 
 
 @app.get("/employees/{emp_id}", response_class=HTMLResponse)
-def employee_form(request: Request, emp_id: int | None, user=Depends(page_user),
-                  db: Session = Depends(get_db)):
+def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Full profile: photo, personal and job details, this month's attendance, recent punches, leave, payslips."""
+    emp = _emp_or_404(db, user, emp_id)
+    today = now_local().date()
+    first, last = month_bounds(today.year, today.month)
+    month_rows = db.scalars(select(DailyAttendance).where(DailyAttendance.employee_id == emp.id,
+                                                          DailyAttendance.work_date >= first,
+                                                          DailyAttendance.work_date <= last)
+                            .order_by(DailyAttendance.work_date)).all()
+    summary = {k: 0 for k in ("present", "late", "absent", "leave", "off", "ot")}
+    for r in month_rows:
+        summary["present"] += r.status in ("PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK")
+        summary["late"] += r.late_minutes > 0
+        summary["absent"] += r.status == "ABSENT"
+        summary["leave"] += r.status in ("LEAVE_PAID", "LEAVE_UNPAID")
+        summary["off"] += r.status == "OFFDAY"
+        summary["ot"] += r.ot_minutes + r.extra_ot_minutes
+    fl = first_last(db, today - timedelta(days=30), today, q=emp.card_no)
+    fl = [r for r in fl if r["card_no"] == emp.card_no][::-1]
+    leaves = db.scalars(select(Leave).where(Leave.employee_id == emp.id).order_by(Leave.start_date.desc()).limit(20)).all()
+    show_salary = user["role"] in ("ADMIN", "HR", "ACCOUNTS")
+    pays = []
+    if show_salary:
+        pays = db.execute(select(PayrollLine, PayrollRun).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
+                          .where(PayrollLine.employee_id == emp.id)
+                          .order_by(PayrollRun.year.desc(), PayrollRun.month.desc()).limit(12)).all()
+    return render(request, "employee_profile.html", user, e=emp, summary=summary, month_rows=month_rows, today=today,
+                  first_last=fl, leaves=leaves, pays=pays, show_salary=show_salary)
+
+
+@app.get("/employees/{emp_id}/edit", response_class=HTMLResponse)
+def employee_form(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "HR")
-    emp = db.get(Employee, emp_id) if emp_id else None
-    if emp_id and not emp:
-        raise HTTPException(404, "Employee not found")
-    if emp:
-        check_company(user, emp.company_id)
+    emp = _emp_or_404(db, user, emp_id)
     return render(request, "employee_form.html", user, e=emp, companies=visible_companies(db, user),
                   shifts=db.scalars(select(Shift).order_by(Shift.code)).all(),
                   departments=db.scalars(select(Department).order_by(Department.name)).all())
 
 
+@app.get("/employees/{emp_id}/photo")
+def employee_photo(emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    emp = _emp_or_404(db, user, emp_id)
+    path = photo_path(emp.photo)
+    if not path:
+        return RedirectResponse("/static/img/no-photo.png", status_code=303)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60"})
+
+
 @app.post("/employees/save")
-def employee_save(request: Request, emp_id: str = Form(""), company_id: int = Form(...),
-                  employee_code: str = Form(...), card_no: str = Form(...),
-                  full_name: str = Form(...), department: str = Form(""), designation: str = Form(""),
-                  section: str = Form(""), grade: str = Form(""), shift_id: str = Form(""),
-                  joined_on: str = Form(""), left_on: str = Form(""), employment_status: str = Form("ACTIVE"),
-                  gross: str = Form("0"), auto_split: str = Form(""), basic: str = Form("0"),
-                  house_rent: str = Form("0"), medical: str = Form("0"), transport: str = Form("0"),
-                  food: str = Form("0"), payment_mode: str = Form("CASH"), bank_name: str = Form(""),
-                  account_no: str = Form(""), allow_mobile: str = Form(""), mobile_pin: str = Form(""),
-                  user=Depends(page_user), db: Session = Depends(get_db)):
+async def employee_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "HR")
-    check_company(user, company_id)
-    back = f"/employees/{emp_id}" if emp_id else "/employees/new"
+    f = await request.form()
+    val = lambda k: str(f.get(k) or "").strip()  # noqa: E731
+    emp_id = val("emp_id")
+    back = f"/employees/{emp_id}/edit" if emp_id else "/employees/new"
     try:
+        company_id = int(val("company_id") or 0)
+        check_company(user, company_id)
         e = db.get(Employee, int(emp_id)) if emp_id else Employee()
         if emp_id:
             check_company(user, e.company_id)
         if not db.get(Company, company_id):
-            raise ValueError("Unknown company")
-        code, card = employee_code.strip(), card_no.strip()
+            raise ValueError("Choose the company")
+        code = val("employee_code")
+        card = val("card_no") or code
+        if not code or not val("full_name"):
+            raise ValueError("Employee code and name are required")
         clash = db.scalar(select(Employee).where(or_(Employee.employee_code == code, Employee.card_no == card),
                                                  Employee.id != (e.id or 0)))
         if clash:
             raise ValueError(f"Employee code or card no. already used by {clash.employee_code} "
                              f"({clash.company.code if clash.company else ''})")
-        g = dec(gross, "Gross")
-        if auto_split:
+        g = dec(val("gross"), "Gross")
+        if val("auto_split") and g > 0:
             comp = split_gross(g, load_policy(db, company_id))
             parts = [comp.basic, comp.house_rent, comp.medical, comp.transport, comp.food]
         else:
-            parts = [dec(basic, "Basic"), dec(house_rent, "House rent"), dec(medical, "Medical"),
-                     dec(transport, "Transport"), dec(food, "Food")]
+            parts = [dec(val("basic"), "Basic"), dec(val("house_rent"), "House rent"), dec(val("medical"), "Medical"),
+                     dec(val("transport"), "Transport"), dec(val("food"), "Food")]
             if sum(parts) != g:
-                raise ValueError(f"Salary parts add up to {sum(parts)}, not gross {g}")
-        if mobile_pin and (not mobile_pin.isdigit() or len(mobile_pin) < 4):
+                raise ValueError(f"Salary parts add up to {sum(parts)}, not gross {g}. Tick 'split automatically'.")
+        pin = val("mobile_pin")
+        if pin and (not pin.isdigit() or len(pin) < 4):
             raise ValueError("Mobile PIN must be at least 4 digits")
         dept = None
-        if department.strip():
-            dept = db.scalar(select(Department).where(Department.name == department.strip()))
+        if val("department"):
+            dept = db.scalar(select(Department).where(Department.name == val("department")))
             if not dept:
-                dept = Department(name=department.strip())
+                dept = Department(name=val("department"))
                 db.add(dept)
-        e.company_id = company_id
-        e.employee_code, e.card_no, e.full_name = code, card, full_name.strip()
-        e.department, e.designation, e.section, e.grade = dept, designation or None, section or None, grade or None
-        e.shift_id = int(shift_id) if shift_id else None
-        e.joined_on = date.fromisoformat(joined_on) if joined_on else None
-        e.left_on = date.fromisoformat(left_on) if left_on else None
-        e.employment_status = employment_status
+        e.company_id, e.employee_code, e.card_no, e.full_name = company_id, code, card, val("full_name")
+        e.department, e.designation, e.section, e.grade = dept, val("designation") or None, val("section") or None, val("grade") or None
+        e.shift_id = int(val("shift_id")) if val("shift_id") else None
+        e.joined_on = date.fromisoformat(val("joined_on")) if val("joined_on") else None
+        e.left_on = date.fromisoformat(val("left_on")) if val("left_on") else None
+        e.date_of_birth = date.fromisoformat(val("date_of_birth")) if val("date_of_birth") else None
+        e.employment_status = val("employment_status") or "ACTIVE"
         e.gross = g
         e.basic, e.house_rent, e.medical, e.transport, e.food = parts
-        e.payment_mode, e.bank_name, e.account_no = payment_mode, bank_name or None, account_no or None
-        e.allow_mobile = bool(allow_mobile)
-        if mobile_pin:
-            e.mobile_pin_hash = hash_password(mobile_pin)
+        e.payment_mode = val("payment_mode") or "CASH"
+        e.bank_name, e.account_no = val("bank_name") or None, val("account_no") or None
+        for k in PROFILE_FIELDS:
+            setattr(e, k, val(k)[:300] or None if k != "notes" else val(k) or None)
+        e.allow_mobile = bool(f.get("allow_mobile"))
+        if pin:
+            e.mobile_pin_hash = hash_password(pin)
         if not emp_id:
             db.add(e)
         db.flush()
-        audit(db, user, "EMPLOYEE_SAVE", f"{code} {full_name}" + (" (PIN changed)" if mobile_pin else ""), commit=False)
+        photo = f.get("photo")
+        if photo is not None and getattr(photo, "filename", ""):
+            e.photo = save_photo(e.id, await photo.read())
+        if val("remove_photo"):
+            e.photo = None
+        audit(db, user, "EMPLOYEE_SAVE", f"{code} {e.full_name}" + (" (PIN changed)" if pin else ""), commit=False)
         db.commit()
     except (ValueError, TypeError) as exc:
         db.rollback()
         return go(back, err=str(exc))
-    return go("/employees", msg=f"Saved {e.employee_code}")
+    return go(f"/employees/{e.id}", msg=f"Saved {e.employee_code}")
 
 
 # ---------------------------------------------------------------- punch machines
 @app.get("/devices", response_class=HTMLResponse)
-def devices_page(request: Request, edit: int | None = None, user=Depends(page_user), db: Session = Depends(get_db)):
+def devices_page(request: Request, edit: int | None = None, new: str = "", user=Depends(page_user),
+                 db: Session = Depends(get_db)):
     need(user, "HR")
-    devs = db.scalars(select(Device).order_by(Device.approved, Device.name)).all()
+    devs = db.scalars(select(Device).order_by(Device.approved, Device.machine_no, Device.name)).all()
+    counts = dict(db.execute(select(AttendanceLog.device_id, func.count()).group_by(AttendanceLog.device_id)).all())
     return render(request, "devices.html", user, devices=devs, e=db.get(Device, edit) if edit else None,
-                  ips=maintenance.lan_ips())
+                  ips=maintenance.lan_ips(), brands=devices.BRANDS, counts=counts, show_form=bool(edit or new))
 
 
 @app.post("/devices/save")
-def device_save(device_id: str = Form(""), name: str = Form(...), brand: str = Form(...),
-                serial_number: str = Form(""), ip_address: str = Form(""), port: int = Form(80),
-                username: str = Form(""), password: str = Form(""), location: str = Form(""),
-                approved: str = Form(""), enabled: str = Form(""), user=Depends(page_user),
-                db: Session = Depends(get_db)):
+def device_save(device_id: str = Form(""), name: str = Form(""), brand: str = Form(...),
+                serial_number: str = Form(""), ip_address: str = Form(""), port: str = Form(""),
+                machine_no: str = Form(""), direction: str = Form("BOTH"), username: str = Form(""),
+                password: str = Form(""), location: str = Form(""), approved: str = Form(""),
+                enabled: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "HR")
     brand = brand.upper()
-    if brand not in ("ZKTECO", "HIKVISION"):
-        return go("/devices", err="Brand must be ZKTeco or Hikvision")
+    back = f"/devices?edit={device_id}" if device_id else "/devices?new=1"
+    if brand not in devices.BRANDS:
+        return go(back, err="Choose the machine type")
+    ip = ip_address.strip()
+    if brand in devices.PULL_BRANDS:
+        import ipaddress
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            return go(back, err="Enter the machine's IP address, e.g. 192.168.10.17")
+    if brand == "ZKTECO_PUSH" and not serial_number.strip():
+        return go(back, err="Enter the serial number (Menu > System Info > Device Info)")
+    if brand == "ZKTECO" and password.strip() and not password.strip().isdigit():
+        return go(back, err="Comm Key must be a number (0 = none)")
+    try:
+        port_n = int(port) if port.strip() else (4370 if brand == "ZKTECO" else 80)
+        mno = int(machine_no) if machine_no.strip() else None
+    except ValueError:
+        return go(back, err="Port and Machine No. must be numbers")
+    clash = db.scalar(select(Device).where(Device.ip_address == ip, Device.brand == brand,
+                                           Device.id != (int(device_id) if device_id else 0))) if ip else None
+    if clash and brand in devices.PULL_BRANDS:
+        return go(back, err=f"{ip} is already added as '{clash.name}'")
     d = db.get(Device, int(device_id)) if device_id else Device()
-    if brand == "HIKVISION" and not ip_address.strip():
-        return go("/devices", err="Hikvision machines need an IP address")
-    if brand == "ZKTECO" and not serial_number.strip():
-        return go("/devices", err="ZKTeco machines need the serial number (Menu > System Info > Device Info)")
-    d.name, d.brand, d.location = name.strip(), brand, location.strip() or None
-    d.serial_number = serial_number.strip() or None
-    d.ip_address, d.port, d.username = ip_address.strip() or None, port, username.strip() or None
-    if password:
-        d.password_enc = devices.encrypt(password)
+    d.brand, d.ip_address, d.port, d.machine_no = brand, ip or None, port_n, mno
+    d.name = name.strip() or (f"Machine {mno}" if mno else f"{brand.title()} {ip or serial_number}")
+    d.serial_number = serial_number.strip() or d.serial_number
+    d.direction = direction if direction in ("IN", "OUT", "BOTH") else "BOTH"
+    d.location, d.username = location.strip() or None, username.strip() or None
+    if password.strip():
+        d.password_enc = devices.encrypt(password.strip())
     d.approved, d.enabled = bool(approved), bool(enabled)
     if not device_id:
         db.add(d)
-    audit(db, user, "DEVICE_SAVE", f"{brand} {d.name} {d.ip_address or ''} {d.serial_number or ''} approved={d.approved}",
-          commit=False)
+    audit(db, user, "DEVICE_SAVE", f"{brand} {d.name} {d.ip_address or ''} {d.serial_number or ''} "
+                                   f"active={d.enabled} approved={d.approved}", commit=False)
     db.commit()
+    if brand in devices.PULL_BRANDS and d.enabled and d.approved:
+        try:
+            info = devices.test_device(d)
+            d.last_status = f"{now_local():%d/%m %H:%M} connected: {info}"
+            db.commit()
+            return go("/devices", msg=f"{d.name} saved and connected: {info}. Click 'Download now' to get its punches.")
+        except Exception as exc:  # noqa: BLE001
+            d.last_status = f"{now_local():%d/%m %H:%M} ERROR: {exc}"
+            db.commit()
+            log_error("MACHINE", f"{d.name} ({ip}): {exc}", username=user["username"])
+            return go("/devices", err=f"{d.name} saved, but the connection test failed: {exc}")
     return go("/devices", msg=f"Machine {d.name} saved")
 
 
@@ -433,29 +544,41 @@ def device_test(device_id: int, user=Depends(page_user), db: Session = Depends(g
     d = db.get(Device, device_id)
     if not d:
         raise HTTPException(404, "Unknown machine")
-    if d.brand != "HIKVISION":
-        when = f"{d.last_seen:%d/%m/%Y %H:%M}" if d.last_seen else "never"
-        return go("/devices", msg=f"{d.name}: ZKTeco machines connect to the server themselves. Last contact: {when}")
     try:
-        info = hikvision.device_info(d.ip_address, d.port or 80, d.username or "admin", devices.decrypt(d.password_enc))
-    except RuntimeError as exc:
+        info = devices.test_device(d)
+    except Exception as exc:  # noqa: BLE001
+        d.last_status = f"{now_local():%d/%m %H:%M} ERROR: {exc}"
+        db.commit()
+        log_error("MACHINE", f"{d.name} ({d.ip_address}): {exc}", username=user["username"])
         return go("/devices", err=f"{d.name}: {exc}")
     return go("/devices", msg=f"{d.name}: connected - {info}")
 
 
 @app.post("/devices/{device_id}/pull")
-def device_pull(device_id: int, days_back: int = Form(31), user=Depends(page_user), db: Session = Depends(get_db)):
+def device_pull(device_id: int, days_back: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "HR")
     d = db.get(Device, device_id)
-    if not d or d.brand != "HIKVISION":
-        return go("/devices", err="Only Hikvision machines can be pulled. ZKTeco machines push by themselves.")
-    if not d.approved:
-        return go("/devices", err="Approve the machine first")
-    r = devices.hik_poll_device(db, d, max(1, min(days_back, 180)))
-    audit(db, user, "DEVICE_PULL", f"{d.name} {days_back} days: {r}")
+    if not d or d.brand not in devices.PULL_BRANDS:
+        return go("/devices", err="This machine sends punches by itself - nothing to download")
+    if not d.approved or not d.enabled:
+        return go("/devices", err="Tick 'Active' for this machine first")
+    db_days = int(days_back) if days_back.strip().isdigit() else None
+    r = devices.pull_device(db, d, db_days)
+    audit(db, user, "DEVICE_DOWNLOAD", f"{d.name}: {r}")
     if not r["ok"]:
         return go("/devices", err=f"{d.name}: {r['message']}")
     return go("/devices", msg=f"{d.name}: read {r['read']} punches, {r['inserted']} new")
+
+
+@app.post("/devices/pull-all")
+def device_pull_all(user=Depends(page_user)):
+    need(user, "HR")
+    results = devices.pull_all()
+    if not results:
+        return go("/devices", err="No active ZKTeco-by-IP or Hikvision machines to download from")
+    errs = [r for r in results if "ERROR" in r]
+    return go("/devices", msg="Downloaded: " + "; ".join(r for r in results if "ERROR" not in r),
+              err="; ".join(errs))
 
 
 @app.post("/devices/{device_id}/delete")
@@ -557,27 +680,6 @@ def attendance_process(month: str = Form(...), user=Depends(page_user), db: Sess
                                  "(companies with a FINAL payroll for that month are locked and skipped)")
 
 
-@app.post("/attendance/import")
-async def attendance_import(file: UploadFile = File(...), user=Depends(page_user), db: Session = Depends(get_db)):
-    """CSV (card_no, punch_time, device) or a ZKTeco USB export (attlog.dat / *_attlog.dat)."""
-    need(user, "HR")
-    content = await file.read()
-    try:
-        if file.filename.lower().endswith((".dat", ".txt")):
-            punches, bad = parse_attlog(content.decode("utf-8", "replace"))
-            ins, dup = insert_punches(db, [(p, t, "USB") for p, t in punches], "USB", user["username"])
-            r = {"inserted": ins, "skipped_duplicates": dup}
-            if bad:
-                r["unreadable_lines"] = bad
-        else:
-            r = import_attendance_csv(db, content, user["username"])
-    except Exception as exc:
-        db.rollback()
-        return go("/attendance", err=str(exc)[:1500])
-    audit(db, user, "PUNCH_FILE_IMPORT", f"{file.filename}: {r}")
-    return go("/attendance", msg=f"{file.filename}: {r['inserted']} punches added, {r['skipped_duplicates']} duplicates skipped")
-
-
 @app.post("/attendance/manual")
 def attendance_manual(card_no: str = Form(...), punch_time: str = Form(...), reason: str = Form(...),
                       user=Depends(page_user), db: Session = Depends(get_db)):
@@ -634,21 +736,139 @@ def attendance_month_xlsx(month: str, company: str = "", user=Depends(page_user)
                     headers={"Content-Disposition": f"attachment; filename=attendance-{y}-{m:02d}.xlsx"})
 
 
-@app.get("/attendance/punches", response_class=HTMLResponse)
-def punches_page(request: Request, card: str = "", day: str = "", user=Depends(page_user),
-                 db: Session = Depends(get_db)):
-    d = date.fromisoformat(day) if day else now_local().date()
-    stmt = select(AttendanceLog).where(AttendanceLog.punch_time >= datetime.combine(d - timedelta(days=1), time.min),
-                                       AttendanceLog.punch_time < datetime.combine(d + timedelta(days=2), time.min))
-    if card:
-        stmt = stmt.where(AttendanceLog.card_no == card.strip())
-    if user.get("company_id"):
-        cards = select(Employee.card_no).where(Employee.company_id == user["company_id"])
-        stmt = stmt.where(AttendanceLog.card_no.in_(cards))
-    rows = db.scalars(stmt.order_by(AttendanceLog.punch_time.desc()).limit(500)).all()
-    names = {e.card_no: e for e in db.scalars(select(Employee).where(
-        Employee.card_no.in_({r.card_no for r in rows} or {""})))}
-    return render(request, "punches.html", user, rows=rows, card=card, day=d, names=names)
+@app.get("/attendance/punches")
+def old_punches_link(request: Request):
+    return RedirectResponse("/punches?" + str(request.query_params), status_code=303)
+
+
+# ---------------------------------------------------------------- Punch menu
+def _dates(start: str, end: str) -> tuple[date, date]:
+    today = now_local().date()
+    s_ = date.fromisoformat(start) if start else today
+    e_ = date.fromisoformat(end) if end else s_
+    if e_ < s_:
+        s_, e_ = e_, s_
+    if (e_ - s_).days > 92:
+        raise HTTPException(400, "Choose at most 3 months at a time")
+    return s_, e_
+
+
+@app.get("/punches", response_class=HTMLResponse)
+def punches_page(request: Request, start: str = "", end: str = "", company: str = "", q: str = "",
+                 machine: str = "", source: str = "", unknown: str = "", page: int = 1,
+                 user=Depends(page_user), db: Session = Depends(get_db)):
+    s_, e_ = _dates(start, end)
+    cid = company_filter(user, company)
+    stmt = punch_query(db, s_, e_, cid, q, int(machine) if machine.isdigit() else None, source, bool(unknown))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    size = 200
+    page = max(1, page)
+    rows = db.scalars(stmt.order_by(AttendanceLog.punch_time.desc(), AttendanceLog.card_no)
+                      .offset((page - 1) * size).limit(size)).all()
+    return render(request, "punches.html", user, rows=rows, emps=employees_by_card(db, [r.card_no for r in rows]),
+                  start=s_, end=e_, company=cid or "", q=q, machine=machine, source=source, unknown=unknown,
+                  page=page, pages=max(1, -(-total // size)), total=total, companies=visible_companies(db, user),
+                  machines=db.scalars(select(Device).order_by(Device.name)).all(), qs=request.url.query)
+
+
+@app.get("/punches.xlsx")
+def punches_xlsx(start: str = "", end: str = "", company: str = "", q: str = "", machine: str = "",
+                 source: str = "", unknown: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    s_, e_ = _dates(start, end)
+    stmt = punch_query(db, s_, e_, company_filter(user, company), q, int(machine) if machine.isdigit() else None,
+                       source, bool(unknown))
+    rows = db.scalars(stmt.order_by(AttendanceLog.punch_time, AttendanceLog.card_no).limit(300000)).all()
+    return Response(punches_sheet(rows, employees_by_card(db, [r.card_no for r in rows]), s_, e_), media_type=XLSX,
+                    headers={"Content-Disposition": f"attachment; filename=punches-{s_}-to-{e_}.xlsx"})
+
+
+@app.post("/punches/import")
+async def punches_import(file: UploadFile = File(...), user=Depends(page_user), db: Session = Depends(get_db)):
+    """Machine export files: Excel (.xlsx), CSV, ZKTeco attlog.dat - columns are recognised by name."""
+    need(user, "HR")
+    content = await file.read()
+    try:
+        rows, row_errors = read_punch_file(file.filename or "file", content)
+    except ImportProblem as exc:
+        log_error("IMPORT", f"punch file {file.filename}: {exc}", username=user["username"])
+        return go("/punches", err=f"{file.filename}: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        log_error("IMPORT", f"punch file {file.filename}: {exc}", username=user["username"], exc=exc)
+        return go("/punches", err=f"{file.filename}: cannot read this file ({exc})")
+    if row_errors:
+        log_error("IMPORT", f"punch file {file.filename}: {len(row_errors)} rows skipped",
+                  detail="\n".join(row_errors[:500]), username=user["username"])
+    if not rows:
+        return go("/punches", err=f"{file.filename}: no punches found" +
+                  (f" ({'; '.join(row_errors[:5])})" if row_errors else ""))
+    ins, dup = insert_punches(db, rows, "FILE", user["username"])
+    lo, hi = min(r[1] for r in rows).date(), max(r[1] for r in rows).date()
+    audit(db, user, "PUNCH_FILE_IMPORT", f"{file.filename}: {ins} new, {dup} duplicates, {len(row_errors)} bad rows")
+    return go(f"/punches?start={lo}&end={min(hi, lo + timedelta(days=92))}",
+              msg=f"{file.filename}: {ins} punches added, {dup} already there"
+                  + (f", {len(row_errors)} rows skipped (see Error log)" if row_errors else "")
+                  + ". Process the month on Daily attendance to update attendance.")
+
+
+@app.post("/punches/download")
+def punches_download(user=Depends(page_user)):
+    need(user, "HR")
+    results = devices.pull_all()
+    if not results:
+        return go("/punches", err="No active machines to download from - add them on the Machines page")
+    errs = [r for r in results if "ERROR" in r]
+    return go("/punches", msg="Downloaded: " + "; ".join(r for r in results if "ERROR" not in r),
+              err=("Problems (see Error log): " + "; ".join(errs)) if errs else "")
+
+
+@app.get("/punches/first-last", response_class=HTMLResponse)
+def first_last_page(request: Request, start: str = "", end: str = "", company: str = "", q: str = "",
+                    user=Depends(page_user), db: Session = Depends(get_db)):
+    s_, e_ = _dates(start, end)
+    cid = company_filter(user, company)
+    rows = first_last(db, s_, e_, cid, q, include_unknown=not cid)
+    return render(request, "first_last.html", user, rows=rows[:3000], total=len(rows), start=s_, end=e_,
+                  company=cid or "", q=q, companies=visible_companies(db, user), qs=request.url.query)
+
+
+@app.get("/punches/first-last.xlsx")
+def first_last_xlsx(start: str = "", end: str = "", company: str = "", q: str = "", user=Depends(page_user),
+                    db: Session = Depends(get_db)):
+    s_, e_ = _dates(start, end)
+    cid = company_filter(user, company)
+    rows = first_last(db, s_, e_, cid, q, include_unknown=not cid)
+    return Response(first_last_sheet(rows, s_, e_), media_type=XLSX,
+                    headers={"Content-Disposition": f"attachment; filename=first-last-{s_}-to-{e_}.xlsx"})
+
+
+# ---------------------------------------------------------------- error log
+@app.get("/errors", response_class=HTMLResponse)
+def errors_page(request: Request, source: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "HR")
+    stmt = select(ErrorLog).order_by(ErrorLog.created_at.desc())
+    if source:
+        stmt = stmt.where(ErrorLog.source == source)
+    rows = db.scalars(stmt.limit(1000)).all()
+    sources = [r[0] for r in db.execute(select(ErrorLog.source).distinct())]
+    return render(request, "errors.html", user, rows=rows, source=source, sources=sources)
+
+
+@app.post("/errors/clear")
+def errors_clear(user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user)
+    n = db.query(ErrorLog).delete()
+    audit(db, user, "ERRORLOG_CLEAR", f"{n} entries", commit=False)
+    db.commit()
+    return go("/errors", msg=f"Cleared {n} entries")
+
+
+@app.get("/errors/server.log")
+def errors_server_log(user=Depends(page_user)):
+    need(user)
+    f = DATA_DIR / "logs" / "server.log"
+    if not f.exists():
+        raise HTTPException(404, "No server log yet")
+    return FileResponse(f, media_type="text/plain", filename="server.log")
 
 
 # ---------------------------------------------------------------- leave
@@ -796,6 +1016,9 @@ def payroll_process(month: str = Form(...), company_id: int = Form(...), user=De
     except (PayrollLocked, ValueError) as exc:
         return go(_payroll_url(company_id, y, m), err=str(exc))
     err = ("Skipped: " + "; ".join(run.errors)[:1200]) if run.errors else ""
+    if run.errors:
+        log_error("PAYROLL", f"company {company_id} {y}-{m:02d}: {len(run.errors)} employees skipped",
+                  detail="\n".join(run.errors), username=user["username"])
     return go(_payroll_url(company_id, y, m), msg=f"Draft payroll ready for {len(run.lines)} employees", err=err)
 
 
@@ -839,6 +1062,22 @@ def payroll_pdf(run_id: int, employee_code: str = "", user=Depends(page_user), d
     audit(db, user, "PAYSLIP_EXPORT", f"{run.company.code} {run.year}-{run.month:02d} {employee_code or 'all'}")
     return Response(payslips_pdf(run, lines), media_type="application/pdf", headers={
         "Content-Disposition": f"inline; filename=payslips-{run.company.code}-{run.year}-{run.month:02d}.pdf"})
+
+
+@app.get("/payroll/combined.xlsx")
+def payroll_combined(month: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    """Head Office: every company's salary sheet for the month in one workbook, with a summary."""
+    need(user, "HR", "ACCOUNTS")
+    y, m = parse_month(month)
+    ids = [c.id for c in visible_companies(db, user)]
+    runs = db.scalars(select(PayrollRun).where(PayrollRun.year == y, PayrollRun.month == m,
+                                               PayrollRun.company_id.in_(ids or [0]))).all()
+    runs = sorted(runs, key=lambda r: r.company.code)
+    if not runs:
+        raise HTTPException(404, "No payroll processed for that month yet")
+    audit(db, user, "PAYROLL_EXPORT", f"combined {y}-{m:02d}")
+    return Response(combined_salary(runs, y, m), media_type=XLSX,
+                    headers={"Content-Disposition": f"attachment; filename=HO-salary-all-companies-{y}-{m:02d}.xlsx"})
 
 
 @app.post("/payroll/adjustments")

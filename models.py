@@ -67,6 +67,24 @@ class Employee(Base):
     medical: Mapped[Decimal] = mapped_column(Money, default=0)
     transport: Mapped[Decimal] = mapped_column(Money, default=0)
     food: Mapped[Decimal] = mapped_column(Money, default=0)
+    # profile
+    photo: Mapped[str | None] = mapped_column(String(120), nullable=True)   # file name in <data>/photos
+    father_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    mother_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    spouse_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    blood_group: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    religion: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    marital_status: Mapped[str | None] = mapped_column(String(15), nullable=True)
+    nid: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    emergency_contact: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    present_address: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    permanent_address: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    education: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     allow_mobile: Mapped[bool] = mapped_column(Boolean, default=False)    # may punch from phone
     mobile_pin_hash: Mapped[str | None] = mapped_column(String(300), nullable=True)
     payment_mode: Mapped[str] = mapped_column(String(10), default="CASH")  # CASH / BANK / MOBILE
@@ -84,12 +102,14 @@ class Device(Base):
     __tablename__ = "devices"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
-    brand: Mapped[str] = mapped_column(String(20))            # ZKTECO / HIKVISION
+    brand: Mapped[str] = mapped_column(String(20))   # ZKTECO (download by IP) / ZKTECO_PUSH / HIKVISION
+    machine_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    direction: Mapped[str] = mapped_column(String(5), default="BOTH")  # IN / OUT / BOTH
     serial_number: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     port: Mapped[int] = mapped_column(Integer, default=80)
     username: Mapped[str | None] = mapped_column(String(60), nullable=True)
-    password_enc: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    password_enc: Mapped[str | None] = mapped_column(String(300), nullable=True)   # Hikvision password or ZK Comm Key
     location: Mapped[str | None] = mapped_column(String(150), nullable=True)
     approved: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -109,6 +129,8 @@ class AttendanceLog(Base):
     card_no: Mapped[str] = mapped_column(String(50), index=True)
     punch_time: Mapped[datetime] = mapped_column(DateTime, index=True)
     device: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    device_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    direction: Mapped[str | None] = mapped_column(String(5), nullable=True)   # IN / OUT from the machine setting
     source: Mapped[str] = mapped_column(String(20), default="CSV")  # RAWDATA / CSV / MANUAL / MOBILE
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
@@ -261,3 +283,14 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(120))
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, index=True)
+
+
+class ErrorLog(Base):
+    """Every error the program meets: imports, machines, pages, payroll. Shown on the Error log page."""
+    __tablename__ = "error_logs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, index=True)
+    source: Mapped[str] = mapped_column(String(40))          # MACHINE / IMPORT / PAGE / PAYROLL / SYSTEM ...
+    message: Mapped[str] = mapped_column(String(500))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    username: Mapped[str | None] = mapped_column(String(80), nullable=True)

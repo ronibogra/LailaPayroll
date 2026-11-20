@@ -1,9 +1,33 @@
-{% extends "base.html" %}{% block title %}Punches{% endblock %}{% block heading %}Raw punches around {{ day.strftime('%d %b %Y') }}{% endblock %}
+{% extends "base.html" %}{% block title %}Punch records{% endblock %}{% block heading %}Punch records ({{ '{:,}'.format(total) }}){% endblock %}
 {% block content %}
-<div class="panel"><form class="inline" method="get"><div><label>Card no.</label><input name="card" value="{{ card }}"></div><div><label>Date</label><input type="date" name="day" value="{{ day }}"></div><button class="sec">Show</button></form>
-<p class="hint">Shows the day before to the day after (night shifts). Max 500 rows.</p></div>
-<div class="table-wrap"><table><tr><th>Card no.</th><th>Employee</th><th>Time</th><th>Source</th><th>Device</th><th>Location</th><th>Note</th><th>By</th></tr>
-{% for p in rows %}{% set e = names.get(p.card_no) %}<tr><td>{{ p.card_no }}</td><td>{% if e %}{{ e.full_name }} <span class="hint">{{ e.company.code if e.company }}</span>{% else %}<span class="tag DRAFT">not an employee</span>{% endif %}</td><td>{{ p.punch_time.strftime('%d/%m/%Y %H:%M:%S') }}</td><td><span class="tag">{{ p.source }}</span></td><td>{{ p.device or '' }}</td>
-<td>{% if p.latitude %}<a href="https://maps.google.com/?q={{ p.latitude }},{{ p.longitude }}" target="_blank" rel="noopener">map</a> ±{{ p.accuracy_m }} m{% endif %}</td><td>{{ p.note or '' }}</td><td>{{ p.created_by or '' }}</td></tr>
-{% else %}<tr><td colspan="8" class="hint">No punches.</td></tr>{% endfor %}</table></div>
+<div class="panel"><form class="inline" method="get">
+<div><label>From</label><input type="date" name="start" value="{{ start }}"></div>
+<div><label>To</label><input type="date" name="end" value="{{ end }}"></div>
+{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == company }}>{{ c.code }}</option>{% endfor %}</select></div>{% endif %}
+<div><label>ID, code or name</label><input name="q" value="{{ q }}" style="width:150px"></div>
+<div><label>Machine</label><select name="machine"><option value="">All</option>{% for m in machines %}<option value="{{ m.id }}" {{ 'selected' if machine == m.id|string }}>{{ m.name }}</option>{% endfor %}</select></div>
+<div><label>Source</label><select name="source"><option value="">All</option>{% for s in ('ZKTECO','HIKVISION','FILE','USB','MANUAL','MOBILE') %}<option {{ 'selected' if s == source }}>{{ s }}</option>{% endfor %}</select></div>
+<div><label><input type="checkbox" name="unknown" value="1" {{ 'checked' if unknown }}> only IDs that are not employees</label></div>
+<button class="sec">Show</button><a class="btn sec" href="/punches.xlsx?{{ qs }}">Excel</a>
+<a class="btn" href="/punches/first-last?{{ qs }}">First &amp; last punch</a></form></div>
+{% if user.role in ('ADMIN','HR') %}
+<div class="grid2">
+<div class="panel"><h3>Download from machines</h3><p class="hint">Gets new punches from every active machine now (it also runs automatically).</p>
+<form method="post" action="/punches/download"><button>Download now</button> <a class="btn sec" href="/devices">Machines</a></form></div>
+<div class="panel"><h3>Import a punch file</h3><p class="hint">Excel (.xlsx), CSV, or ZKTeco USB file (attlog.dat). Columns are recognised by name (e.g. AC-No / Employee ID / User ID + Date &amp; Time or Punch Time). Punches already stored are skipped.</p>
+<form class="inline" method="post" action="/punches/import" enctype="multipart/form-data"><input type="file" name="file" accept=".xlsx,.csv,.dat,.txt" required><button class="sec">Import</button></form></div>
+</div>
+<div class="panel"><h3>Manual punch</h3>
+<form class="inline" method="post" action="/attendance/manual"><div><label>Card no. or employee code</label><input name="card_no" required></div>
+<div><label>Date &amp; time</label><input type="datetime-local" name="punch_time" required></div><div><label>Reason</label><input name="reason" required style="width:260px"></div><button class="sec">Add punch</button></form></div>
+{% endif %}
+<div class="table-wrap"><table><tr><th>Card / ID</th><th>Employee</th><th>Company</th><th>Date</th><th>Time</th><th>Machine</th><th>In/Out</th><th>Source</th><th>Note</th></tr>
+{% for p in rows %}{% set e = emps.get(p.card_no) %}<tr>
+<td>{{ p.card_no }}</td><td>{% if e %}<a href="/employees/{{ e.id }}">{{ e.full_name }}</a> <span class="hint">{{ e.employee_code }}</span>{% else %}<span class="tag DRAFT">not an employee</span>{% endif %}</td>
+<td>{{ e.company.code if e and e.company }}</td><td>{{ p.punch_time.strftime('%d/%m/%Y') }}</td><td><b>{{ p.punch_time.strftime('%H:%M:%S') }}</b></td>
+<td>{{ p.device or '' }}</td><td>{{ p.direction or '' }}</td><td><span class="tag">{{ p.source }}</span></td>
+<td class="hint">{% if p.latitude %}<a href="https://maps.google.com/?q={{ p.latitude }},{{ p.longitude }}" target="_blank" rel="noopener">map</a> {% endif %}{{ p.note or '' }}</td></tr>
+{% else %}<tr><td colspan="9" class="hint">No punches for these filters.</td></tr>{% endfor %}</table></div>
+{% if pages > 1 %}<div class="pager">{% if page > 1 %}<a class="btn sec" href="?{{ qs|replace('page=' ~ page, '') }}&page={{ page-1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }}</span>
+{% if page < pages %}<a class="btn sec" href="?{{ qs|replace('page=' ~ page, '') }}&page={{ page+1 }}">Next ›</a>{% endif %}</div>{% endif %}
 {% endblock %}

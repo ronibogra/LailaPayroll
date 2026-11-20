@@ -1,41 +1,55 @@
-{% extends "base.html" %}{% block title %}Punch machines{% endblock %}{% block heading %}Punch machines{% endblock %}
+{% extends "base.html" %}{% block title %}Machines{% endblock %}{% block heading %}Machines ({{ devices|length }}){% endblock %}
 {% block content %}
-<div class="grid2">
-<div class="panel"><h3>ZKTeco (SpeedFace etc.) - machine sends punches to this server</h3>
-<ol class="hint" style="font-size:13px;line-height:1.8;padding-left:18px;margin:0">
-<li>On the machine: <b>Menu › COMM › Cloud Server Setting</b></li>
-<li>Server address: <b>{{ ips[0] }}</b> &nbsp; Port: <b>{{ settings.port }}</b> &nbsp; HTTPS / Proxy: <b>off</b></li>
-<li>Within a minute the machine appears below as <span class="tag DRAFT">PENDING</span>. Click Edit, name it, tick <b>Approved</b>.</li>
-<li>Its stored punches upload automatically, and new punches arrive in real time.</li></ol>
-<p class="hint">Server address(es): {% for ip in ips %}{{ ip }} {% endfor %}. Machines that are not approved are ignored.</p></div>
-<div class="panel"><h3>Hikvision (DS-K1T...) - server reads punches every {{ settings.device_poll_seconds }} s</h3>
-<ol class="hint" style="font-size:13px;line-height:1.8;padding-left:18px;margin:0">
-<li>On the machine/web page: enable <b>ISAPI</b> (Network › Advanced › Integration Protocol).</li>
-<li>Add it with the form below: IP, port 80, admin username and password, tick Approved.</li>
-<li>Click <b>Test</b>, then <b>Pull</b> to read past punches (up to 180 days).</li></ol></div>
+<div class="panel"><form class="inline" method="post" action="/devices/pull-all" style="display:inline-flex">
+<button>Download now from all machines</button></form>
+<a class="btn sec" href="/devices?new=1">+ Add machine</a>
+<span class="hint" style="margin-left:10px">Automatic download: ZKTeco every {{ settings.zk_poll_seconds // 60 }} min, Hikvision every {{ settings.device_poll_seconds }} s. Downloaded punches appear under <a href="/punches">Punch records</a>.</span></div>
+
+{% if show_form %}
+<div class="panel" style="max-width:760px"><h3>{{ 'Edit machine ' ~ (e.name or '') if e else 'Add machine' }}</h3>
+<form method="post" action="/devices/save" class="machine-form"><input type="hidden" name="device_id" value="{{ e.id if e else '' }}">
+<table class="form-table">
+<tr><td>Machine type *</td><td><select name="brand" id="brand" onchange="brandChanged()">{% for k, v in brands.items() %}<option value="{{ k }}" {{ 'selected' if (e and e.brand == k) or (not e and k == 'ZKTECO') }}>{{ v }}</option>{% endfor %}</select></td></tr>
+<tr class="ip-row"><td>IP address *</td><td><input name="ip_address" value="{{ e.ip_address or '' if e else '' }}" placeholder="192.168.10.17"></td></tr>
+<tr><td>Machine No.</td><td><input name="machine_no" value="{{ e.machine_no or '' if e else '' }}" inputmode="numeric"></td></tr>
+<tr><td>Machine name</td><td><input name="name" value="{{ e.name or '' if e else '' }}" placeholder="e.g. Main Gate 1"></td></tr>
+<tr><td>Location</td><td><input name="location" value="{{ e.location or '' if e else '' }}" placeholder="e.g. Head Office, Ground floor"></td></tr>
+<tr><td>In / Out</td><td><select name="direction">{% for k, v in [('BOTH','In & Out'), ('IN','In'), ('OUT','Out')] %}<option value="{{ k }}" {{ 'selected' if e and e.direction == k }}>{{ v }}</option>{% endfor %}</select></td></tr>
+<tr class="zk-row"><td>Comm Key (number, blank = 0)</td><td><input name="password" type="password" autocomplete="new-password" placeholder="{{ 'leave blank to keep the saved one' if e and e.password_enc else '0' }}" class="zk-key"></td></tr>
+<tr class="hik-row"><td>User name</td><td><input name="username" value="{{ e.username or 'admin' if e else 'admin' }}"></td></tr>
+<tr class="hik-row"><td>Password</td><td><input name="password" type="password" autocomplete="new-password" placeholder="{{ 'leave blank to keep the saved one' if e and e.password_enc else '' }}" class="hik-pw" disabled></td></tr>
+<tr class="push-row"><td>Serial number *</td><td><input name="serial_number" value="{{ e.serial_number or '' if e else '' }}" placeholder="Menu › System Info › Device Info"></td></tr>
+<tr class="ip-row"><td>Port</td><td><input name="port" type="number" value="{{ e.port if e else 4370 }}" id="port"></td></tr>
+<tr><td>Active</td><td><label style="color:inherit"><input type="checkbox" name="enabled" value="1" {{ 'checked' if not e or e.enabled }}> download from / accept punches of this machine</label>
+<input type="hidden" name="approved" value="1"></td></tr>
+<tr><td></td><td><button>Save</button> <a class="btn sec" href="/devices">Back</a></td></tr>
+</table></form>
+<p class="hint">Saving tests the connection straight away. <b>ZKTeco:</b> the Comm Key is set on the machine under Menu → Comm. → Connection (0 = none); port is normally 4370. No ZK SDK is needed on the server.
+<b>Hikvision:</b> enable ISAPI on the machine (Network › Advanced › Integration Protocol), port 80.
+<b>ZKTeco (machine sends):</b> instead of the server downloading, set the machine's Menu › COMM › Cloud Server to <b>{{ ips[0] }}</b>, port <b>{{ settings.port }}</b>.</p>
 </div>
-<div class="table-wrap" style="margin-bottom:16px"><table><tr><th>Name</th><th>Brand</th><th>Serial no.</th><th>IP</th><th>Location</th><th>Status</th><th>Last contact</th><th>Last result</th><th></th></tr>
-{% for d in devices %}<tr><td><b>{{ d.name }}</b></td><td>{{ d.brand }}</td><td>{{ d.serial_number or '' }}</td><td>{{ d.ip_address or '' }}{{ ':' ~ d.port if d.brand == 'HIKVISION' }}</td><td>{{ d.location or '' }}</td>
-<td>{% if not d.approved %}<span class="tag DRAFT">PENDING</span>{% elif d.enabled %}<span class="tag yes">ACTIVE</span>{% else %}<span class="tag">DISABLED</span>{% endif %}</td>
-<td>{{ d.last_seen.strftime('%d/%m %H:%M') if d.last_seen else 'never' }}</td><td class="hint" style="white-space:normal">{{ d.last_status or '' }}</td>
+<script>
+function brandChanged(){
+  const b = document.getElementById('brand').value, show = (cls, on) => document.querySelectorAll('.'+cls).forEach(r => r.style.display = on ? '' : 'none');
+  show('ip-row', b !== 'ZKTECO_PUSH'); show('zk-row', b === 'ZKTECO'); show('hik-row', b === 'HIKVISION'); show('push-row', b === 'ZKTECO_PUSH');
+  document.querySelector('.zk-key').disabled = b !== 'ZKTECO'; document.querySelector('.hik-pw').disabled = b !== 'HIKVISION';
+  const port = document.getElementById('port'); if ({{ 'false' if e else 'true' }}) port.value = b === 'HIKVISION' ? 80 : 4370;
+}
+brandChanged();
+</script>
+{% endif %}
+
+<div class="table-wrap"><table><tr><th>No.</th><th>Name</th><th>Type</th><th>IP : port</th><th>Location</th><th>In/Out</th><th>Status</th><th>Last contact</th><th>Last result</th><th class="num">Punches</th><th></th></tr>
+{% for d in devices %}<tr><td>{{ d.machine_no or '' }}</td><td><b>{{ d.name }}</b>{% if d.serial_number %}<div class="hint" style="margin:0">SN {{ d.serial_number }}</div>{% endif %}</td>
+<td>{{ brands.get(d.brand, d.brand) }}</td><td>{{ d.ip_address or '' }}{{ ':' ~ d.port if d.ip_address and d.brand != 'ZKTECO_PUSH' }}</td><td>{{ d.location or '' }}</td><td>{{ d.direction or 'BOTH' }}</td>
+<td>{% if not d.approved %}<span class="tag DRAFT">PENDING</span>{% elif d.enabled %}<span class="tag yes">ACTIVE</span>{% else %}<span class="tag">OFF</span>{% endif %}</td>
+<td>{{ d.last_seen.strftime('%d/%m %H:%M') if d.last_seen else 'never' }}</td>
+<td class="hint" style="white-space:normal;max-width:320px;{{ 'color:#8f1714' if d.last_status and 'ERROR' in d.last_status }}">{{ d.last_status or '' }}</td>
+<td class="num">{{ counts.get(d.id, 0) }}</td>
 <td style="white-space:nowrap"><a href="/devices?edit={{ d.id }}">Edit</a>
-{% if d.brand == 'HIKVISION' %}
 <form method="post" action="/devices/{{ d.id }}/test" style="display:inline"><button class="link">Test</button></form>
-<form method="post" action="/devices/{{ d.id }}/pull" style="display:inline"><input type="hidden" name="days_back" value="31"><button class="link">Pull 31 days</button></form>{% endif %}
+{% if d.brand != 'ZKTECO_PUSH' %}<form method="post" action="/devices/{{ d.id }}/pull" style="display:inline"><button class="link">Download</button></form>{% endif %}
 {% if user.role == 'ADMIN' %}<form method="post" action="/devices/{{ d.id }}/delete" style="display:inline" onsubmit="return confirm('Remove this machine? Its punches are kept.')"><button class="link">Remove</button></form>{% endif %}</td></tr>
-{% else %}<tr><td colspan="9" class="hint">No machines yet. Set up the ZKTeco machines as shown above, or add a Hikvision machine below.</td></tr>{% endfor %}</table></div>
-<div class="panel"><h3>{{ 'Edit ' ~ e.name if e else 'Add machine' }}</h3>
-<form method="post" action="/devices/save"><input type="hidden" name="device_id" value="{{ e.id if e else '' }}"><div class="form-grid">
-<div><label>Name</label><input name="name" required value="{{ e.name if e else '' }}" placeholder="Gate-1 Face"></div>
-<div><label>Brand</label><select name="brand">{% for b in ('HIKVISION','ZKTECO') %}<option {{ 'selected' if e and e.brand == b }}>{{ b }}</option>{% endfor %}</select></div>
-<div><label>Serial no. (ZKTeco)</label><input name="serial_number" value="{{ e.serial_number or '' if e else '' }}"></div>
-<div><label>IP address (Hikvision)</label><input name="ip_address" value="{{ e.ip_address or '' if e else '' }}"></div>
-<div><label>Port</label><input type="number" name="port" value="{{ e.port if e else 80 }}"></div>
-<div><label>Username (Hikvision)</label><input name="username" value="{{ e.username or 'admin' if e else 'admin' }}"></div>
-<div><label>Password {{ '(blank = keep)' if e and e.password_enc }}</label><input name="password" type="password" autocomplete="new-password"></div>
-<div><label>Location</label><input name="location" value="{{ e.location or '' if e else '' }}"></div>
-<div><label><input type="checkbox" name="approved" value="1" {{ 'checked' if not e or e.approved }}> Approved (accept its punches)</label></div>
-<div><label><input type="checkbox" name="enabled" value="1" {{ 'checked' if not e or e.enabled }}> Enabled</label></div>
-</div><p><button>Save machine</button>{% if e %} <a class="btn sec" href="/devices">Cancel</a>{% endif %}</p></form>
-<p class="hint">Employees are matched by the user ID enrolled on the machine = <b>Card no.</b> on the employee record. The same person must have the same ID on every machine.</p></div>
+{% else %}<tr><td colspan="11" class="hint">No machines yet - click "+ Add machine".</td></tr>{% endfor %}</table></div>
+<p class="hint">Employees are matched by the user ID enrolled on the machine = <b>Card no.</b> on the employee record (the same person needs the same ID on every machine). Punches of IDs that are not employees yet are still kept and shown under Punch records.</p>
 {% endblock %}

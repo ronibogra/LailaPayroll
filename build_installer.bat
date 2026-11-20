@@ -67,7 +67,7 @@ echo === 4/5 Testing and building LailaPayroll.exe ===
   --add-data "templates;templates" --add-data "static;static" ^
   --collect-submodules uvicorn --collect-submodules sqlalchemy.dialects.sqlite ^
   --hidden-import python_multipart --hidden-import multipart --hidden-import pyodbc ^
-  --collect-data tzdata --collect-submodules reportlab --collect-submodules cryptography ^
+  --collect-data tzdata --collect-submodules reportlab --collect-submodules cryptography --collect-submodules zk --hidden-import PIL.Image --hidden-import PIL.ImageOps ^
   run.py || goto :err
 
 echo === 5/5 Packing the installer ===

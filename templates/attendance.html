@@ -8,9 +8,7 @@
 <div class="grid2">
 <div class="panel"><h3>Process month</h3><p class="hint">Rebuilds daily attendance from punches, shifts, holidays and leave. Run after new punches, manual punches, leave or shift changes.</p>
 <form class="inline" method="post" action="/attendance/process"><input type="month" name="month" value="{{ day.strftime('%Y-%m') }}" required><button>Process month</button></form>
-{% if user.role in ('ADMIN','HR') %}
-<form class="inline" method="post" action="/attendance/import" enctype="multipart/form-data" style="margin-top:10px">
-<div><label>Upload punches: CSV (card_no, punch_time, device) or ZKTeco USB attlog.dat</label><input type="file" name="file" accept=".csv,.dat,.txt" required></div><button class="sec">Upload</button></form>{% endif %}
+<p class="hint" style="margin-top:10px">Punches come from the machines automatically. To import a file or download now, use <a href="/punches">Punch records</a>.</p>
 </div>
 {% if user.role in ('ADMIN','HR') %}
 <div class="panel"><h3>Manual punch</h3><p class="hint">For a forgotten punch or a machine fault. The reason is saved in the activity log.</p>
@@ -21,11 +19,11 @@
 <p><button>Add punch</button></p></form></div>{% endif %}
 </div>{% endif %}
 <div class="table-wrap"><table><tr><th>Co.</th><th>Code</th><th>Name</th><th>Department</th><th>Shift</th><th>Status</th><th>In</th><th>Out</th><th class="num">Late</th><th class="num">Worked h</th><th class="num">OT h</th><th class="num">Extra OT h</th><th></th></tr>
-{% for r in rows %}<tr><td>{{ r.employee.company.code if r.employee.company }}</td><td>{{ r.employee.employee_code }}</td><td>{{ r.employee.full_name }}</td><td>{{ r.employee.department.name if r.employee.department }}</td><td>{{ r.shift_code }}</td>
+{% for r in rows %}<tr><td>{{ r.employee.company.code if r.employee.company }}</td><td>{{ r.employee.employee_code }}</td><td><a href="/employees/{{ r.employee.id }}">{{ r.employee.full_name }}</a></td><td>{{ r.employee.department.name if r.employee.department }}</td><td>{{ r.shift_code }}</td>
 <td><span class="tag {{ r.status }}">{{ r.status }}</span></td><td>{{ r.in_time.strftime('%H:%M') if r.in_time }}</td>
 <td>{{ r.out_time.strftime('%d/%m %H:%M') if r.out_time and r.out_time.date() != day else (r.out_time.strftime('%H:%M') if r.out_time) }}</td>
 <td class="num">{{ r.late_minutes or '' }}</td><td class="num">{{ '%.2f'|format(r.worked_minutes/60) if r.worked_minutes }}</td>
 <td class="num">{{ '%.1f'|format(r.ot_minutes/60) if r.ot_minutes }}</td><td class="num">{{ '%.1f'|format(r.extra_ot_minutes/60) if r.extra_ot_minutes }}</td>
-<td><a href="/attendance/punches?card={{ r.employee.card_no }}&day={{ day }}">punches</a></td></tr>
+<td><a href="/punches?q={{ r.employee.card_no }}&start={{ day }}&end={{ day }}">punches</a></td></tr>
 {% else %}<tr><td colspan="13" class="hint">Nothing for this day. Process the month first.</td></tr>{% endfor %}</table></div>
 {% endblock %}

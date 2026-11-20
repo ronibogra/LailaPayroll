@@ -158,3 +158,73 @@ def attendance_day(day, records) -> bytes:
                        r.late_minutes, round(r.worked_minutes / 60, 2), round(r.ot_minutes / 60, 2),
                        round(r.extra_ot_minutes / 60, 2)] for r in records])
     return _save(wb)
+
+
+def punches_sheet(rows, emps: dict, start, end) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Punches"
+    head = ["Card / ID", "Employee code", "Name", "Company", "Department", "Date", "Time", "Machine", "In/Out", "Source"]
+    _title(ws, f"Punch records {start:%d/%m/%Y} - {end:%d/%m/%Y}", len(head))
+    data = []
+    for p in rows:
+        e = emps.get(p.card_no)
+        data.append([p.card_no, e.employee_code if e else "", e.full_name if e else "(not an employee)",
+                     e.company.code if e and e.company else "", e.department.name if e and e.department else "",
+                     p.punch_time.date(), p.punch_time.strftime("%H:%M:%S"), p.device or "", p.direction or "",
+                     p.source])
+    _table(ws, head, data)
+    for r in ws.iter_rows(min_row=5, min_col=6, max_col=6):
+        for c in r:
+            c.number_format = "dd/mm/yyyy"
+    return _save(wb)
+
+
+def first_last_sheet(rows, start, end) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "First & Last"
+    head = ["Date", "Card / ID", "Employee code", "Name", "Company", "Department", "Designation", "First punch",
+            "Last punch", "Punches", "Hours", "First machine", "Last machine"]
+    _title(ws, f"First & last punch {start:%d/%m/%Y} - {end:%d/%m/%Y}", len(head))
+    data = []
+    for r in rows:
+        e = r["employee"]
+        data.append([r["date"], r["card_no"], e.employee_code if e else "", e.full_name if e else "(not an employee)",
+                     e.company.code if e and e.company else "", e.department.name if e and e.department else "",
+                     e.designation if e else "", r["first"].strftime("%H:%M:%S"),
+                     r["last"].strftime("%H:%M:%S") if r["count"] > 1 else "", r["count"], r["hours"] or "",
+                     r["first_device"] or "", r["last_device"] or ""])
+    _table(ws, head, data)
+    for row in ws.iter_rows(min_row=5, min_col=1, max_col=1):
+        for c in row:
+            c.number_format = "dd/mm/yyyy"
+    ws.freeze_panes = "E5"
+    return _save(wb)
+
+
+def combined_salary(runs, year: int, month: int) -> bytes:
+    """All companies of the head office in one workbook: summary + one full sheet per company."""
+    period = f"{month_name[month]} {year}"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "HO Summary"
+    head = ["Company", "Status", "Employees", "Earned Gross", "OT Amount", "Deductions", "Net Pay", "Bank", "Cash", "Mobile"]
+    _title(ws, f"Head Office salary summary - {period}", len(head), settings.group_name)
+    data = []
+    for run in runs:
+        ls = run.lines
+        by = {m: float(sum(l.net_pay for l in ls if l.payment_mode == m)) for m in ("BANK", "CASH", "MOBILE")}
+        data.append([f"{run.company.code} - {run.company.name}", run.status, len(ls),
+                     float(sum(l.earned_gross for l in ls)), float(sum(l.ot_amount for l in ls)),
+                     float(sum(l.total_deductions + l.absent_deduction for l in ls)), float(sum(l.net_pay for l in ls)),
+                     by["BANK"], by["CASH"], by["MOBILE"]])
+    _table(ws, head, data, set(range(4, 11)), tuple(range(3, 11)))
+    ws.column_dimensions["A"].width = 40
+    for run in runs:
+        sh = wb.create_sheet(run.company.code[:28])
+        status = "FINAL" if run.status == "FINAL" else "DRAFT - not final"
+        _title(sh, f"Salary Sheet - {period} ({status})", len(SALARY_HEAD), run.company.name)
+        _table(sh, SALARY_HEAD, [_salary_row(l) for l in sorted(run.lines, key=lambda l: (l.department, l.employee_code))],
+               SALARY_MONEY, SALARY_TOTAL)
+    return _save(wb)

@@ -92,8 +92,8 @@ def main():
     post(s, "/login", {"username": "admin", "password": "Admin@12345"}, must="Dashboard")
 
     step("every page opens")
-    for p in ("/", "/attendance", "/attendance/punches", "/leaves", "/shifts", "/devices", "/employees",
-              "/payroll", "/settings", "/users", "/audit", "/employees/new"):
+    for p in ("/", "/attendance", "/punches", "/punches/first-last", "/leaves", "/shifts", "/devices",
+              "/devices?new=1", "/employees", "/payroll", "/settings", "/users", "/audit", "/errors", "/employees/new"):
         page(s, p, must="LAILA GROUP")
 
     step("ZKTeco machine handshake -> appears as pending")
@@ -123,16 +123,16 @@ def main():
     step("unapproved machine punches are ignored")
     r = requests.post(BASE + "/iclock/cdata", params={"SN": "CI-ZK-1", "table": "ATTLOG"}, data=body, timeout=60)
     ok(r.ok and r.text.startswith("OK"), f"ATTLOG: {r.text}")
-    page(s, f"/attendance/punches?day={prev_last}", must="No punches")
+    page(s, f"/punches?start={prev_last}&end={prev_last}", must="No punches")
 
     step("approve machine, punches arrive")
-    post(s, "/devices/save", {"device_id": dev_id, "name": "Gate-1 Face", "brand": "ZKTECO",
+    post(s, "/devices/save", {"device_id": dev_id, "name": "Gate-1 Face", "brand": "ZKTECO_PUSH",
                               "serial_number": "CI-ZK-1", "port": "80", "approved": "1", "enabled": "1"},
          must="saved")
     r = requests.post(BASE + "/iclock/cdata", params={"SN": "CI-ZK-1", "table": "ATTLOG"}, data=body, timeout=60)
     ok(r.text.strip() == f"OK: {len(lines)}", f"ATTLOG after approve: {r.text}")
     requests.get(BASE + "/iclock/getrequest", params={"SN": "CI-ZK-1"}, timeout=30)
-    page(s, f"/attendance/punches?day={prev_last}", must="1001")
+    page(s, f"/punches?start={prev_last}&end={prev_last}", must="1001")
     page(s, "/devices", must="new ")
 
     step("Hikvision machine add + test (unreachable IP must give a clear error)")
@@ -142,6 +142,17 @@ def main():
     ok(hik, "Hikvision test button missing")
     r = post(s, f"/devices/{hik[0]}/test", must_not=None)
     ok("cannot reach" in r.text, f"expected 'cannot reach' error, got: {r.text[:600]}")
+
+    step("ZKTeco by IP: unreachable machine is saved, error is clear and goes to the Error log")
+    r = post(s, "/devices/save", {"brand": "ZKTECO", "ip_address": "127.0.0.1", "port": "9", "machine_no": "17",
+                                  "name": "ZK Test 17", "direction": "IN", "password": "0", "approved": "1",
+                                  "enabled": "1"}, must_not=None)
+    ok("connection test failed" in r.text and "ZK Test 17" in r.text, f"ZK save: {r.text[:800]}")
+    zk = re.search(r'/devices/(\d+)/pull" style="display:inline"><button class="link">Download', r.text)
+    ok(zk is not None, "download button for ZK machine missing")
+    page(s, "/errors", must="ZK Test 17")
+    r = post(s, "/punches/download", must_not=None)
+    ok("Problems" in r.text, f"download-all should report the unreachable machines: {r.text[:600]}")
 
     step("shift: create NIGHT shift")
     post(s, "/shifts/save", {"code": "NIGHT", "name": "Night 20-05", "start": "20:00", "end": "05:00",
@@ -164,6 +175,53 @@ def main():
     post(s, "/employees/import", files={"file": ("bad.xlsx", xlsx(bad))}, must="unknown company", must_not=None)
     post(s, "/employees/import", files={"file": ("emp.xlsx", xlsx(rows))}, must="2 added")
     page(s, "/employees", must="Ms. Karima")
+    # only code (+ company) - card defaults to the code, name to the code
+    post(s, "/employees/import", files={"file": ("min.xlsx", xlsx([["company", "employee_code"], ["HO", 12127], ["HO", "12160"]]))},
+         must="2 added")
+    page(s, "/employees?q=12127", must="12127")
+    # update with a real column layout from HR: Name / Employee ID / Mobile - empty cells keep data
+    post(s, "/employees/import", files={"file": ("upd.xlsx", xlsx([["Employee ID", "Name", "Mobile", "company"],
+                                                                     ["12127", "Abdul Karim", "01711111111", ""]]))},
+         must="1 updated")
+    page(s, "/employees?q=12127", must="Abdul Karim")
+
+    step("punch file import (machine export: AC-No + Date + Time)")
+    csv_body = "AC-No.,Name,Date,Time,State\n" + "".join(
+        f"12127,Abdul Karim,{date(y, m, d):%d/%m/%Y},{hh},{st}\n"
+        for d in (2, 3) for hh, st in (("08:57", "C/In"), ("13:02", "C/Out"), ("18:31", "C/Out")))
+    r = post(s, "/punches/import", files={"file": ("export.csv", csv_body.encode())}, must="6 punches added")
+    xl = xlsx([["Report"], ["User ID", "Punch Time"], ["12160", f"{date(y, m, 2)} 09:01:00"], ["12160", f"{date(y, m, 2)} 18:00:00"],
+               ["99999", f"{date(y, m, 2)} 10:00:00"], ["12160", "garbage"]])
+    post(s, "/punches/import", files={"file": ("export.xlsx", xl)}, must="3 punches added")
+    page(s, "/errors", must="rows skipped")
+
+    step("first & last punch report (incl. unknown IDs)")
+    r = page(s, f"/punches/first-last?start={date(y, m, 2)}&end={date(y, m, 2)}", must="Abdul Karim")
+    ok("08:57" in r.text and "18:31" in r.text, "first/last times for 12127 missing")
+    ok("not an employee" in r.text, "unknown ID 99999 should be listed")
+    r = page(s, f"/punches/first-last.xlsx?start={date(y, m, 1)}&end={prev_last}")
+    ws = load_workbook(io.BytesIO(r.content)).active
+    ok(ws.max_row > 10, f"first-last Excel too small: {ws.max_row}")
+    r = page(s, f"/punches.xlsx?start={date(y, m, 1)}&end={prev_last}")
+    load_workbook(io.BytesIO(r.content))
+    page(s, f"/punches?start={date(y, m, 1)}&end={prev_last}&unknown=1", must="99999")
+
+    step("employee profile with photo")
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (800, 1000), (200, 30, 30)).save(buf, "PNG")
+    emp_id = re.search(r'/employees/(\d+)/edit">Edit', page(s, "/employees?q=12127").text).group(1)
+    form = {"emp_id": emp_id, "company_id": "1", "employee_code": "12127", "card_no": "12127",
+            "full_name": "Abdul Karim", "designation": "Accountant", "department": "Accounts",
+            "father_name": "Late Abdul Hakim", "date_of_birth": "1990-05-01", "blood_group": "B+",
+            "phone": "01711111111", "present_address": "Dhaka", "gross": "30000", "auto_split": "1",
+            "payment_mode": "BANK", "employment_status": "ACTIVE"}
+    r = post(s, "/employees/save", form, files={"photo": ("me.png", buf.getvalue(), "image/png")}, must="Saved 12127")
+    ok("Late Abdul Hakim" in r.text and "B+" in r.text and "First &amp; last punch" in r.text, "profile page content")
+    r = s.get(BASE + f"/employees/{emp_id}/photo", timeout=30)
+    ok(r.ok and r.headers.get("content-type") == "image/jpeg", f"photo: {r.status_code} {r.headers.get('content-type')}")
+    ok(Image.open(io.BytesIO(r.content)).size[1] <= 600, "photo should be resized")
+    page(s, f"/employees/{emp_id}/edit", must="Late Abdul Hakim")
 
     step("holiday + leave")
     post(s, "/settings/holidays", {"day": str(date(y, m, 15)), "name": "CI Holiday"}, must="Holiday added")
@@ -180,9 +238,11 @@ def main():
     post(s, "/payroll/adjustments", {"month": month, "company_id": "1"},
          files={"file": ("adj.xlsx", xlsx([["employee_code", "other_addition", "advance", "other_deduction", "tax", "note"],
                                            ["HO-0001", 0, 1000, 0, 0, "CI advance"]]))}, must="1 adjustments saved")
-    r = post(s, "/payroll/process", {"month": month, "company_id": "1"}, must="Draft payroll ready for 1 employees")
+    r = post(s, "/payroll/process", {"month": month, "company_id": "1"}, must="Draft payroll ready for 2 employees",
+             must_not=None)
+    ok("Skipped" in r.text and "12160" in r.text, "employee without salary must be reported as skipped")
     run_id = re.search(r"/payroll/run/(\d+)/salary.xlsx", r.text).group(1)
-    ok("Md. Rahim" in r.text and "Ms. Karima" not in r.text, "HO payroll must contain only HO staff")
+    ok("Md. Rahim" in r.text and "Abdul Karim" in r.text and "Ms. Karima" not in r.text, "HO payroll must contain only HO staff")
 
     step("payroll LTL")
     r = post(s, "/payroll/process", {"month": month, "company_id": "2"}, must="Draft payroll ready for 1 employees")
@@ -194,6 +254,11 @@ def main():
     ok("Salary Sheet" in wb.sheetnames and "Bank Advice" in wb.sheetnames, f"sheets: {wb.sheetnames}")
     r = page(s, f"/payroll/run/{run_id}/payslips.pdf")
     ok(r.content[:4] == b"%PDF", "payslip is not a PDF")
+
+    step("combined HO salary workbook (all companies)")
+    r = page(s, f"/payroll/combined.xlsx?month={month}")
+    wb = load_workbook(io.BytesIO(r.content))
+    ok(wb.sheetnames[:3] == ["HO Summary", "HO", "LTL"], f"combined sheets: {wb.sheetnames}")
 
     step("finalize HO locks it")
     post(s, "/payroll/finalize", {"month": month, "company_id": "1", "confirm": "FINAL"}, must="finalized")
@@ -213,11 +278,11 @@ def main():
     ok(s2.get(BASE + "/users", timeout=30, headers={"accept": "text/html"}).status_code == 403, "HR must not open Users")
 
     step("mobile page on HTTPS + employee PIN login")
-    emp = re.search(r"/employees/(\d+)\">Edit</a>", page(s, "/employees?q=HO-0001").text).group(1)
+    emp = re.search(r'/employees/(\d+)/edit">Edit', page(s, "/employees?q=HO-0001").text).group(1)
     form = {"emp_id": emp, "company_id": "1", "employee_code": "HO-0001", "card_no": "1001", "full_name": "Md. Rahim",
             "gross": "12500", "auto_split": "1", "payment_mode": "BANK", "employment_status": "ACTIVE",
             "allow_mobile": "1", "mobile_pin": "4321"}
-    post(s, "/employees/save", form, must="Saved HO-0001")
+    post(s, "/employees/save", form, files={"_": ("", b"")}, must="Saved HO-0001")
     m = requests.Session()
     r = m.get(HTTPS + "/m", verify=False, timeout=30)
     ok(r.ok and "Employee ID" in r.text, f"mobile page: {r.status_code}")

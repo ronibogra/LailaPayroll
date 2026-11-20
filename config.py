@@ -45,7 +45,8 @@ class Settings(BaseSettings):
     # SQL Server option: mssql+pyodbc://user:pass@HOST/LailaPayroll?driver=ODBC+Driver+17+for+SQL+Server
     database_url: str = ""
 
-    device_poll_seconds: int = 60         # Hikvision polling interval
+    device_poll_seconds: int = 60         # Hikvision download interval
+    zk_poll_seconds: int = 300            # ZKTeco-by-IP download interval (reads the machine's whole log)
     backup_keep_days: int = 30            # daily automatic backup of the SQLite database
 
     # Mobile attendance

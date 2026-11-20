@@ -1,35 +1,18 @@
 import csv
 import io
-from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from models import AttendanceLog
 
-FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M",
-           "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M", "%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %I:%M %p")
+from integration.dtparse import parse_dt  # noqa: F401  (re-exported)
 
 
-def parse_dt(value) -> datetime:
-    if isinstance(value, datetime):
-        return value.replace(microsecond=0, tzinfo=None)
-    text = str(value).strip()
-    try:
-        return datetime.fromisoformat(text).replace(microsecond=0, tzinfo=None)
-    except ValueError:
-        pass
-    for fmt in FORMATS:
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    raise ValueError(f"unrecognised date/time: {text!r}")
-
-
-def insert_punches(db: Session, rows: list[tuple[str, datetime, str | None]], source: str,
-                   user: str | None = None) -> tuple[int, int]:
-    """Insert (card_no, punch_time, device) rows, skipping ones already stored. Returns (inserted, skipped)."""
+def insert_punches(db: Session, rows: list[tuple], source: str, user: str | None = None,
+                   device_id: int | None = None, direction: str | None = None) -> tuple[int, int]:
+    """Insert (card_no, punch_time, device[, direction]) rows, skipping ones already stored.
+    Returns (inserted, skipped). Works in batches so 100,000+ rows from a machine are fine."""
     if not rows:
         return 0, 0
     lo = min(r[1] for r in rows)
@@ -37,15 +20,23 @@ def insert_punches(db: Session, rows: list[tuple[str, datetime, str | None]], so
     existing = set(db.execute(select(AttendanceLog.card_no, AttendanceLog.punch_time)
                               .where(AttendanceLog.punch_time >= lo, AttendanceLog.punch_time <= hi)).all())
     new, seen = [], set()
-    for card, t, device in rows:
+    for r in rows:
+        card, t, device = str(r[0]).strip(), r[1], r[2]
         key = (card, t)
-        if key in existing or key in seen:
+        if not card or key in existing or key in seen:
             continue
         seen.add(key)
-        new.append(AttendanceLog(card_no=card, punch_time=t, device=device, source=source, created_by=user))
+        new.append(AttendanceLog(card_no=card[:50], punch_time=t, device=(device or None) and str(device)[:100],
+                                 source=source, created_by=user, device_id=device_id,
+                                 direction=(r[3] if len(r) > 3 and r[3] else direction)))
+        if len(new) >= 5000:
+            db.add_all(new)
+            db.flush()
+            new = []
     db.add_all(new)
     db.commit()
-    return len(new), len(rows) - len(new)
+    inserted = len(seen)
+    return inserted, len(rows) - inserted
 
 
 def import_attendance_csv(db: Session, content: bytes, user: str | None = None) -> dict:

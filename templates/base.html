@@ -11,17 +11,21 @@
 <aside class="sidebar">
   <div class="brand"><img src="/static/img/lg-logo.png" alt="LG"><div><b>{{ settings.group_name }}</b><small>Attendance &amp; Payroll</small></div></div>
   <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
+  <div class="nav-label">PUNCH</div>
+  <a href="/punches" class="{{ 'active' if path == '/punches' }}">Punch records</a>
+  <a href="/punches/first-last" class="{{ 'active' if path.startswith('/punches/first-last') }}">First &amp; last punch</a>
+  {% if r in ('ADMIN','HR') %}<a href="/devices" class="{{ 'active' if path.startswith('/devices') }}">Machines</a>{% endif %}
   <div class="nav-label">ATTENDANCE</div>
   <a href="/attendance" class="{{ 'active' if path == '/attendance' }}">Daily attendance</a>
-  <a href="/attendance/punches" class="{{ 'active' if path.startswith('/attendance/punches') }}">Raw punches</a>
   <a href="/leaves" class="{{ 'active' if path.startswith('/leaves') }}">Leave</a>
   <a href="/shifts" class="{{ 'active' if path.startswith('/shifts') }}">Shifts</a>
-  {% if r in ('ADMIN','HR') %}<a href="/devices" class="{{ 'active' if path.startswith('/devices') }}">Punch machines</a>{% endif %}
   <div class="nav-label">PEOPLE &amp; PAY</div>
   <a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>
   {% if r in ('ADMIN','HR','ACCOUNTS') %}<a href="/payroll" class="{{ 'active' if path.startswith('/payroll') }}">Payroll</a>{% endif %}
   <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
-  {% if r == 'ADMIN' %}<div class="nav-label">ADMIN</div>
+  {% if r in ('ADMIN','HR') %}<div class="nav-label">ADMIN</div>
+  <a href="/errors" class="{{ 'active' if path.startswith('/errors') }}">Error log</a>{% endif %}
+  {% if r == 'ADMIN' %}
   <a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users</a>
   <a href="/audit" class="{{ 'active' if path.startswith('/audit') }}">Activity log</a>{% endif %}
   <div class="side-foot">{{ settings.developer_credit }}</div>

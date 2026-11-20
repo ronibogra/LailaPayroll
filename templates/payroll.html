@@ -5,6 +5,7 @@
 <div class="panel"><form class="inline" method="get">
 <div><label>Company</label><select name="company">{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
 <div><label>Month</label><input type="month" name="month" value="{{ mval }}"></div><button class="sec">Open</button></form>
+<a class="btn sec" href="/payroll/combined.xlsx?month={{ mval }}" style="margin-left:6px">All companies in one Excel (HO)</a>
 {% if companies|length > 1 %}<p class="hint" style="margin-top:10px">{{ month_name[m] }} {{ y }}:
 {% for c in companies %}{% set r = runs.get(c.id) %}<a href="/payroll?company={{ c.id }}&month={{ mval }}">{{ c.code }}</a> <span class="tag {{ r.status if r }}">{{ r.status if r else 'not run' }}</span> &nbsp; {% endfor %}</p>{% endif %}</div>
 {% if not company %}<div class="alert err">Add a company under Settings first.</div>{% else %}

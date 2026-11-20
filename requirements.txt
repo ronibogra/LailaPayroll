@@ -8,5 +8,7 @@ PyJWT>=2.9,<3
 openpyxl>=3.1,<4
 reportlab>=4.0,<5
 cryptography>=42
+pyzk>=0.9
+pillow>=10
 tzdata
 pyodbc>=5.1    # only used if you switch to SQL Server

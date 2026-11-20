@@ -163,3 +163,41 @@ def test_hikvision_events():
     q = build_query(datetime(2026, 11, 1), datetime(2026, 11, 2), 30)["AcsEventCond"]
     assert q["startTime"] == "2026-11-01T00:00:00+06:00" and q["searchResultPosition"] == 30
     assert to_local("2026-11-20T08:00:00") == datetime(2026, 11, 20, 8)
+
+
+# ---------- punch file import ----------
+def _xlsx(rows):
+    import io as _io
+    from openpyxl import Workbook
+    wb = Workbook()
+    for r in rows:
+        wb.active.append(r)
+    b = _io.BytesIO()
+    wb.save(b)
+    return b.getvalue()
+
+
+def test_punch_import_formats():
+    import sys, types
+    sys.modules.setdefault("config", types.SimpleNamespace(settings=types.SimpleNamespace(timezone_offset_hours=6)))
+    from integration.punch_import import read_punch_file, ImportProblem
+    # ZKTeco style export: AC-No, Date + Time separate, In/Out text
+    rows, err = read_punch_file("x.csv", b"AC-No.,Name,Date,Time,State\n12127,Rahim,20/11/2026,08:01,C/In\n12160,Karim,2026-11-20,6:05 PM,C/Out\n")
+    assert not err and rows == [("12127", datetime(2026, 11, 20, 8, 1), None, "IN"),
+                                ("12160", datetime(2026, 11, 20, 18, 5), None, "OUT")]
+    # Excel with title row, real datetime cell, numeric ID
+    data = _xlsx([["Attendance report"], ["Employee ID", "Name", "Punch Time", "Device"],
+                  [12127.0, "Rahim", datetime(2026, 11, 20, 8, 1, 30), "Gate-1"]])
+    rows, err = read_punch_file("x.xlsx", data)
+    assert rows == [("12127", datetime(2026, 11, 20, 8, 1, 30), "Gate-1", None)]
+    # Excel with date + time cells
+    rows, _ = read_punch_file("x.xlsx", _xlsx([["User ID", "Date", "Time"], ["7", date(2026, 11, 2), time(17, 5)]]))
+    assert rows == [("7", datetime(2026, 11, 2, 17, 5), None, None)]
+    # USB attlog
+    rows, _ = read_punch_file("1_attlog.dat", b"  12127\t2026-11-20 08:01:02\t0\t1\t0\t0\n")
+    assert rows == [("12127", datetime(2026, 11, 20, 8, 1, 2), "USB", None)]
+    # bad file gives a clear message
+    with pytest.raises(ImportProblem):
+        read_punch_file("x.csv", b"Name,Salary\nA,1\n")
+    rows, err = read_punch_file("x.csv", b"card_no,punch_time\n1,not a date\n2,2026-11-20 08:00\n")
+    assert len(rows) == 1 and err and "row 2" in err[0]

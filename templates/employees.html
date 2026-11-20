@@ -4,18 +4,18 @@
 {% if user.role in ('ADMIN','HR') %}<a class="btn" href="/employees/new">+ Add employee</a>{% endif %}</form></div>
 {% if user.role in ('ADMIN','HR') %}
 <div class="panel"><h3>Import employees from Excel</h3>
-<p class="hint">Download the template, fill one row per employee, upload. Existing employee codes are updated. If any row has a problem nothing is saved and the errors are listed.</p>
+<p class="hint">Download the template, fill one row per employee, upload. Only <b>employee_code</b> is required - card no., name, company, salary and personal details are optional and can be added later. Existing employees are updated (empty cells keep the old value). If any row has a problem nothing is saved and the errors are listed (also in the Error log).</p>
 <form class="inline" method="post" action="/employees/import" enctype="multipart/form-data">
 <input type="file" name="file" accept=".xlsx" required><button>Upload</button><a class="btn sec" href="/employees/template.xlsx">Download template</a></form></div>
 {% endif %}
-<div class="table-wrap"><table><tr><th>Company</th><th>Code</th><th>Card no.</th><th>Name</th><th>Department</th><th>Designation</th><th>Shift</th><th>Joined</th>
+<div class="table-wrap"><table><tr><th></th><th>Company</th><th>Code</th><th>Card no.</th><th>Name</th><th>Department</th><th>Designation</th><th>Shift</th><th>Joined</th>
 {% if show_salary %}<th class="num">Gross</th><th>Pay mode</th>{% endif %}<th>Mobile</th><th>Status</th><th></th></tr>
-{% for e in rows %}<tr><td>{{ e.company.code if e.company }}</td><td>{{ e.employee_code }}</td><td>{{ e.card_no }}</td><td>{{ e.full_name }}</td>
+{% for e in rows %}<tr class="click" onclick="if(event.target.tagName!=='A')location.href='/employees/{{ e.id }}'"><td>{% if e.photo %}<img class="thumb" src="/employees/{{ e.id }}/photo" alt="" loading="lazy">{% endif %}</td><td>{{ e.company.code if e.company }}</td><td>{{ e.employee_code }}</td><td>{{ e.card_no }}</td><td><a href="/employees/{{ e.id }}"><b>{{ e.full_name }}</b></a></td>
 <td>{{ e.department.name if e.department }}</td><td>{{ e.designation or '' }}</td><td>{{ e.shift.code if e.shift else 'GENERAL*' }}</td>
 <td>{{ e.joined_on or '' }}</td>{% if show_salary %}<td class="num">{{ '{:,.0f}'.format(e.gross) }}</td><td>{{ e.payment_mode }}</td>{% endif %}
 <td>{% if e.allow_mobile %}<span class="tag yes">yes</span>{% endif %}</td><td><span class="tag">{{ e.employment_status }}</span></td>
-<td>{% if user.role in ('ADMIN','HR') %}<a href="/employees/{{ e.id }}">Edit</a>{% endif %}</td></tr>
-{% else %}<tr><td colspan="13" class="hint">No employees yet - import the Excel template.</td></tr>{% endfor %}</table></div>
+<td>{% if user.role in ('ADMIN','HR') %}<a href="/employees/{{ e.id }}/edit">Edit</a>{% endif %}</td></tr>
+{% else %}<tr><td colspan="14" class="hint">No employees yet - import the Excel template.</td></tr>{% endfor %}</table></div>
 <div class="pager">{% if page > 1 %}<a class="btn sec" href="?q={{ q }}&company={{ company }}&page={{ page-1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }}</span>
 {% if page < pages %}<a class="btn sec" href="?q={{ q }}&company={{ company }}&page={{ page+1 }}">Next ›</a>{% endif %}</div>
 <p class="hint">* No shift assigned: the GENERAL shift is used. Card no. must be unique across all companies (the machines are shared).</p>

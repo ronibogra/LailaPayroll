@@ -1,0 +1,64 @@
+{% extends "base.html" %}{% block title %}{{ e.full_name }}{% endblock %}{% block heading %}Employee profile{% endblock %}
+{% block content %}
+<div class="panel"><div class="profile-head">
+<img class="photo" src="/employees/{{ e.id }}/photo" alt="">
+<div style="flex:1"><h2>{{ e.full_name }}</h2>
+<p class="hint" style="font-size:14px;margin:0 0 10px">{{ e.designation or '' }}{{ ', ' ~ e.department.name if e.department }} · <b>{{ e.company.name if e.company }}</b></p>
+<div class="kv"><div>Employee code</div><div><b>{{ e.employee_code }}</b></div><div>Card no. / machine ID</div><div>{{ e.card_no }}</div>
+<div>Status</div><div><span class="tag {{ 'yes' if e.employment_status == 'ACTIVE' else '' }}">{{ e.employment_status }}</span></div>
+<div>Joined</div><div>{{ e.joined_on.strftime('%d %b %Y') if e.joined_on else '-' }}{{ ' · left ' ~ e.left_on.strftime('%d %b %Y') if e.left_on }}</div>
+<div>Shift</div><div>{{ e.shift.code ~ ' (' ~ e.shift.start.strftime('%H:%M') ~ '-' ~ e.shift.end.strftime('%H:%M') ~ ')' if e.shift else 'GENERAL' }}</div>
+<div>Mobile</div><div>{{ e.phone or '-' }}</div></div></div>
+<div>{% if user.role in ('ADMIN','HR') %}<a class="btn" href="/employees/{{ e.id }}/edit">Edit</a>{% endif %} <a class="btn sec" href="/employees">Back</a></div>
+</div></div>
+<div class="cards">
+<div class="metric g"><span>Present ({{ today.strftime('%B') }})</span><strong>{{ summary.present }}</strong></div>
+<div class="metric a"><span>Late</span><strong>{{ summary.late }}</strong></div>
+<div class="metric r"><span>Absent</span><strong>{{ summary.absent }}</strong></div>
+<div class="metric"><span>Leave</span><strong>{{ summary.leave }}</strong></div>
+<div class="metric"><span>OT hours</span><strong>{{ '%.1f'|format(summary.ot / 60) }}</strong></div>
+</div>
+<div class="grid2">
+<div class="panel"><h3>Personal</h3><div class="kv">
+<div>Father</div><div>{{ e.father_name or '-' }}</div><div>Mother</div><div>{{ e.mother_name or '-' }}</div>
+<div>Spouse</div><div>{{ e.spouse_name or '-' }}</div>
+<div>Date of birth</div><div>{{ e.date_of_birth.strftime('%d %b %Y') if e.date_of_birth else '-' }}</div>
+<div>Gender</div><div>{{ e.gender or '-' }}</div><div>Blood group</div><div>{{ e.blood_group or '-' }}</div>
+<div>Religion</div><div>{{ e.religion or '-' }}</div><div>Marital status</div><div>{{ e.marital_status or '-' }}</div>
+<div>NID</div><div>{{ e.nid or '-' }}</div><div>Email</div><div>{{ e.email or '-' }}</div>
+<div>Emergency contact</div><div>{{ e.emergency_contact or '-' }}</div><div>Education</div><div>{{ e.education or '-' }}</div>
+<div>Present address</div><div>{{ e.present_address or '-' }}</div><div>Permanent address</div><div>{{ e.permanent_address or '-' }}</div>
+{% if e.notes %}<div>Notes</div><div>{{ e.notes }}</div>{% endif %}
+</div></div>
+<div class="panel"><h3>Job &amp; salary</h3><div class="kv">
+<div>Company</div><div>{{ e.company.code ~ ' - ' ~ e.company.name if e.company }}</div>
+<div>Department</div><div>{{ e.department.name if e.department else '-' }}</div><div>Designation</div><div>{{ e.designation or '-' }}</div>
+<div>Section / line</div><div>{{ e.section or '-' }}</div><div>Grade</div><div>{{ e.grade or '-' }}</div>
+{% if show_salary %}<div>Gross salary</div><div><b>Tk {{ '{:,.0f}'.format(e.gross) }}</b></div>
+<div>Basic / house rent</div><div>{{ '{:,.0f}'.format(e.basic) }} / {{ '{:,.0f}'.format(e.house_rent) }}</div>
+<div>Medical / transport / food</div><div>{{ '{:,.0f}'.format(e.medical) }} / {{ '{:,.0f}'.format(e.transport) }} / {{ '{:,.0f}'.format(e.food) }}</div>
+<div>Payment</div><div>{{ e.payment_mode }} {{ e.bank_name or '' }} {{ e.account_no or '' }}</div>{% endif %}
+<div>Mobile punch</div><div>{{ 'allowed' if e.allow_mobile else 'no' }}</div>
+</div></div>
+</div>
+<div class="grid2">
+<div class="panel"><h3>First &amp; last punch - last 30 days</h3><div class="table-wrap" style="max-height:420px"><table><tr><th>Date</th><th>First</th><th>Last</th><th class="num">Punches</th><th class="num">Hours</th></tr>
+{% for r in first_last %}<tr><td>{{ r.date.strftime('%a %d/%m') }}</td><td>{{ r.first.strftime('%H:%M') }}</td><td>{{ r.last.strftime('%H:%M') if r.count > 1 else '—' }}</td><td class="num">{{ r.count }}</td><td class="num">{{ '%.2f'|format(r.hours) if r.hours else '' }}</td></tr>
+{% else %}<tr><td colspan="5" class="hint">No punches in the last 30 days.</td></tr>{% endfor %}</table></div>
+<p><a href="/punches?q={{ e.card_no }}&start={{ (today.replace(day=1)) }}&end={{ today }}">All punch records this month</a></p></div>
+<div class="panel"><h3>This month - daily attendance</h3><div class="table-wrap" style="max-height:420px"><table><tr><th>Date</th><th>Status</th><th>In</th><th>Out</th><th class="num">Late</th><th class="num">OT h</th></tr>
+{% for r in month_rows|reverse %}<tr><td>{{ r.work_date.strftime('%a %d/%m') }}</td><td><span class="tag {{ r.status }}">{{ r.status }}</span></td>
+<td>{{ r.in_time.strftime('%H:%M') if r.in_time }}</td><td>{{ r.out_time.strftime('%H:%M') if r.out_time }}</td><td class="num">{{ r.late_minutes or '' }}</td>
+<td class="num">{{ '%.1f'|format((r.ot_minutes + r.extra_ot_minutes)/60) if r.ot_minutes or r.extra_ot_minutes }}</td></tr>
+{% else %}<tr><td colspan="6" class="hint">Not processed yet this month.</td></tr>{% endfor %}</table></div></div>
+</div>
+<div class="grid2">
+<div class="panel"><h3>Leave</h3><div class="table-wrap"><table><tr><th>Type</th><th>From</th><th>To</th><th>Paid</th><th>Note</th></tr>
+{% for lv in leaves %}<tr><td>{{ lv.leave_type }}</td><td>{{ lv.start_date }}</td><td>{{ lv.end_date }}</td><td>{{ 'yes' if lv.paid else 'no' }}</td><td>{{ lv.note or '' }}</td></tr>
+{% else %}<tr><td colspan="5" class="hint">No leave recorded.</td></tr>{% endfor %}</table></div></div>
+{% if show_salary %}<div class="panel"><h3>Payslips</h3><div class="table-wrap"><table><tr><th>Month</th><th>Status</th><th class="num">Present</th><th class="num">OT h</th><th class="num">Net pay</th><th></th></tr>
+{% for l, run in pays %}<tr><td>{{ month_name[run.month] }} {{ run.year }}</td><td><span class="tag {{ run.status }}">{{ run.status }}</span></td><td class="num">{{ l.present_days }}</td><td class="num">{{ l.ot_hours }}</td>
+<td class="num"><b>{{ '{:,.0f}'.format(l.net_pay) }}</b></td><td><a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ e.employee_code }}" target="_blank">payslip</a></td></tr>
+{% else %}<tr><td colspan="6" class="hint">No payroll yet.</td></tr>{% endfor %}</table></div></div>{% endif %}
+</div>
+{% endblock %}

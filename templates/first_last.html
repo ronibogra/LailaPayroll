@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}First & last punch{% endblock %}{% block heading %}First &amp; last punch ({{ '{:,}'.format(total) }} rows){% endblock %}
+{% block content %}
+<div class="panel"><form class="inline" method="get">
+<div><label>From</label><input type="date" name="start" value="{{ start }}"></div>
+<div><label>To</label><input type="date" name="end" value="{{ end }}"></div>
+{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All (incl. unknown IDs)</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == company }}>{{ c.code }}</option>{% endfor %}</select></div>{% endif %}
+<div><label>ID, code or name</label><input name="q" value="{{ q }}" style="width:150px"></div>
+<button class="sec">Show</button><a class="btn" href="/punches/first-last.xlsx?{{ qs }}">Download Excel</a></form>
+<p class="hint" style="margin-top:8px">One row per employee per calendar day: first punch, last punch, number of punches and hours between them. For shift rules, late and overtime (incl. night shifts) see Daily attendance.</p></div>
+{% if total > rows|length %}<div class="alert info">Showing the first {{ rows|length }} of {{ total }} rows - download Excel for all.</div>{% endif %}
+<div class="table-wrap"><table><tr><th>Date</th><th>Card / ID</th><th>Employee</th><th>Company</th><th>Department</th><th>First punch</th><th>Last punch</th><th class="num">Punches</th><th class="num">Hours</th></tr>
+{% for r in rows %}{% set e = r.employee %}<tr><td>{{ r.date.strftime('%a %d/%m/%Y') }}</td><td>{{ r.card_no }}</td>
+<td>{% if e %}<a href="/employees/{{ e.id }}">{{ e.full_name }}</a> <span class="hint">{{ e.employee_code }}</span>{% else %}<span class="tag DRAFT">not an employee</span>{% endif %}</td>
+<td>{{ e.company.code if e and e.company }}</td><td>{{ e.department.name if e and e.department }}</td>
+<td><b>{{ r.first.strftime('%H:%M') }}</b></td><td><b>{{ r.last.strftime('%H:%M') if r.count > 1 else '—' }}</b></td>
+<td class="num">{{ r.count }}</td><td class="num">{{ '%.2f'|format(r.hours) if r.hours else '' }}</td></tr>
+{% else %}<tr><td colspan="9" class="hint">No punches for these filters.</td></tr>{% endfor %}</table></div>
+{% endblock %}
