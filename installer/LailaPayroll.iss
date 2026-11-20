@@ -50,7 +50,7 @@ Source: "..\static\img\lg-logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{commondesktop}\LAILA Payroll - Check"; Filename: "{app}\check.bat"; IconFilename: "{app}\lg-logo.ico"
 
 [INI]
-Filename: "{commondesktop}\LAILA GROUP Payroll.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:{#HttpPort}/"
+Filename: "{commondesktop}\LAILA GROUP Payroll.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://127.0.0.1:{#HttpPort}/"
 Filename: "{commondesktop}\LAILA GROUP Payroll.url"; Section: "InternetShortcut"; Key: "IconFile"; String: "{app}\lg-logo.ico"
 Filename: "{commondesktop}\LAILA GROUP Payroll.url"; Section: "InternetShortcut"; Key: "IconIndex"; String: "0"
 
@@ -60,7 +60,7 @@ Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Lail
 Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""LailaPayroll"" dir=in action=allow protocol=TCP localport={#HttpPort},{#HttpsPort} profile=any"; Flags: runhidden waituntilterminated
 ; start with Windows as SYSTEM, no time limit, restart if it stops - then start now and wait until it answers
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-task.ps1"" -App ""{app}"" -Port {#HttpPort}"; StatusMsg: "Starting LAILA GROUP Payroll..."; Flags: runhidden waituntilterminated
-Filename: "http://localhost:{#HttpPort}/setup"; Flags: shellexec runasoriginaluser nowait skipifsilent
+Filename: "http://127.0.0.1:{#HttpPort}/setup"; Flags: shellexec runasoriginaluser nowait skipifsilent
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -Command ""Stop-ScheduledTask -TaskName 'LailaPayroll' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName 'LailaPayroll' -Confirm:$false -ErrorAction SilentlyContinue"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveTask"

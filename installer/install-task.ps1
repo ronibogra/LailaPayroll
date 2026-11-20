@@ -15,7 +15,7 @@ try {
     Start-ScheduledTask -TaskName 'LailaPayroll'
     for ($i = 0; $i -lt 90; $i++) {
         try {
-            Invoke-WebRequest "http://localhost:$Port/health" -UseBasicParsing -TimeoutSec 2 | Out-Null
+            Invoke-WebRequest "http://127.0.0.1:$Port/health" -UseBasicParsing -TimeoutSec 5 | Out-Null
             Write-Output "Server answered after $i s"
             break
         } catch { Start-Sleep -Seconds 1 }

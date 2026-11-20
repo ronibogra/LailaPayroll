@@ -304,8 +304,12 @@ async def employees_import(file: UploadFile = File(...), user=Depends(page_user)
 
 
 @app.get("/employees/new", response_class=HTMLResponse)
+def employee_new(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    return employee_form(request, None, user, db)
+
+
 @app.get("/employees/{emp_id}", response_class=HTMLResponse)
-def employee_form(request: Request, emp_id: int | None = None, user=Depends(page_user),
+def employee_form(request: Request, emp_id: int | None, user=Depends(page_user),
                   db: Session = Depends(get_db)):
     need(user, "HR")
     emp = db.get(Employee, emp_id) if emp_id else None

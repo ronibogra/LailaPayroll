@@ -15,7 +15,7 @@ import urllib3
 from openpyxl import Workbook, load_workbook
 
 urllib3.disable_warnings()
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8585"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8585"
 HTTPS = BASE.replace("http://", "https://").replace(":8585", ":8443")
 STEP = [0]
 
