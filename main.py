@@ -1463,10 +1463,11 @@ def backup_restore(request: Request, name: str = Form(...), confirm: str = Form(
     except Exception as exc:  # noqa: BLE001
         safety = None
         log_error("BACKUP", f"safety backup before restore failed: {exc}", username=user["username"])
+    page = render(request, "restarting.html", None, backup_name=name, safety=safety.name if safety else "")
     backups.schedule_restore(path)
     audit(db, user, "BACKUP_RESTORE", f"{name} (safety copy: {safety.name if safety else 'none'})")
     backups.restart_program()
-    return render(request, "restarting.html", None, name=name, safety=safety.name if safety else "")
+    return page
 
 
 @app.post("/backup/delete")
