@@ -21,13 +21,13 @@
 {% if not processed and total.active and 'attendance.process' in user.perms %}<div class="alert info">ℹ Attendance for this day is not processed yet, so the counts are zero. <a href="/attendance?day={{ day }}">Daily attendance → Process month</a></div>{% endif %}
 
 <div class="kpis">
-  <a class="kpi k-blue" href="/employees"><span class="k-ico">👥</span><small>Active staff</small><b>{{ total.active }}</b></a>
-  <a class="kpi k-green" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=PRESENT&att_status=LATE&att_status=MISSING_OUT&att_status=OFFDAY_WORK"><span class="k-ico">✔</span><small>Present</small><b>{{ total.present }}</b></a>
-  <a class="kpi k-amber" href="/reports/attendance?start={{ day }}&end={{ day }}&late_only=1"><span class="k-ico">⏰</span><small>Late</small><b>{{ total.late }}</b></a>
-  <a class="kpi k-red" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=ABSENT"><span class="k-ico">✖</span><small>Absent</small><b>{{ total.absent }}</b></a>
-  <a class="kpi k-violet" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=LEAVE_PAID&att_status=LEAVE_UNPAID"><span class="k-ico">🌴</span><small>On leave</small><b>{{ total.leave }}</b></a>
-  <a class="kpi k-teal" href="/punches?start={{ day }}&end={{ day }}"><span class="k-ico">🕘</span><small>Punches</small><b>{{ total.punches }}</b></a>
-  <a class="kpi k-slate" href="/devices"><span class="k-ico">📟</span><small>Machines online</small><b>{{ online }}<span class="of"> / {{ devices|length }}</span></b></a>
+  {% if 'employees.view' in user.perms %}<a class="kpi k-blue" href="/employees"><span class="k-ico">👥</span><small>Active staff</small><b>{{ total.active }}</b></a>{% else %}<div class="kpi k-blue"><span class="k-ico">👥</span><small>Active staff</small><b>{{ total.active }}</b></div>{% endif %}
+  {% if 'attendance.view' in user.perms %}<a class="kpi k-green" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=PRESENT&att_status=LATE&att_status=MISSING_OUT&att_status=OFFDAY_WORK"><span class="k-ico">✔</span><small>Present</small><b>{{ total.present }}</b></a>{% else %}<div class="kpi k-green"><span class="k-ico">✔</span><small>Present</small><b>{{ total.present }}</b></div>{% endif %}
+  {% if 'attendance.view' in user.perms %}<a class="kpi k-amber" href="/reports/attendance?start={{ day }}&end={{ day }}&late_only=1"><span class="k-ico">⏰</span><small>Late</small><b>{{ total.late }}</b></a>{% else %}<div class="kpi k-amber"><span class="k-ico">⏰</span><small>Late</small><b>{{ total.late }}</b></div>{% endif %}
+  {% if 'attendance.view' in user.perms %}<a class="kpi k-red" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=ABSENT"><span class="k-ico">✖</span><small>Absent</small><b>{{ total.absent }}</b></a>{% else %}<div class="kpi k-red"><span class="k-ico">✖</span><small>Absent</small><b>{{ total.absent }}</b></div>{% endif %}
+  {% if 'attendance.view' in user.perms %}<a class="kpi k-violet" href="/reports/attendance?start={{ day }}&end={{ day }}&att_status=LEAVE_PAID&att_status=LEAVE_UNPAID"><span class="k-ico">🌴</span><small>On leave</small><b>{{ total.leave }}</b></a>{% else %}<div class="kpi k-violet"><span class="k-ico">🌴</span><small>On leave</small><b>{{ total.leave }}</b></div>{% endif %}
+  {% if 'punches.view' in user.perms %}<a class="kpi k-teal" href="/punches?start={{ day }}&end={{ day }}"><span class="k-ico">🕘</span><small>Punches</small><b>{{ total.punches }}</b></a>{% else %}<div class="kpi k-teal"><span class="k-ico">🕘</span><small>Punches</small><b>{{ total.punches }}</b></div>{% endif %}
+  {% if 'machines.manage' in user.perms %}<a class="kpi k-slate" href="/devices"><span class="k-ico">📟</span><small>Machines online</small><b>{{ online }}<span class="of"> / {{ devices|length }}</span></b></a>{% else %}<div class="kpi k-slate"><span class="k-ico">📟</span><small>Machines online</small><b>{{ online }}<span class="of"> / {{ devices|length }}</span></b></div>{% endif %}
 </div>
 
 <div class="dash-grid">
@@ -66,7 +66,7 @@
     {% else %}<p class="empty">No payroll processed in the last 6 months.</p>{% endif %}
   </div>{% endif %}
   <div class="card-chart">
-    <div class="cc-head"><h3>Latest punches</h3><a class="hint" href="/punches">all →</a></div>
+    <div class="cc-head"><h3>Latest punches</h3>{% if 'punches.view' in user.perms %}<a class="hint" href="/punches">all →</a>{% endif %}</div>
     <ul class="feed">{% for p in recent %}{% set e = recent_emps.get(p.card_no) %}
       <li><span class="av">{% if e and e.photo %}<img src="/employees/{{ e.id }}/photo" alt="">{% else %}{{ (e.full_name if e else p.card_no)[:1] }}{% endif %}</span>
       <div><b>{{ e.full_name if e else 'ID ' ~ p.card_no }}</b><small>{{ e.company.code if e and e.company }} · {{ p.device or p.source }}{{ ' · ' ~ p.direction if p.direction }}</small></div>
@@ -74,9 +74,9 @@
     {% else %}<li class="empty">No punches yet.</li>{% endfor %}</ul>
   </div>
   <div class="card-chart">
-    <div class="cc-head"><h3>Late {{ 'today' if day == today else day.strftime('%d %b') }}</h3><a class="hint" href="/reports/attendance?start={{ day }}&end={{ day }}&late_only=1">all →</a></div>
+    <div class="cc-head"><h3>Late {{ 'today' if day == today else day.strftime('%d %b') }}</h3>{% if 'attendance.view' in user.perms %}<a class="hint" href="/reports/attendance?start={{ day }}&end={{ day }}&late_only=1">all →</a>{% endif %}</div>
     <ul class="feed">{% for r in late_rows %}
-      <li><span class="av late">{{ r.employee.full_name[:1] }}</span><div><b><a href="/employees/{{ r.employee.id }}">{{ r.employee.full_name }}</a></b><small>{{ r.employee.company.code if r.employee.company }} · {{ r.employee.department.name if r.employee.department }}</small></div>
+      <li><span class="av late">{{ r.employee.full_name[:1] }}</span><div><b>{% if 'employees.view' in user.perms %}<a href="/employees/{{ r.employee.id }}">{{ r.employee.full_name }}</a>{% else %}{{ r.employee.full_name }}{% endif %}</b><small>{{ r.employee.company.code if r.employee.company }} · {{ r.employee.department.name if r.employee.department }}</small></div>
       <time>{{ r.late_minutes }} min<small>in {{ r.in_time.strftime('%H:%M') if r.in_time }}</small></time></li>
     {% else %}<li class="empty">Nobody late. 🎉</li>{% endfor %}</ul>
   </div>
