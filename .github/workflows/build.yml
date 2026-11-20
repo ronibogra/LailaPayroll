@@ -57,6 +57,14 @@ jobs:
       - name: End-to-end test of the installed program
         run: python tests/e2e_installed.py http://127.0.0.1:8585
 
+      - name: Update (keep data) must keep everything
+        run: |
+          $p = Start-Process installer\Output\LailaPayroll_Setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/KEEPDATA=1','/LOG=update-log.txt' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "update failed" }
+          python tests/e2e_update_check.py http://127.0.0.1:8585
+          if (-not (Get-ChildItem "$env:ProgramData\LailaPayroll\backups" -Directory -Filter 'before_update_*')) { throw "no safety copy made" }
+          "update kept the data - OK"
+
       - name: Re-install must wipe everything (fresh setup again)
         run: |
           $p = Start-Process installer\Output\LailaPayroll_Setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG=reinstall-log.txt' -Wait -PassThru

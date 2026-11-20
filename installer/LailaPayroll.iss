@@ -80,20 +80,28 @@ end;
 function InitializeSetup(): Boolean;
 var
   Uninst, DataDir, OldApp: String;
+  Answer: Integer;
+  KeepData: Boolean;
+  Backup: String;
 begin
   Result := True;
   DataDir := ExpandConstant('{commonappdata}\LailaPayroll');
   OldApp := ExpandConstant('{commonpf64}\LailaPayroll');
 
+  KeepData := WizardSilent and (ExpandConstant('{param:KEEPDATA|0}') = '1');   { silent update: /KEEPDATA=1 }
   if (DirExists(DataDir) or DirExists(OldApp)) and not WizardSilent then
-    if MsgBox('An earlier LAILA GROUP Payroll installation was found on this PC.' + #13#10 + #13#10 +
-              'For a completely fresh setup the old program AND ALL ITS DATA (employees, punches, payroll, settings) ' +
-              'will be permanently deleted.' + #13#10 + #13#10 + 'Continue?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDNO then
+  begin
+    Answer := MsgBox('LAILA GROUP Payroll is already installed on this PC.' + #13#10 + #13#10 +
+              'YES  = FRESH START: delete the old program AND ALL DATA (employees, punches, payroll, settings).' + #13#10 + #13#10 +
+              'NO   = UPDATE: install the new version and KEEP all data.' + #13#10 + #13#10 +
+              'CANCEL = do nothing.', mbConfirmation, MB_YESNOCANCEL or MB_DEFBUTTON2);
+    if Answer = IDCANCEL then
     begin
       Result := False;
       Exit;
     end;
-
+    KeepData := Answer = IDNO;
+  end;
   { stop the running copy and its start-up task }
   Run('powershell.exe', '-NoProfile -Command "Stop-ScheduledTask -TaskName ''LailaPayroll'' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ''LailaPayroll'' -Confirm:$false -ErrorAction SilentlyContinue"');
   Run('taskkill.exe', '/F /IM LailaPayroll.exe');
@@ -103,11 +111,22 @@ begin
      RegQueryStringValue(HKLM32, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{{#AppGuid}}_is1', 'UninstallString', Uninst) then
     Run(RemoveQuotes(Uninst), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART');
 
+  { update: safety copy of the database (program is stopped now, so the copy is complete) }
+  if KeepData and FileExists(DataDir + '\laila_payroll.db') then
+  begin
+    Backup := DataDir + '\backups\before_update_' + GetDateTimeString('yyyymmdd_hhnnss', #0, #0);
+    ForceDirectories(Backup);
+    Run('cmd.exe', '/c copy /y "' + DataDir + '\laila_payroll.db*" "' + Backup + '\"');
+  end;
+
   { wipe leftovers: old program folder and ALL old data }
   Sleep(1500);
   if DirExists(OldApp) then DelTree(OldApp, True, True, True);
-  if DirExists(DataDir) then DelTree(DataDir, True, True, True);
-  if DirExists(DataDir) then
+  if not KeepData then
+  begin
+    if DirExists(DataDir) then DelTree(DataDir, True, True, True);
+  end;
+  if (not KeepData) and DirExists(DataDir) then
   begin
     MsgBox('Could not delete ' + DataDir + '. Close any program using it and run the installer again.', mbError, MB_OK);
     Result := False;
