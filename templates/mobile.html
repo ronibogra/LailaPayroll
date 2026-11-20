@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#00a651"><title>Mobile Attendance · {{ settings.group_name }}</title>
-<link rel="icon" href="/static/img/favicon.png"><link rel="apple-touch-icon" href="/static/img/lg-logo.png">
+<meta name="theme-color" content="#00a651"><title>Mobile Attendance · {{ brand.name }}</title>
+<link rel="icon" href="/brand/logo.png?v={{ brand.logo_version }}"><link rel="apple-touch-icon" href="/brand/logo.png?v={{ brand.logo_version }}">
 <link rel="stylesheet" href="/static/css/style.css"></head>
 <body><div class="m-wrap">
-<div class="m-head"><img src="/static/img/lg-logo.png" alt="LG"><div><b>{{ settings.group_name }}</b><div class="hint" style="margin:0">Mobile attendance</div></div></div>
+<div class="m-head"><img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><div><b>{{ brand.name }}</b><div class="hint" style="margin:0">Mobile attendance</div></div></div>
 {% if err %}<div class="alert err">{{ err }}</div>{% endif %}
 {% if not emp %}
   <div class="panel"><form method="post" action="/m/login">

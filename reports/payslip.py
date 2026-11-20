@@ -1,15 +1,13 @@
 """Payslips as PDF: two payslips per A4 page (cut along the dashed line)."""
 import io
 from calendar import month_name
-from pathlib import Path
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
-from config import settings
+from services.branding import BRAND, logo_path
 
-LOGO = Path(__file__).resolve().parent.parent / "static" / "img" / "lg-logo.png"
 RED = (0.91, 0.20, 0.18)
 
 
@@ -21,8 +19,7 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     W, _ = A4
     x0, x1 = 15 * mm, W - 15 * mm
     y = top - 12 * mm
-    if LOGO.exists():
-        c.drawImage(str(LOGO), x0, y - 8 * mm, 14 * mm, 14 * mm, mask="auto")
+    c.drawImage(str(logo_path()), x0, y - 8 * mm, 14 * mm, 14 * mm, mask="auto", preserveAspectRatio=True)
     c.setFillColorRGB(*RED)
     c.setFont("Helvetica-Bold", 15)
     c.drawString(x0 + 17 * mm, y, run.company.name)
@@ -32,7 +29,7 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
                  + ("" if run.status == "FINAL" else "   (DRAFT)"))
     c.setFont("Helvetica", 8)
     c.setFillColorRGB(0.4, 0.4, 0.4)
-    c.drawRightString(x1, y, f"A {settings.group_name} concern")
+    c.drawRightString(x1, y, f"A {BRAND['name']} concern")
     if run.company.address:
         c.drawRightString(x1, y - 4 * mm, run.company.address[:70])
     c.setFillColorRGB(0, 0, 0)
@@ -83,6 +80,7 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     c.drawString(x0, y - 15 * mm, "Employee signature: ____________________")
     c.drawRightString(x1, y - 15 * mm, "Authorised signature: ____________________")
     c.setFillColorRGB(0.45, 0.45, 0.45)
+    from config import settings
     c.drawString(x0, y - 20 * mm, settings.developer_credit)
     c.setFillColorRGB(0, 0, 0)
 

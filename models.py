@@ -266,12 +266,23 @@ class PayrollLine(Base):
     run = relationship("PayrollRun", back_populates="lines")
 
 
+class Role(Base):
+    """A named set of permissions (see services/permissions.py). ADMIN always has every permission."""
+    __tablename__ = "roles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(30), unique=True)
+    label: Mapped[str] = mapped_column(String(120), default="")
+    permissions: Mapped[str] = mapped_column(Text, default="")
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(300))
-    role: Mapped[str] = mapped_column(String(20), default="VIEWER")  # ADMIN / HR / ACCOUNTS / VIEWER
+    role: Mapped[str] = mapped_column(String(30), default="VIEWER")  # name of a Role
+    full_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True)  # None = all companies
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 

@@ -80,10 +80,17 @@ def main():
        f"expected setup page, got {r.url}")
 
     step("finish setup (admin + 2 companies)")
-    post(s, "/setup", {"username": "admin", "password": "Admin@12345", "password2": "Admin@12345",
+    from PIL import Image
+    logo = io.BytesIO()
+    Image.new("RGBA", (300, 300), (0, 160, 80, 255)).save(logo, "PNG")
+    post(s, "/setup", {"ho_name": "LAILA GROUP", "ho_address": "Head Office, Dhaka", "username": "admin",
+                       "password": "Admin@12345", "password2": "Admin@12345",
                        "companies": "HO, LAILA GROUP - Head Office\nLTL, Laila Textiles Ltd", "wd4": "1",
                        "geofence_lat": "23.80", "geofence_lon": "90.40", "geofence_radius_m": "200"},
-         must="Machines (")
+         files={"logo": ("logo.png", logo.getvalue(), "image/png")}, must="Machines (")
+    r = requests.get(BASE + "/brand/logo.png", timeout=30)
+    ok(r.ok and r.headers["content-type"] == "image/png" and Image.open(io.BytesIO(r.content)).getpixel((5, 5))[1] == 160,
+       "Head Office logo not served")
     page(s, "/setup")  # now redirects to login/dashboard, must not crash
 
     step("log out / log in")
@@ -93,7 +100,8 @@ def main():
 
     step("every page opens")
     for p in ("/", "/attendance", "/punches", "/punches/first-last", "/leaves", "/shifts", "/devices",
-              "/devices?new=1", "/employees", "/payroll", "/settings", "/users", "/audit", "/errors", "/employees/new"):
+              "/devices?new=1", "/employees", "/payroll", "/settings", "/users", "/users?role=HR", "/audit", "/errors",
+              "/employees/new", "/backup"):
         page(s, p, must="LAILA GROUP")
 
     step("ZKTeco machine handshake -> appears as pending")
@@ -296,8 +304,112 @@ def main():
                verify=False, timeout=30)
     ok(not r.json().get("ok"), "punch far away must be refused")
 
-    step("backup now")
-    post(s, "/settings/backup", must="Backup saved")
+    step("Head Office name + new logo from Settings")
+    logo2 = io.BytesIO()
+    Image.new("RGB", (400, 200), (232, 51, 47)).save(logo2, "JPEG")
+    post(s, "/settings/headoffice", {"ho_name": "LAILA GROUP HO", "ho_address": "Dhaka"},
+         files={"logo": ("new.jpg", logo2.getvalue(), "image/jpeg")}, must="Head Office saved")
+    page(s, "/employees", must="LAILA GROUP HO")
+    r = requests.get(BASE + "/brand/logo.png", timeout=30)
+    ok(Image.open(io.BytesIO(r.content)).size == (400, 200), "new logo not used")
+
+    step("every report exports to Excel and PDF (with the user's columns)")
+    exports = {"employees": "", "punches": f"start={date(y, m, 1)}&end={prev_last}",
+               "first_last": f"start={date(y, m, 1)}&end={prev_last}", "attendance": f"day={date(y, m, 2)}",
+               "leaves": "", "holidays": "", "shifts": "", "machines": "", "payroll": f"company=1&month={month}",
+               "audit": "", "errors": ""}
+    for rid, q in exports.items():
+        r = page(s, f"/export/{rid}.xlsx?{q}")
+        wb = load_workbook(io.BytesIO(r.content))
+        ok(wb.active["B1"].value == "LAILA GROUP HO", f"{rid}.xlsx title")
+        r = page(s, f"/export/{rid}.pdf?{q}")
+        ok(r.content[:4] == b"%PDF", f"{rid}.pdf not a PDF")
+    post(s, "/report-columns/employees", {"col": ["code", "name", "phone", "blood"], "back": "/employees"},
+         must="Blood group")
+    r = page(s, "/employees")
+    ok("<th >Designation" not in r.text and "Designation</th>" not in r.text, "column choice not applied")
+    r = page(s, "/export/employees.xlsx")
+    ws = load_workbook(io.BytesIO(r.content)).active
+    ok([ws.cell(5, i).value for i in range(1, 5)] == ["Employee code", "Name", "Mobile", "Blood group"],
+       f"export columns: {[ws.cell(5, i).value for i in range(1, 6)]}")
+    post(s, "/report-columns/employees", {"reset": "1", "back": "/employees"}, must="Designation")
+
+    step("imports: leave, holidays, shifts, machines, companies (+ a bad file is refused completely)")
+    for kind in ("leaves", "holidays", "shifts", "machines", "companies", "punches"):
+        r = page(s, f"/templates/{kind}.xlsx")
+        load_workbook(io.BytesIO(r.content))
+    post(s, "/import/holidays", files={"file": ("h.xlsx", xlsx([["date", "name"], [f"{y + 1}-02-21", "Language Day"],
+                                                                 [f"{y + 1}-03-26", "Independence Day"]]))}, must="2 added")
+    post(s, "/import/leaves", files={"file": ("l.xlsx", xlsx([["employee_code", "from", "to", "type"],
+                                                               ["12127", f"{date(y, m, 20)}", f"{date(y, m, 21)}", "SICK"]]))},
+         must="1 added")
+    post(s, "/import/leaves", files={"file": ("bad.xlsx", xlsx([["employee_code", "from", "to", "type"],
+                                                                 ["12127", f"{date(y, m, 22)}", f"{date(y, m, 22)}", "SICK"],
+                                                                 ["NOPE", f"{date(y, m, 22)}", "", "SICK"]]))},
+         must="Nothing imported", must_not=None)
+    post(s, "/import/shifts", files={"file": ("s.csv", b"code,name,start,end\nEVE,Evening 14-22,14:00,22:00\n")},
+         must="1 added")
+    post(s, "/import/machines", files={"file": ("m.xlsx", xlsx([["type", "ip_address", "port", "machine_no", "name", "in_out", "active"],
+                                                                 ["ZKTECO", "10.255.255.17", 4370, 17, "Gate 17", "IN", "no"]]))},
+         must="1 added")
+    post(s, "/import/companies", files={"file": ("c.xlsx", xlsx([["code", "name"], ["LAUNDRY", "Laundry Factory"]]))},
+         must="1 added")
+    page(s, "/settings", must="Laundry Factory")
+
+    step("bulk photo import from a ZIP (matched by employee code / card no.)")
+    import zipfile
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w") as z:
+        for nm in ("HO-0001.jpg", "2002.png", "nobody.jpg"):
+            b = io.BytesIO()
+            Image.new("RGB", (900, 1200), (10, 120, 200)).save(b, "PNG" if nm.endswith("png") else "JPEG")
+            z.writestr(f"photos/{nm}", b.getvalue())
+    r = post(s, "/employees/photos", files=[("files", ("photos.zip", zbuf.getvalue(), "application/zip"))],
+             must="2 photos saved", must_not=None)
+    ok("nobody.jpg" in r.text, "unmatched photo should be reported")
+
+    step("user roles: custom role with limited permissions")
+    post(s, "/roles/save", {"name": "punch_clerk", "label": "Punch clerk", "perm_dashboard.view": "1",
+                            "perm_punches.view": "1", "perm_punches.edit": "1", "perm_reports.export": "1"},
+         must="Role PUNCH_CLERK saved")
+    post(s, "/users/save", {"username": "clerk1", "full_name": "Clerk One", "role": "PUNCH_CLERK",
+                            "password": "Clerk@12345", "active": "1"}, must="User clerk1 saved")
+    c = requests.Session()
+    r = post(c, "/login", {"username": "clerk1", "password": "Clerk@12345"}, must="Dashboard")
+    ok("Punch records" in r.text and 'href="/payroll"' not in r.text and 'href="/employees"' not in r.text,
+       "menu must follow the role")
+    page(c, f"/punches?start={date(y, m, 2)}&end={date(y, m, 2)}", must="12127")
+    page(c, f"/export/punches.pdf?start={date(y, m, 2)}&end={date(y, m, 2)}")
+    for forbidden in ("/payroll", "/employees", "/settings/headoffice", "/users", "/backup"):
+        code = c.get(BASE + forbidden, timeout=30, headers={"accept": "text/html"}).status_code
+        ok(code in (403, 405), f"{forbidden} must be forbidden for the clerk, got {code}")
+    post(s, "/roles/PUNCH_CLERK/delete", must="Some users still have this role", must_not=None)
+
+    step("backup: make, download, upload, change data, restore, data is back")
+    r = post(s, "/backup/create", must="Backup saved")
+    name = re.search(r"(LailaPayroll_backup_[0-9_]+_manual\.zip)", r.text).group(1)
+    zdata = page(s, f"/backup/download/{name}").content
+    with zipfile.ZipFile(io.BytesIO(zdata)) as z:
+        ok({"manifest.json", "laila_payroll.db", "secret.key"} <= set(z.namelist()), f"backup content: {z.namelist()}")
+        ok(any(n.startswith("photos/") for n in z.namelist()) and any(n.startswith("branding/") for n in z.namelist()),
+           "photos/logo missing in backup")
+    post(s, "/backup/upload", files={"file": ("not-a-backup.zip", b"PK\x05\x06" + b"\0" * 18)},
+         must="not a LAILA GROUP Payroll backup", must_not=None)
+    r = post(s, "/backup/upload", files={"file": ("mybackup.zip", zdata)}, must="uploaded and checked")
+    uploaded = re.findall(r"(LailaPayroll_backup_[0-9_]+_uploaded\.zip)", r.text)[0]
+    post(s, "/settings/holidays", {"day": f"{y + 1}-01-01", "name": "MADE AFTER BACKUP"}, must="Holiday added")
+    page(s, "/settings", must="MADE AFTER BACKUP")
+    post(s, "/backup/restore", {"name": uploaded, "confirm": "nope"}, must="Type RESTORE", must_not=None)
+    r = s.post(BASE + "/backup/restore", data={"name": uploaded, "confirm": "RESTORE"}, timeout=60)
+    ok("Restoring backup" in r.text, f"restore page: {r.text[:300]}")
+    time.sleep(8)
+    wait_up()
+    s = requests.Session()
+    post(s, "/login", {"username": "admin", "password": "Admin@12345"}, must="Dashboard")
+    r = page(s, "/settings")
+    ok("MADE AFTER BACKUP" not in r.text and "Language Day" in r.text, "restore did not bring the backup data back")
+    page(s, "/backup", must="before_restore")
+    page(s, "/employees?q=12127", must="Abdul Karim")
     print("\nALL CHECKS PASSED", flush=True)
 
 

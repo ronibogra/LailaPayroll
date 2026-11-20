@@ -1,0 +1,37 @@
+{# Shared report building blocks: column picker + Excel/PDF buttons, and the table. #}
+{% macro report_bar(r, extra='') %}
+<div class="report-bar">
+  <details class="colpick"><summary class="btn sec">Columns ({{ r.cols|length }})</summary>
+    <form method="post" action="/report-columns/{{ r.rep.id }}" class="colpick-box">
+      <input type="hidden" name="back" value="{{ request.url.path }}{{ '?' ~ request.url.query if request.url.query }}">
+      <input type="hidden" name="order" value="{{ r.all_cols|map(attribute='key')|join(',') }}">
+      <div class="colpick-list">{% set ck = r.cols|map(attribute='key')|list %}
+      {% for c in r.all_cols %}<label><input type="checkbox" name="col" value="{{ c.key }}" {{ 'checked' if c.key in ck }}> {{ c.label }}</label>{% endfor %}</div>
+      <button>Apply</button> <button class="sec" name="reset" value="1">Default columns</button>
+    </form></details>
+  {% if 'reports.export' in user.perms %}
+  <a class="btn sec" href="/export/{{ r.rep.id }}.xlsx?{{ request.url.query }}">⬇ Excel</a>
+  <a class="btn sec" href="/export/{{ r.rep.id }}.pdf?{{ request.url.query }}" target="_blank">⬇ PDF</a>{% endif %}
+  {{ extra|safe }}
+  <span class="hint">{{ r.subtitle }}</span>
+</div>
+{% endmacro %}
+
+{% macro report_table(r, actions=none, empty='Nothing to show.', tag_cols=('status','source','type')) %}
+<div class="table-wrap"><table><tr>{% for c in r.cols %}<th class="{{ 'num' if c.kind in ('num','money','hours') }}">{{ c.label }}</th>{% endfor %}{% if caller %}<th></th>{% endif %}</tr>
+{% for row in r.rows %}<tr>{% for c in r.cols %}{% set t = c.text(row) %}
+<td class="{{ 'num' if c.kind in ('num','money','hours') }}{{ ' wrap' if c.key in ('detail','message','last_result','remarks','note','present_address','permanent_address') }}">
+{%- if c.link and t and c.link(row) %}<a href="{{ c.link(row) }}">{{ t }}</a>
+{%- elif c.key in tag_cols and t %}<span class="tag {{ t }}">{{ t }}</span>
+{%- elif t == '(not an employee)' %}<span class="tag DRAFT">not an employee</span>
+{%- else %}{{ t }}{% endif %}</td>{% endfor %}
+{% if caller %}<td style="white-space:nowrap">{{ caller(row) }}</td>{% endif %}</tr>
+{% else %}<tr><td colspan="{{ r.cols|length + 1 }}" class="hint">{{ empty }}</td></tr>{% endfor %}
+</table></div>
+{% endmacro %}
+
+{% macro import_box(kind, what) %}
+<form class="inline import-box" method="post" action="/import/{{ kind }}" enctype="multipart/form-data">
+<div><label>Import {{ what }} from Excel / CSV</label><input type="file" name="file" accept=".xlsx,.csv" required></div>
+<button class="sec">Import</button><a class="btn sec" href="/templates/{{ kind }}.xlsx">Template</a></form>
+{% endmacro %}

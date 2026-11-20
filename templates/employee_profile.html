@@ -9,7 +9,7 @@
 <div>Joined</div><div>{{ e.joined_on.strftime('%d %b %Y') if e.joined_on else '-' }}{{ ' · left ' ~ e.left_on.strftime('%d %b %Y') if e.left_on }}</div>
 <div>Shift</div><div>{{ e.shift.code ~ ' (' ~ e.shift.start.strftime('%H:%M') ~ '-' ~ e.shift.end.strftime('%H:%M') ~ ')' if e.shift else 'GENERAL' }}</div>
 <div>Mobile</div><div>{{ e.phone or '-' }}</div></div></div>
-<div>{% if user.role in ('ADMIN','HR') %}<a class="btn" href="/employees/{{ e.id }}/edit">Edit</a>{% endif %} <a class="btn sec" href="/employees">Back</a></div>
+<div>{% if 'employees.edit' in user.perms %}<a class="btn" href="/employees/{{ e.id }}/edit">Edit</a>{% endif %} <a class="btn sec" href="/employees">Back</a></div>
 </div></div>
 <div class="cards">
 <div class="metric g"><span>Present ({{ today.strftime('%B') }})</span><strong>{{ summary.present }}</strong></div>

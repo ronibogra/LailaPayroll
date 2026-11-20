@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% block title %}Payroll{% endblock %}
+{% extends "base.html" %}{% from "_report.html" import report_bar, report_table with context %}{% block title %}Payroll{% endblock %}
 {% block heading %}Payroll · {{ company.code if company }} · {{ month_name[m] }} {{ y }}{% if run %} <span class="tag {{ run.status }}">{{ run.status }}</span>{% endif %}{% endblock %}
 {% block content %}
 {% set mval = '%04d-%02d'|format(y, m) %}
@@ -29,15 +29,11 @@
 <p class="hint">Processed by {{ run.created_by }} at {{ run.created_at.strftime('%d/%m/%Y %H:%M') }}{% if run.finalized_at %} · Finalized by {{ run.finalized_by }} at {{ run.finalized_at.strftime('%d/%m/%Y %H:%M') }}{% endif %}
 {% if warn_count %} · <b style="color:#8f1714">{{ warn_count }} employees have warnings (see Remarks)</b>{% endif %}</p>
 <a class="btn" href="/payroll/run/{{ run.id }}/salary.xlsx">Salary sheet + bank/cash sheets (Excel)</a> <a class="btn sec" href="/payroll/run/{{ run.id }}/payslips.pdf" target="_blank">All payslips (PDF)</a>
-{% if run.status != 'FINAL' and user.role in ('ADMIN','ACCOUNTS') %}
+{% if run.status != 'FINAL' and 'payroll.finalize' in user.perms %}
 <form class="inline" method="post" action="/payroll/finalize" style="margin-top:14px" onsubmit="return confirm('Finalize and lock {{ company.code }} for this month? This cannot be undone here.')">
 <input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><div><label>Type FINAL to lock {{ company.code }} for this month</label><input name="confirm" required></div><button class="red">Finalize</button></form>{% endif %}
 </div>
-<div class="table-wrap"><table><tr><th>Code</th><th>Name</th><th>Dept</th><th class="num">Present</th><th class="num">Absent</th><th class="num">Late</th><th class="num">Gross</th><th class="num">Earned</th><th class="num">Absent ded.</th><th class="num">OT h</th><th class="num">OT Tk</th><th class="num">Bonus</th><th class="num">Deductions</th><th class="num">Net</th><th>Mode</th><th>Remarks</th><th></th></tr>
-{% for l in lines %}<tr><td>{{ l.employee_code }}</td><td>{{ l.full_name }}</td><td>{{ l.department }}</td><td class="num">{{ l.present_days }}</td><td class="num">{{ l.absent_days }}</td><td class="num">{{ l.late_days }}</td>
-<td class="num">{{ '{:,.0f}'.format(l.gross) }}</td><td class="num">{{ '{:,.2f}'.format(l.earned_gross) }}</td><td class="num">{{ '{:,.2f}'.format(l.absent_deduction) }}</td>
-<td class="num">{{ l.ot_hours }}</td><td class="num">{{ '{:,.2f}'.format(l.ot_amount) }}</td><td class="num">{{ '{:,.0f}'.format(l.attendance_bonus) }}</td><td class="num">{{ '{:,.2f}'.format(l.total_deductions) }}</td>
-<td class="num"><b>{{ '{:,.0f}'.format(l.net_pay) }}</b></td><td>{{ l.payment_mode }}</td><td class="hint">{{ l.warnings }}</td>
-<td><a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ l.employee_code }}" target="_blank">payslip</a></td></tr>{% endfor %}</table></div>
+{{ report_bar(r) }}
+{% call(l) report_table(r) %}<a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ l.employee_code }}" target="_blank">payslip</a>{% endcall %}
 {% endif %}{% endif %}
 {% endblock %}

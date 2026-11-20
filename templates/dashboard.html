@@ -8,9 +8,9 @@
   <div class="metric"><span>On leave</span><strong>{{ total.leave }}</strong></div>
   <div class="metric"><span>Punches received today</span><strong>{{ punches_today }}</strong></div>
 </div>
-{% if pending and user.role in ('ADMIN','HR') %}<div class="alert info">{{ pending }} punch machine(s) are waiting for approval. <a href="/devices">Open Punch machines</a></div>{% endif %}
-{% if not processed and total.active %}<div class="alert info">Today's attendance hasn't been processed yet, so the counts above are zero. Click <b>Process month</b> on the Daily attendance page.</div>{% endif %}
-{% if not total.active %}<div class="panel"><h3>Getting started</h3><ol class="hint" style="font-size:13px;line-height:1.9;margin:0;padding-left:18px">
+{% if pending and 'machines.manage' in user.perms %}<div class="alert info">{{ pending }} punch machine(s) are waiting for approval. <a href="/devices">Open Punch machines</a></div>{% endif %}
+{% if not processed and total.active and 'attendance.process' in user.perms %}<div class="alert info">Today's attendance hasn't been processed yet, so the counts above are zero. Click <b>Process month</b> on the Daily attendance page.</div>{% endif %}
+{% if not total.active and 'machines.manage' in user.perms %}<div class="panel"><h3>Getting started</h3><ol class="hint" style="font-size:13px;line-height:1.9;margin:0;padding-left:18px">
 <li><a href="/devices">Connect the punch machines</a> (ZKTeco: set the server address on the machine; Hikvision: add by IP).</li>
 <li><a href="/settings">Check companies, holidays and the pay policy.</a></li><li><a href="/shifts">Create the shifts.</a></li>
 <li><a href="/employees">Import employees from Excel</a> (Card no. = user ID on the machines).</li></ol></div>{% endif %}
@@ -21,9 +21,9 @@
 {% for d in devices %}<tr><td>{{ d.name }} <span class="hint">{{ d.brand }}</span></td><td>{% if not d.approved %}<span class="tag DRAFT">PENDING</span>{% elif d.enabled %}<span class="tag yes">ACTIVE</span>{% else %}<span class="tag">DISABLED</span>{% endif %}</td>
 <td>{{ d.last_seen.strftime('%d/%m %H:%M') if d.last_seen else 'never' }}</td></tr>{% else %}<tr><td colspan="3" class="hint">No machines connected yet.</td></tr>{% endfor %}</table></div></div>
 </div>
-<div class="panel"><h3>Month-end steps</h3>
+{% if 'payroll.view' in user.perms %}<div class="panel"><h3>Month-end steps</h3>
 <ol class="hint" style="font-size:13px;line-height:1.9;margin:0;padding-left:18px">
 <li>Check holidays (Settings) and leave.</li><li>Fix single-punch days with manual punches.</li>
 <li>Process the month on <a href="/attendance">Daily attendance</a>.</li><li>On <a href="/payroll">Payroll</a>, pick the company, upload advances / deductions, process.</li>
-<li>Check the draft salary sheet, then Accounts finalizes that company's month.</li></ol></div>
+<li>Check the draft salary sheet, then Accounts finalizes that company's month.</li></ol></div>{% endif %}
 {% endblock %}

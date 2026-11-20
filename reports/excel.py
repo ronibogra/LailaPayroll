@@ -5,7 +5,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
-from config import settings
+from config import settings  # noqa: F401
+from services.branding import BRAND
 
 HEAD_FILL = PatternFill("solid", fgColor="E8332F")
 HEAD_FONT = Font(bold=True, color="FFFFFF")
@@ -14,7 +15,7 @@ BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 
 def _title(ws, title: str, ncols: int, company: str = "") -> None:
-    ws.append([company or settings.group_name])
+    ws.append([company or BRAND["name"]])
     ws.append([title])
     ws["A1"].font = Font(bold=True, size=14, color="E8332F")
     ws["A2"].font = Font(bold=True, size=11)
@@ -210,7 +211,7 @@ def combined_salary(runs, year: int, month: int) -> bytes:
     ws = wb.active
     ws.title = "HO Summary"
     head = ["Company", "Status", "Employees", "Earned Gross", "OT Amount", "Deductions", "Net Pay", "Bank", "Cash", "Mobile"]
-    _title(ws, f"Head Office salary summary - {period}", len(head), settings.group_name)
+    _title(ws, f"Head Office salary summary - {period}", len(head), BRAND["name"])
     data = []
     for run in runs:
         ls = run.lines

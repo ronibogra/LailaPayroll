@@ -20,17 +20,21 @@ from integration.punch_import import read_punch_file, ImportProblem
 from integration.employee_import import import_employees, template_bytes
 from integration.zk_adms import options_response
 from models import (Company, Department, Employee, Shift, Device, AttendanceLog, DailyAttendance, Holiday, Leave,
-                    PayrollAdjustment, PayrollRun, PayrollLine, User, AuditLog, ErrorLog)
+                    PayrollAdjustment, PayrollRun, PayrollLine, User, ErrorLog, Role)
 from payroll.engine import split_gross
 from reports.excel import (salary_sheet, attendance_month, attendance_day, punches_sheet, first_last_sheet,
                            combined_salary)
 from reports.payslip import payslips_pdf
 from security import (hash_password, verify_password, create_token, decode_token, page_user,
-                      LoginRequired, COOKIE, ROLES)
-from services import mobile, devices, maintenance, migrate
+                      LoginRequired, COOKIE)
+from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, parse as parse_perms
+from services import mobile, devices, maintenance, migrate, branding, backup as backups
 from services.errors import log_error
-from services.photos import save_photo, photo_path
+from services.photos import save_photo, photo_path, bulk_photos
+from integration import generic_import
 from services.punch_reports import punch_query, first_last, employees_by_card
+from reports.defs import REPORTS, Problem as ReportProblem
+from reports.engine import chosen_cols, save_cols, to_excel, to_pdf
 from services.audit import audit
 from services.payroll_service import run_payroll, finalize_payroll, get_run, PayrollLocked
 from services.policy import (load_policy, save_policy, policy_rows, get_setting, set_setting, weekend_set,
@@ -41,7 +45,7 @@ from timeutil import now_local
 BASE_DIR = Path(__file__).resolve().parent
 MOBILE_COOKIE = "laila_mobile"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-OPEN_PATHS = ("/setup", "/static", "/iclock", "/health", "/m")
+OPEN_PATHS = ("/setup", "/static", "/iclock", "/health", "/m", "/brand")
 
 Base.metadata.create_all(bind=engine)
 migrate.upgrade(engine, Base.metadata)
@@ -49,7 +53,7 @@ migrate.upgrade(engine, Base.metadata)
 app = FastAPI(title=settings.app_name, version="3.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
-templates.env.globals.update(settings=settings, month_name=month_name)
+templates.env.globals.update(settings=settings, month_name=month_name, brand=branding.BRAND)
 _state = {"setup_done": None, "started": False}
 
 
@@ -59,9 +63,11 @@ def go(url: str, msg: str = "", err: str = "") -> RedirectResponse:
     return RedirectResponse(url + (("&" if "?" in url else "?") + urlencode(q) if q else ""), status_code=303)
 
 
-def need(user: dict, *roles: str) -> None:
-    if user["role"] != "ADMIN" and user["role"] not in roles:
-        raise HTTPException(403, "You do not have permission for this page/action")
+def need(user: dict, *perms: str) -> None:
+    """Raise 403 unless the user's role has ALL the given permissions (ADMIN has every permission)."""
+    missing = [p for p in perms if p not in user["perms"]]
+    if missing:
+        raise HTTPException(403, "Your role does not allow this: " + ", ".join(PERMS.get(p, p) for p in missing))
 
 
 def render(request: Request, name: str, user: dict | None, **ctx) -> HTMLResponse:
@@ -165,13 +171,152 @@ def startup():
     _state["started"] = True
     db = SessionLocal()
     try:
+        for rname, (label, perms) in BUILTIN_ROLES.items():
+            r = db.scalar(select(Role).where(Role.name == rname))
+            if r is None:
+                db.add(Role(name=rname, label=label, permissions=",".join(perms), builtin=True))
+        branding.refresh(db)
         if db.scalar(select(func.count(Shift.id))) == 0:
             db.add(Shift(code="GENERAL", name="General 09:00-18:00", start=time(9, 0), end=time(18, 0)))
             db.commit()
     finally:
         db.close()
     devices.start_poller()
-    maintenance.start_daily_backup()
+    backups.start_scheduler()
+
+
+@app.get("/brand/logo.png")
+def brand_logo():
+    return FileResponse(branding.logo_path(), media_type="image/png", headers={"Cache-Control": "public, max-age=300"})
+
+
+@app.post("/settings/headoffice")
+async def settings_headoffice(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "company.manage")
+    f = await request.form()
+    name = str(f.get("ho_name", "")).strip()
+    if len(name) < 2:
+        return go("/settings", err="Enter the Head Office name")
+    for k in branding.KEYS:
+        set_setting(db, k, str(f.get(k, "")).strip()[:240], commit=False)
+    db.commit()
+    logo = f.get("logo")
+    try:
+        if logo is not None and getattr(logo, "filename", ""):
+            branding.save_logo(await logo.read())
+        if f.get("reset_logo"):
+            branding.reset_logo()
+    except ValueError as exc:
+        return go("/settings", err=f"Logo: {exc}")
+    branding.refresh(db)
+    audit(db, user, "HEADOFFICE_SAVE", f"{name}" + (" + new logo" if logo is not None and getattr(logo, 'filename', '') else ""))
+    return go("/settings", msg="Head Office saved")
+
+
+def report_ctx(db: Session, user: dict, rid: str, params: dict) -> dict:
+    """Rows + chosen columns for a report shown on a page (see reports/defs.py)."""
+    rep = REPORTS[rid]
+    try:
+        rows, subtitle, total = rep.fetch(db, user, params, False)
+    except (ReportProblem, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"rep": rep, "rows": rows, "subtitle": subtitle, "total": total,
+            "cols": chosen_cols(db, user, rep), "all_cols": rep.allowed_cols(user)}
+
+
+@app.get("/export/{rid}.{fmt}")
+def export_report(request: Request, rid: str, fmt: str, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Excel or PDF of any report with the user's chosen columns and the same filters as the page."""
+    rep = REPORTS.get(rid)
+    if not rep or fmt not in ("xlsx", "pdf"):
+        raise HTTPException(404, "Unknown report")
+    need(user, rep.perm, "reports.export")
+    params = dict(request.query_params)
+    try:
+        rows, subtitle, _ = rep.fetch(db, user, params, True)
+    except (ReportProblem, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+    cols = chosen_cols(db, user, rep, params.get("cols"))
+    name = f"{rep.title} {subtitle}".replace("/", "-").replace(" · ", " ").strip()
+    name = "".join(ch for ch in name if ch.isalnum() or ch in " -_.")[:90].strip().replace(" ", "_")
+    audit(db, user, "EXPORT", f"{rep.title} {fmt} ({len(rows)} rows)")
+    if fmt == "xlsx":
+        return Response(to_excel(rep, cols, rows, subtitle), media_type=XLSX,
+                        headers={"Content-Disposition": f'attachment; filename="{name}.xlsx"'})
+    return Response(to_pdf(rep, cols, rows, subtitle), media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{name}.pdf"'})
+
+
+@app.post("/report-columns/{rid}")
+async def report_columns(request: Request, rid: str, user=Depends(page_user), db: Session = Depends(get_db)):
+    rep = REPORTS.get(rid)
+    if not rep:
+        raise HTTPException(404, "Unknown report")
+    need(user, rep.perm)
+    f = await request.form()
+    keys = [str(k) for k in f.getlist("col")]
+    if f.get("reset"):
+        keys = []
+    order = str(f.get("order", "")).split(",")
+    keys = sorted(keys, key=lambda k: order.index(k) if k in order else 999)
+    save_cols(db, user, rep, keys)
+    back = str(f.get("back") or "/")
+    return RedirectResponse(back if back.startswith("/") else "/", status_code=303)
+
+
+IMPORT_PERMS = {"leaves": "leave.manage", "holidays": "holidays.manage", "shifts": "shifts.manage",
+                "machines": "machines.manage", "companies": "company.manage", "punches": "punches.edit"}
+IMPORT_BACK = {"leaves": "/leaves", "holidays": "/settings", "shifts": "/shifts", "machines": "/devices",
+               "companies": "/settings", "punches": "/punches"}
+
+
+@app.get("/templates/{kind}.xlsx")
+def import_template(kind: str, user=Depends(page_user)):
+    if kind not in generic_import.TEMPLATES:
+        raise HTTPException(404, "Unknown template")
+    need(user, IMPORT_PERMS[kind])
+    return Response(generic_import.template(kind), media_type=XLSX,
+                    headers={"Content-Disposition": f"attachment; filename={kind}-import-template.xlsx"})
+
+
+@app.post("/import/{kind}")
+async def import_generic(kind: str, file: UploadFile = File(...), user=Depends(page_user), db: Session = Depends(get_db)):
+    if kind not in IMPORT_PERMS or kind == "punches":
+        raise HTTPException(404, "Unknown import")
+    need(user, IMPORT_PERMS[kind])
+    back = IMPORT_BACK[kind]
+    try:
+        r = generic_import.import_kind(db, kind, file.filename or "", await file.read(), user)
+    except ValueError as exc:
+        db.rollback()
+        log_error("IMPORT", f"{kind} file {file.filename}: {str(exc)[:400]}", detail=str(exc), username=user["username"])
+        return go(back, err=f"{file.filename}: {str(exc)[:1500]}")
+    audit(db, user, "IMPORT", f"{kind} {file.filename}: {r}")
+    return go(back, msg=f"{file.filename}: {r['added']} added, {r['updated']} updated")
+
+
+@app.post("/employees/photos")
+async def employees_photos(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.edit")
+    f = await request.form()
+    files = [(u.filename or "", await u.read()) for u in f.getlist("files") if getattr(u, "filename", "")]
+    try:
+        r = bulk_photos(db, files, user.get("company_id"))
+    except ValueError as exc:
+        log_error("IMPORT", f"photos: {exc}", username=user["username"])
+        return go("/employees", err=str(exc))
+    if r["unmatched"] or r["bad"]:
+        log_error("IMPORT", f"photos: {len(r['unmatched'])} not matched, {len(r['bad'])} unreadable",
+                  detail="Not matched (name must be employee code or card no.):\n" + "\n".join(r["unmatched"])
+                         + ("\n\nUnreadable:\n" + "\n".join(r["bad"]) if r["bad"] else ""), username=user["username"])
+    audit(db, user, "PHOTO_IMPORT", f"{r['saved']} saved, {len(r['unmatched'])} unmatched")
+    msg = f"{r['saved']} photos saved"
+    err = ""
+    if r["unmatched"]:
+        err = f"{len(r['unmatched'])} photos did not match an employee code / card no.: " + ", ".join(r["unmatched"][:15])
+    if r["bad"]:
+        err += (" | " if err else "") + "Unreadable: " + "; ".join(r["bad"][:5])
+    return go("/employees", msg=msg, err=err)
 
 
 @app.get("/health")
@@ -208,7 +353,16 @@ async def setup_save(request: Request, db: Session = Depends(get_db)):
     if not companies or len({c for c, _ in companies}) != len(companies):
         return go("/setup", err="Enter at least one company, each with a different code")
     weekend = ",".join(str(d) for d in range(7) if f.get(f"wd{d}"))
-    db.add(User(username=username, password_hash=hash_password(password), role="ADMIN"))
+    ho_name = str(f.get("ho_name", "")).strip() or settings.group_name
+    set_setting(db, "ho_name", ho_name, commit=False)
+    set_setting(db, "ho_address", str(f.get("ho_address", "")).strip()[:240], commit=False)
+    logo = f.get("logo")
+    if logo is not None and getattr(logo, "filename", ""):
+        try:
+            branding.save_logo(await logo.read())
+        except ValueError as exc:
+            return go("/setup", err=f"Logo: {exc}")
+    db.add(User(full_name="Administrator", username=username, password_hash=hash_password(password), role="ADMIN"))
     for code, name in companies:
         db.add(Company(code=code, name=name))
     set_setting(db, "weekend_days", weekend, commit=False)
@@ -220,6 +374,7 @@ async def setup_save(request: Request, db: Session = Depends(get_db)):
     audit(db, username, "SETUP", f"fresh setup, companies: {', '.join(c for c, _ in companies)}", commit=False)
     db.commit()
     _state["setup_done"] = True
+    branding.refresh(db)
     resp = go("/devices", msg="Setup complete. Next: connect the punch machines, then import employees.")
     resp.set_cookie(COOKIE, create_token(username, "ADMIN"), **cookie_kwargs(request, settings.session_hours))
     return resp
@@ -254,6 +409,7 @@ def logout():
 # ---------------------------------------------------------------- dashboard
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "dashboard.view")
     today = now_local().date()
     comps = visible_companies(db, user)
     ids = [c.id for c in comps]
@@ -286,33 +442,25 @@ def dashboard(request: Request, user=Depends(page_user), db: Session = Depends(g
 
 # ---------------------------------------------------------------- employees
 @app.get("/employees", response_class=HTMLResponse)
-def employees_page(request: Request, q: str = "", company: str = "", page: int = 1, user=Depends(page_user),
-                   db: Session = Depends(get_db)):
-    size = 50
-    cid = company_filter(user, company)
-    stmt = select(Employee)
-    if cid:
-        stmt = stmt.where(Employee.company_id == cid)
-    if q:
-        like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Employee.employee_code.ilike(like), Employee.full_name.ilike(like),
-                              Employee.card_no.ilike(like)))
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = db.scalars(stmt.order_by(Employee.employee_code).offset((max(page, 1) - 1) * size).limit(size)).all()
-    return render(request, "employees.html", user, rows=rows, q=q, page=page, pages=max(1, -(-total // size)),
-                  total=total, company=cid or "", companies=visible_companies(db, user),
-                  show_salary=user["role"] in ("ADMIN", "HR", "ACCOUNTS"))
+def employees_page(request: Request, page: int = 1, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.view")
+    params = dict(request.query_params)
+    r = report_ctx(db, user, "employees", params)
+    return render(request, "employees.html", user, r=r, q=params.get("q", ""), page=max(page, 1),
+                  pages=max(1, -(-r["total"] // 50)), company=company_filter(user, params.get("company")) or "",
+                  status=params.get("status", ""), companies=visible_companies(db, user))
 
 
 @app.get("/employees/template.xlsx")
 def employee_template(user=Depends(page_user)):
+    need(user, "employees.edit")
     return Response(template_bytes(), media_type=XLSX,
                     headers={"Content-Disposition": "attachment; filename=employee-import-template.xlsx"})
 
 
 @app.post("/employees/import")
 async def employees_import(file: UploadFile = File(...), user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "employees.edit")
     try:
         result = import_employees(db, await file.read(), user.get("company_id"))
     except Exception as exc:
@@ -339,7 +487,7 @@ def _emp_or_404(db: Session, user: dict, emp_id: int) -> Employee:
 
 @app.get("/employees/new", response_class=HTMLResponse)
 def employee_new(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "employees.edit")
     return render(request, "employee_form.html", user, e=None, companies=visible_companies(db, user),
                   shifts=db.scalars(select(Shift).order_by(Shift.code)).all(),
                   departments=db.scalars(select(Department).order_by(Department.name)).all())
@@ -348,6 +496,7 @@ def employee_new(request: Request, user=Depends(page_user), db: Session = Depend
 @app.get("/employees/{emp_id}", response_class=HTMLResponse)
 def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
     """Full profile: photo, personal and job details, this month's attendance, recent punches, leave, payslips."""
+    need(user, "employees.view")
     emp = _emp_or_404(db, user, emp_id)
     today = now_local().date()
     first, last = month_bounds(today.year, today.month)
@@ -378,7 +527,7 @@ def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db:
 
 @app.get("/employees/{emp_id}/edit", response_class=HTMLResponse)
 def employee_form(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "employees.edit")
     emp = _emp_or_404(db, user, emp_id)
     return render(request, "employee_form.html", user, e=emp, companies=visible_companies(db, user),
                   shifts=db.scalars(select(Shift).order_by(Shift.code)).all(),
@@ -387,6 +536,7 @@ def employee_form(request: Request, emp_id: int, user=Depends(page_user), db: Se
 
 @app.get("/employees/{emp_id}/photo")
 def employee_photo(emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.view")
     emp = _emp_or_404(db, user, emp_id)
     path = photo_path(emp.photo)
     if not path:
@@ -396,7 +546,7 @@ def employee_photo(emp_id: int, user=Depends(page_user), db: Session = Depends(g
 
 @app.post("/employees/save")
 async def employee_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "employees.edit")
     f = await request.form()
     val = lambda k: str(f.get(k) or "").strip()  # noqa: E731
     emp_id = val("emp_id")
@@ -472,11 +622,10 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
 @app.get("/devices", response_class=HTMLResponse)
 def devices_page(request: Request, edit: int | None = None, new: str = "", user=Depends(page_user),
                  db: Session = Depends(get_db)):
-    need(user, "HR")
-    devs = db.scalars(select(Device).order_by(Device.approved, Device.machine_no, Device.name)).all()
-    counts = dict(db.execute(select(AttendanceLog.device_id, func.count()).group_by(AttendanceLog.device_id)).all())
-    return render(request, "devices.html", user, devices=devs, e=db.get(Device, edit) if edit else None,
-                  ips=maintenance.lan_ips(), brands=devices.BRANDS, counts=counts, show_form=bool(edit or new))
+    need(user, "machines.manage")
+    r = report_ctx(db, user, "machines", {})
+    return render(request, "devices.html", user, r=r, devices=r["rows"], e=db.get(Device, edit) if edit else None,
+                  ips=maintenance.lan_ips(), brands=devices.BRANDS, show_form=bool(edit or new))
 
 
 @app.post("/devices/save")
@@ -485,7 +634,7 @@ def device_save(device_id: str = Form(""), name: str = Form(""), brand: str = Fo
                 machine_no: str = Form(""), direction: str = Form("BOTH"), username: str = Form(""),
                 password: str = Form(""), location: str = Form(""), approved: str = Form(""),
                 enabled: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "machines.manage")
     brand = brand.upper()
     back = f"/devices?edit={device_id}" if device_id else "/devices?new=1"
     if brand not in devices.BRANDS:
@@ -540,7 +689,7 @@ def device_save(device_id: str = Form(""), name: str = Form(""), brand: str = Fo
 
 @app.post("/devices/{device_id}/test")
 def device_test(device_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "machines.manage")
     d = db.get(Device, device_id)
     if not d:
         raise HTTPException(404, "Unknown machine")
@@ -556,7 +705,7 @@ def device_test(device_id: int, user=Depends(page_user), db: Session = Depends(g
 
 @app.post("/devices/{device_id}/pull")
 def device_pull(device_id: int, days_back: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "punches.edit")
     d = db.get(Device, device_id)
     if not d or d.brand not in devices.PULL_BRANDS:
         return go("/devices", err="This machine sends punches by itself - nothing to download")
@@ -572,7 +721,7 @@ def device_pull(device_id: int, days_back: str = Form(""), user=Depends(page_use
 
 @app.post("/devices/pull-all")
 def device_pull_all(user=Depends(page_user)):
-    need(user, "HR")
+    need(user, "punches.edit")
     results = devices.pull_all()
     if not results:
         return go("/devices", err="No active ZKTeco-by-IP or Hikvision machines to download from")
@@ -583,7 +732,7 @@ def device_pull_all(user=Depends(page_user)):
 
 @app.post("/devices/{device_id}/delete")
 def device_delete(device_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user)
+    need(user, "machines.manage")
     d = db.get(Device, device_id)
     if d:
         audit(db, user, "DEVICE_DELETE", f"{d.brand} {d.name}", commit=False)
@@ -655,23 +804,19 @@ def zk_ping():
 
 # ---------------------------------------------------------------- attendance
 @app.get("/attendance", response_class=HTMLResponse)
-def attendance_page(request: Request, day: str = "", status: str = "", company: str = "",
-                    user=Depends(page_user), db: Session = Depends(get_db)):
-    d = date.fromisoformat(day) if day else now_local().date()
-    cid = company_filter(user, company)
-    stmt = select(DailyAttendance).join(Employee).where(DailyAttendance.work_date == d)
-    if cid:
-        stmt = stmt.where(Employee.company_id == cid)
-    if status:
-        stmt = stmt.where(DailyAttendance.status == status)
-    rows = db.scalars(stmt.order_by(Employee.employee_code)).all()
-    return render(request, "attendance.html", user, rows=rows, day=d, status=status, company=cid or "",
-                  companies=visible_companies(db, user))
+def attendance_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "attendance.view")
+    p = dict(request.query_params)
+    d = date.fromisoformat(p["day"]) if p.get("day") else now_local().date()
+    p["day"] = str(d)
+    r = report_ctx(db, user, "attendance", p)
+    return render(request, "attendance.html", user, r=r, day=d, status=p.get("status", ""),
+                  company=company_filter(user, p.get("company")) or "", companies=visible_companies(db, user))
 
 
 @app.post("/attendance/process")
 def attendance_process(month: str = Form(...), user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR", "ACCOUNTS")
+    need(user, "attendance.process")
     y, m = parse_month(month)
     ids = [c.id for c in visible_companies(db, user)]
     n = len(process_month(db, y, m, company_ids=ids))
@@ -683,7 +828,7 @@ def attendance_process(month: str = Form(...), user=Depends(page_user), db: Sess
 @app.post("/attendance/manual")
 def attendance_manual(card_no: str = Form(...), punch_time: str = Form(...), reason: str = Form(...),
                       user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "punches.edit")
     emp = db.scalar(select(Employee).where(or_(Employee.card_no == card_no.strip(),
                                                Employee.employee_code == card_no.strip())))
     if not emp:
@@ -705,6 +850,7 @@ def attendance_manual(card_no: str = Form(...), punch_time: str = Form(...), rea
 
 @app.get("/attendance/day.xlsx")
 def attendance_day_xlsx(day: str, company: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "attendance.view", "reports.export")
     d = date.fromisoformat(day)
     cid = company_filter(user, company)
     stmt = select(DailyAttendance).join(Employee).where(DailyAttendance.work_date == d)
@@ -717,6 +863,7 @@ def attendance_day_xlsx(day: str, company: str = "", user=Depends(page_user), db
 
 @app.get("/attendance/month.xlsx")
 def attendance_month_xlsx(month: str, company: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "attendance.view", "reports.export")
     y, m = parse_month(month)
     cid = company_filter(user, company)
     first, last = month_bounds(y, m)
@@ -754,26 +901,21 @@ def _dates(start: str, end: str) -> tuple[date, date]:
 
 
 @app.get("/punches", response_class=HTMLResponse)
-def punches_page(request: Request, start: str = "", end: str = "", company: str = "", q: str = "",
-                 machine: str = "", source: str = "", unknown: str = "", page: int = 1,
-                 user=Depends(page_user), db: Session = Depends(get_db)):
-    s_, e_ = _dates(start, end)
-    cid = company_filter(user, company)
-    stmt = punch_query(db, s_, e_, cid, q, int(machine) if machine.isdigit() else None, source, bool(unknown))
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    size = 200
-    page = max(1, page)
-    rows = db.scalars(stmt.order_by(AttendanceLog.punch_time.desc(), AttendanceLog.card_no)
-                      .offset((page - 1) * size).limit(size)).all()
-    return render(request, "punches.html", user, rows=rows, emps=employees_by_card(db, [r.card_no for r in rows]),
-                  start=s_, end=e_, company=cid or "", q=q, machine=machine, source=source, unknown=unknown,
-                  page=page, pages=max(1, -(-total // size)), total=total, companies=visible_companies(db, user),
-                  machines=db.scalars(select(Device).order_by(Device.name)).all(), qs=request.url.query)
+def punches_page(request: Request, page: int = 1, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "punches.view")
+    p = dict(request.query_params)
+    r = report_ctx(db, user, "punches", p)
+    s_, e_ = _dates(p.get("start", ""), p.get("end", ""))
+    return render(request, "punches.html", user, r=r, start=s_, end=e_, company=company_filter(user, p.get("company")) or "",
+                  q=p.get("q", ""), machine=p.get("machine", ""), source=p.get("source", ""), unknown=p.get("unknown", ""),
+                  page=max(page, 1), pages=max(1, -(-r["total"] // 200)), companies=visible_companies(db, user),
+                  machines=db.scalars(select(Device).order_by(Device.name)).all())
 
 
 @app.get("/punches.xlsx")
 def punches_xlsx(start: str = "", end: str = "", company: str = "", q: str = "", machine: str = "",
                  source: str = "", unknown: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "punches.view", "reports.export")
     s_, e_ = _dates(start, end)
     stmt = punch_query(db, s_, e_, company_filter(user, company), q, int(machine) if machine.isdigit() else None,
                        source, bool(unknown))
@@ -785,7 +927,7 @@ def punches_xlsx(start: str = "", end: str = "", company: str = "", q: str = "",
 @app.post("/punches/import")
 async def punches_import(file: UploadFile = File(...), user=Depends(page_user), db: Session = Depends(get_db)):
     """Machine export files: Excel (.xlsx), CSV, ZKTeco attlog.dat - columns are recognised by name."""
-    need(user, "HR")
+    need(user, "punches.edit")
     content = await file.read()
     try:
         rows, row_errors = read_punch_file(file.filename or "file", content)
@@ -812,7 +954,7 @@ async def punches_import(file: UploadFile = File(...), user=Depends(page_user), 
 
 @app.post("/punches/download")
 def punches_download(user=Depends(page_user)):
-    need(user, "HR")
+    need(user, "punches.edit")
     results = devices.pull_all()
     if not results:
         return go("/punches", err="No active machines to download from - add them on the Machines page")
@@ -822,18 +964,19 @@ def punches_download(user=Depends(page_user)):
 
 
 @app.get("/punches/first-last", response_class=HTMLResponse)
-def first_last_page(request: Request, start: str = "", end: str = "", company: str = "", q: str = "",
-                    user=Depends(page_user), db: Session = Depends(get_db)):
-    s_, e_ = _dates(start, end)
-    cid = company_filter(user, company)
-    rows = first_last(db, s_, e_, cid, q, include_unknown=not cid)
-    return render(request, "first_last.html", user, rows=rows[:3000], total=len(rows), start=s_, end=e_,
-                  company=cid or "", q=q, companies=visible_companies(db, user), qs=request.url.query)
+def first_last_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "punches.view")
+    p = dict(request.query_params)
+    r = report_ctx(db, user, "first_last", p)
+    s_, e_ = _dates(p.get("start", ""), p.get("end", ""))
+    return render(request, "first_last.html", user, r=r, start=s_, end=e_, q=p.get("q", ""),
+                  company=company_filter(user, p.get("company")) or "", companies=visible_companies(db, user))
 
 
 @app.get("/punches/first-last.xlsx")
 def first_last_xlsx(start: str = "", end: str = "", company: str = "", q: str = "", user=Depends(page_user),
                     db: Session = Depends(get_db)):
+    need(user, "punches.view", "reports.export")
     s_, e_ = _dates(start, end)
     cid = company_filter(user, company)
     rows = first_last(db, s_, e_, cid, q, include_unknown=not cid)
@@ -844,18 +987,15 @@ def first_last_xlsx(start: str = "", end: str = "", company: str = "", q: str = 
 # ---------------------------------------------------------------- error log
 @app.get("/errors", response_class=HTMLResponse)
 def errors_page(request: Request, source: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
-    stmt = select(ErrorLog).order_by(ErrorLog.created_at.desc())
-    if source:
-        stmt = stmt.where(ErrorLog.source == source)
-    rows = db.scalars(stmt.limit(1000)).all()
-    sources = [r[0] for r in db.execute(select(ErrorLog.source).distinct())]
-    return render(request, "errors.html", user, rows=rows, source=source, sources=sources)
+    need(user, "logs.view")
+    r = report_ctx(db, user, "errors", dict(request.query_params))
+    sources = [x[0] for x in db.execute(select(ErrorLog.source).distinct())]
+    return render(request, "errors.html", user, r=r, source=source, sources=sources)
 
 
 @app.post("/errors/clear")
 def errors_clear(user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user)
+    need(user, "logs.view", "users.manage")
     n = db.query(ErrorLog).delete()
     audit(db, user, "ERRORLOG_CLEAR", f"{n} entries", commit=False)
     db.commit()
@@ -864,7 +1004,7 @@ def errors_clear(user=Depends(page_user), db: Session = Depends(get_db)):
 
 @app.get("/errors/server.log")
 def errors_server_log(user=Depends(page_user)):
-    need(user)
+    need(user, "logs.view")
     f = DATA_DIR / "logs" / "server.log"
     if not f.exists():
         raise HTTPException(404, "No server log yet")
@@ -874,19 +1014,16 @@ def errors_server_log(user=Depends(page_user)):
 # ---------------------------------------------------------------- leave
 @app.get("/leaves", response_class=HTMLResponse)
 def leaves_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    since = now_local().date() - timedelta(days=60)
-    stmt = (select(Leave, Employee).join(Employee, Employee.id == Leave.employee_id)
-            .where(Leave.end_date >= since).order_by(Leave.start_date.desc()))
-    if user.get("company_id"):
-        stmt = stmt.where(Employee.company_id == user["company_id"])
-    return render(request, "leaves.html", user, rows=db.execute(stmt).all())
+    need(user, "attendance.view")
+    r = report_ctx(db, user, "leaves", dict(request.query_params))
+    return render(request, "leaves.html", user, r=r)
 
 
 @app.post("/leaves")
 def leave_add(employee_code: str = Form(...), start_date: str = Form(...), end_date: str = Form(...),
               leave_type: str = Form(...), note: str = Form(""), user=Depends(page_user),
               db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "leave.manage")
     emp = db.scalar(select(Employee).where(Employee.employee_code == employee_code.strip()))
     if not emp:
         return go("/leaves", err="Unknown employee code")
@@ -903,7 +1040,7 @@ def leave_add(employee_code: str = Form(...), start_date: str = Form(...), end_d
 
 @app.post("/leaves/{leave_id}/delete")
 def leave_delete(leave_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "leave.manage")
     lv = db.get(Leave, leave_id)
     if lv:
         emp = db.get(Employee, lv.employee_id)
@@ -918,9 +1055,9 @@ def leave_delete(leave_id: int, user=Depends(page_user), db: Session = Depends(g
 # ---------------------------------------------------------------- shifts
 @app.get("/shifts", response_class=HTMLResponse)
 def shifts_page(request: Request, edit: int | None = None, user=Depends(page_user), db: Session = Depends(get_db)):
-    shifts = db.scalars(select(Shift).order_by(Shift.code)).all()
-    used = dict(db.execute(select(Employee.shift_id, func.count()).group_by(Employee.shift_id)).all())
-    return render(request, "shifts.html", user, shifts=shifts, used=used, companies=visible_companies(db, user),
+    need(user, "attendance.view")
+    r = report_ctx(db, user, "shifts", {})
+    return render(request, "shifts.html", user, r=r, shifts=r["rows"], companies=visible_companies(db, user),
                   e=db.get(Shift, edit) if edit else None)
 
 
@@ -930,7 +1067,7 @@ def shift_save(shift_id: str = Form(""), code: str = Form(...), name: str = Form
                break_after_minutes: int = Form(300), early_window_minutes: int = Form(180),
                ot_round_minutes: int = Form(30), max_ot_minutes: int = Form(120), offday_work_is_ot: str = Form(""),
                user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "shifts.manage")
     code = code.strip().upper()
     s = db.get(Shift, int(shift_id)) if shift_id else Shift()
     if db.scalar(select(Shift).where(Shift.code == code, Shift.id != (s.id or 0))):
@@ -953,7 +1090,7 @@ def shift_save(shift_id: str = Form(""), code: str = Form(...), name: str = Form
 def shift_assign(shift_id: int = Form(...), employee_codes: str = Form(""), department: str = Form(""),
                  company_id: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
     """Assign a shift to employee codes, a department and/or a whole company."""
-    need(user, "HR")
+    need(user, "shifts.manage")
     shift = db.get(Shift, shift_id)
     if not shift:
         return go("/shifts", err="Unknown shift")
@@ -987,7 +1124,7 @@ def _payroll_url(cid, y, m) -> str:
 @app.get("/payroll", response_class=HTMLResponse)
 def payroll_page(request: Request, month: str = "", company: str = "", user=Depends(page_user),
                  db: Session = Depends(get_db)):
-    need(user, "HR", "ACCOUNTS")
+    need(user, "payroll.view")
     y, m = parse_month(month)
     comps = visible_companies(db, user)
     cid = company_filter(user, company) or (comps[0].id if comps else None)
@@ -1000,15 +1137,16 @@ def payroll_page(request: Request, month: str = "", company: str = "", user=Depe
     by_mode: dict[str, Decimal] = {}
     for l in lines:
         by_mode[l.payment_mode] = by_mode.get(l.payment_mode, 0) + l.net_pay
+    r = report_ctx(db, user, "payroll", {"company": str(cid or ""), "month": f"{y}-{m:02d}"})
     return render(request, "payroll.html", user, y=y, m=m, run=run, lines=lines, totals=totals, by_mode=by_mode,
                   companies=comps, cid=cid, company=db.get(Company, cid) if cid else None, runs=runs,
-                  warn_count=sum(1 for l in lines if l.warnings))
+                  warn_count=sum(1 for l in lines if l.warnings), r=r)
 
 
 @app.post("/payroll/process")
 def payroll_process(month: str = Form(...), company_id: int = Form(...), user=Depends(page_user),
                     db: Session = Depends(get_db)):
-    need(user, "HR", "ACCOUNTS")
+    need(user, "payroll.process")
     check_company(user, company_id)
     y, m = parse_month(month)
     try:
@@ -1025,7 +1163,7 @@ def payroll_process(month: str = Form(...), company_id: int = Form(...), user=De
 @app.post("/payroll/finalize")
 def payroll_finalize(month: str = Form(...), company_id: int = Form(...), confirm: str = Form(""),
                      user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "ACCOUNTS")
+    need(user, "payroll.finalize")
     check_company(user, company_id)
     y, m = parse_month(month)
     if confirm.strip().upper() != "FINAL":
@@ -1047,7 +1185,7 @@ def _run_for(db, user, run_id: int) -> PayrollRun:
 
 @app.get("/payroll/run/{run_id}/salary.xlsx")
 def payroll_xlsx(run_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR", "ACCOUNTS")
+    need(user, "payroll.view", "reports.export")
     run = _run_for(db, user, run_id)
     audit(db, user, "PAYROLL_EXPORT", f"{run.company.code} {run.year}-{run.month:02d} salary sheet")
     return Response(salary_sheet(run), media_type=XLSX, headers={
@@ -1056,7 +1194,7 @@ def payroll_xlsx(run_id: int, user=Depends(page_user), db: Session = Depends(get
 
 @app.get("/payroll/run/{run_id}/payslips.pdf")
 def payroll_pdf(run_id: int, employee_code: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR", "ACCOUNTS")
+    need(user, "payroll.view")
     run = _run_for(db, user, run_id)
     lines = [l for l in run.lines if not employee_code or l.employee_code == employee_code.strip()]
     audit(db, user, "PAYSLIP_EXPORT", f"{run.company.code} {run.year}-{run.month:02d} {employee_code or 'all'}")
@@ -1067,7 +1205,7 @@ def payroll_pdf(run_id: int, employee_code: str = "", user=Depends(page_user), d
 @app.get("/payroll/combined.xlsx")
 def payroll_combined(month: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
     """Head Office: every company's salary sheet for the month in one workbook, with a summary."""
-    need(user, "HR", "ACCOUNTS")
+    need(user, "payroll.view", "reports.export")
     y, m = parse_month(month)
     ids = [c.id for c in visible_companies(db, user)]
     runs = db.scalars(select(PayrollRun).where(PayrollRun.year == y, PayrollRun.month == m,
@@ -1084,7 +1222,7 @@ def payroll_combined(month: str = "", user=Depends(page_user), db: Session = Dep
 async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...), file: UploadFile = File(...),
                               user=Depends(page_user), db: Session = Depends(get_db)):
     """Excel: employee_code, other_addition, advance, other_deduction, tax, note (one company)."""
-    need(user, "HR", "ACCOUNTS")
+    need(user, "payroll.process")
     check_company(user, company_id)
     from openpyxl import load_workbook
     y, m = parse_month(month)
@@ -1129,6 +1267,7 @@ async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...
 
 @app.get("/payroll/adjustments-template.xlsx")
 def adjustments_template(user=Depends(page_user)):
+    need(user, "payroll.process")
     from openpyxl import Workbook
     wb = Workbook()
     wb.active.append(["employee_code", "other_addition", "advance", "other_deduction", "tax", "note"])
@@ -1144,10 +1283,10 @@ def adjustments_template(user=Depends(page_user)):
 def settings_page(request: Request, policy_company: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
     pc = company_filter(user, policy_company) or 0
     year = now_local().year
-    holidays = db.scalars(select(Holiday).where(Holiday.day >= date(year - 1, 1, 1)).order_by(Holiday.day)).all()
+    del year
     lat, lon, radius = geofence(db)
     return render(request, "settings.html", user, policy=policy_rows(db, pc), policy_company=pc,
-                  holidays=holidays, weekend=sorted(weekend_set(db)), lat=lat, lon=lon, radius=radius,
+                  r=report_ctx(db, user, "holidays", {}), weekend=sorted(weekend_set(db)), lat=lat, lon=lon, radius=radius,
                   companies=visible_companies(db, user),
                   all_companies=db.scalars(select(Company).order_by(Company.code)).all(),
                   data_dir=str(DATA_DIR), db_kind="SQLite" if settings.db_url.startswith("sqlite") else "SQL Server")
@@ -1155,7 +1294,7 @@ def settings_page(request: Request, policy_company: str = "", user=Depends(page_
 
 @app.post("/settings/policy")
 async def settings_policy(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "ACCOUNTS")
+    need(user, "policy.edit")
     form = {k: str(v).strip() for k, v in (await request.form()).items()}
     pc = int(form.pop("policy_company", "0") or 0)
     if user.get("company_id") and pc != user["company_id"]:
@@ -1171,7 +1310,7 @@ async def settings_policy(request: Request, user=Depends(page_user), db: Session
 
 @app.post("/settings/general")
 async def settings_general(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user)
+    need(user, "company.manage")
     f = await request.form()
     try:
         weekend = ",".join(str(d) for d in range(7) if f.get(f"wd{d}"))
@@ -1192,7 +1331,7 @@ async def settings_general(request: Request, user=Depends(page_user), db: Sessio
 @app.post("/settings/companies")
 def company_save(company_id: str = Form(""), code: str = Form(...), name: str = Form(...), address: str = Form(""),
                  active: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user)
+    need(user, "company.manage")
     code = code.strip().upper()[:20]
     c = db.get(Company, int(company_id)) if company_id else Company()
     if db.scalar(select(Company).where(Company.code == code, Company.id != (c.id or 0))):
@@ -1207,7 +1346,7 @@ def company_save(company_id: str = Form(""), code: str = Form(...), name: str = 
 
 @app.post("/settings/holidays")
 def holiday_add(day: str = Form(...), name: str = Form(...), user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "holidays.manage")
     d = date.fromisoformat(day)
     if db.scalar(select(Holiday).where(Holiday.day == d)):
         return go("/settings", err="That date is already a holiday")
@@ -1219,7 +1358,7 @@ def holiday_add(day: str = Form(...), name: str = Form(...), user=Depends(page_u
 
 @app.post("/settings/holidays/{hid}/delete")
 def holiday_delete(hid: int, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "HR")
+    need(user, "holidays.manage")
     h = db.get(Holiday, hid)
     if h:
         audit(db, user, "HOLIDAY_DELETE", f"{h.day} {h.name}", commit=False)
@@ -1228,41 +1367,160 @@ def holiday_delete(hid: int, user=Depends(page_user), db: Session = Depends(get_
     return go("/settings", msg="Holiday removed")
 
 
-@app.post("/settings/backup")
-def backup(user=Depends(page_user)):
-    need(user)
-    path = maintenance.backup_now()
-    return go("/settings", msg=f"Backup saved: {path}" if path else "Backups are only made for the built-in SQLite database")
+@app.get("/backup", response_class=HTMLResponse)
+def backup_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    return render(request, "backup.html", user, backups=backups.list_backups(db), folder=str(backups.backup_dir(db)),
+                  custom_dir=get_setting(db, "backup_dir", default="") or "",
+                  at=get_setting(db, "backup_time", default="02:00"), auto=get_setting(db, "backup_auto", default="1"),
+                  keep=get_setting(db, "backup_keep_days", default=str(settings.backup_keep_days)),
+                  last=get_setting(db, "backup_last_auto", default=""), data_dir=str(DATA_DIR),
+                  sqlite=settings.db_url.startswith("sqlite"))
+
+
+@app.post("/backup/create")
+def backup_create(user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    try:
+        path = backups.create_backup(db, "manual", user["username"])
+    except Exception as exc:  # noqa: BLE001
+        log_error("BACKUP", f"backup failed: {exc}", username=user["username"], exc=exc)
+        return go("/backup", err=f"Backup failed: {exc}")
+    audit(db, user, "BACKUP_CREATE", path.name)
+    return go("/backup", msg=f"Backup saved: {path}")
+
+
+@app.post("/backup/settings")
+def backup_settings(folder: str = Form(""), at: str = Form("02:00"), keep: int = Form(30), auto: str = Form(""),
+                    user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    folder = folder.strip()
+    if folder:
+        try:
+            p = Path(folder)
+            p.mkdir(parents=True, exist_ok=True)
+            test = p / ".laila_write_test"
+            test.write_text("ok")
+            test.unlink()
+        except Exception as exc:  # noqa: BLE001
+            return go("/backup", err=f"Cannot use folder {folder}: {exc}")
+    try:
+        hh, mm = (int(x) for x in at.split(":")[:2])
+        assert 0 <= hh < 24 and 0 <= mm < 60
+    except (ValueError, AssertionError):
+        return go("/backup", err="Time must be like 02:00")
+    set_setting(db, "backup_dir", folder, commit=False)
+    set_setting(db, "backup_time", f"{hh:02d}:{mm:02d}", commit=False)
+    set_setting(db, "backup_keep_days", str(max(1, min(keep, 3650))), commit=False)
+    set_setting(db, "backup_auto", "1" if auto else "0", commit=False)
+    audit(db, user, "BACKUP_SETTINGS", f"folder={folder or 'default'} at={at} keep={keep} auto={bool(auto)}", commit=False)
+    db.commit()
+    return go("/backup", msg="Backup settings saved")
+
+
+@app.get("/backup/download/{name}")
+def backup_download(name: str, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    try:
+        path = backups.safe_path(db, name)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    audit(db, user, "BACKUP_DOWNLOAD", name)
+    return FileResponse(path, media_type="application/zip", filename=name)
+
+
+@app.post("/backup/upload")
+async def backup_upload(file: UploadFile = File(...), user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    dest = backups.backup_dir(db) / f"{backups.PREFIX}{datetime.now():%Y%m%d_%H%M%S}_uploaded.zip"
+    with open(dest, "wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            out.write(chunk)
+    try:
+        m = backups.validate(dest)
+    except ValueError as exc:
+        dest.unlink(missing_ok=True)
+        log_error("BACKUP", f"uploaded backup {file.filename} refused: {exc}", username=user["username"])
+        return go("/backup", err=f"{file.filename}: {exc}")
+    audit(db, user, "BACKUP_UPLOAD", f"{file.filename} -> {dest.name}")
+    return go("/backup", msg=f"{file.filename} uploaded and checked (made {m.get('created', '?')[:16]}). "
+                             "Click Restore next to it to use it.")
+
+
+@app.post("/backup/restore")
+def backup_restore(request: Request, name: str = Form(...), confirm: str = Form(""), user=Depends(page_user),
+                   db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    if confirm.strip().upper() != "RESTORE":
+        return go("/backup", err="Type RESTORE to confirm")
+    try:
+        path = backups.safe_path(db, name)
+        backups.validate(path)
+    except ValueError as exc:
+        return go("/backup", err=str(exc))
+    try:
+        safety = backups.create_backup(db, "before_restore", user["username"])
+    except Exception as exc:  # noqa: BLE001
+        safety = None
+        log_error("BACKUP", f"safety backup before restore failed: {exc}", username=user["username"])
+    backups.schedule_restore(path)
+    audit(db, user, "BACKUP_RESTORE", f"{name} (safety copy: {safety.name if safety else 'none'})")
+    backups.restart_program()
+    return render(request, "restarting.html", None, name=name, safety=safety.name if safety else "")
+
+
+@app.post("/backup/delete")
+def backup_delete(name: str = Form(...), user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    try:
+        backups.safe_path(db, name).unlink()
+    except (ValueError, OSError) as exc:
+        return go("/backup", err=str(exc))
+    audit(db, user, "BACKUP_DELETE", name)
+    return go("/backup", msg=f"Deleted {name}")
 
 
 # ---------------------------------------------------------------- users & audit
 @app.get("/users", response_class=HTMLResponse)
-def users_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user)
+def users_page(request: Request, role: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "users.manage")
+    roles = db.scalars(select(Role).order_by(Role.builtin.desc(), Role.name)).all()
     return render(request, "users.html", user, users=db.scalars(select(User).order_by(User.username)).all(),
-                  roles=ROLES, companies=db.scalars(select(Company).order_by(Company.code)).all())
+                  roles=roles, edit_role=db.scalar(select(Role).where(Role.name == role)) if role else None,
+                  companies=db.scalars(select(Company).order_by(Company.code)).all(), perms=PERMS, groups=GROUPS,
+                  role_perms={r.name: (set(PERMS) if r.name == "ADMIN" else parse_perms(r.permissions)) for r in roles},
+                  counts=dict(db.execute(select(User.role, func.count()).group_by(User.role)).all()))
 
 
 @app.post("/users/save")
 def user_save(username: str = Form(...), role: str = Form(...), password: str = Form(""), active: str = Form(""),
-              company_id: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user)
-    if role not in ROLES:
+              company_id: str = Form(""), full_name: str = Form(""), user=Depends(page_user),
+              db: Session = Depends(get_db)):
+    need(user, "users.manage")
+    if not db.scalar(select(Role).where(Role.name == role)):
         return go("/users", err="Unknown role")
-    u = db.scalar(select(User).where(User.username == username.strip()))
+    if role == "ADMIN" and user["role"] != "ADMIN":
+        return go("/users", err="Only an administrator can create administrators")
+    name = username.strip()
+    if len(name) < 3:
+        return go("/users", err="Username needs 3+ characters")
+    u = db.scalar(select(User).where(User.username == name))
     if not u:
         if len(password) < 8:
             return go("/users", err="New users need a password of 8+ characters")
-        u = User(username=username.strip(), password_hash=hash_password(password))
+        u = User(username=name, password_hash=hash_password(password))
         db.add(u)
     elif password:
         if len(password) < 8:
             return go("/users", err="Password must be 8+ characters")
         u.password_hash = hash_password(password)
-    if u.username == user["username"] and (role != "ADMIN" or not active or company_id):
+    if u.role == "ADMIN" and user["role"] != "ADMIN":
         db.rollback()
-        return go("/users", err="You cannot remove your own group-wide admin access")
-    u.role, u.active = role, bool(active)
+        return go("/users", err="Only an administrator can change an administrator")
+    if u.username == user["username"] and (role != user["role"] or not active or company_id):
+        db.rollback()
+        return go("/users", err="You cannot change your own role, company limit or active status")
+    u.role, u.active, u.full_name = role, bool(active), full_name.strip() or u.full_name
     u.company_id = int(company_id) if company_id else None
     audit(db, user, "USER_SAVE", f"{u.username} role={role} company={company_id or 'ALL'} active={bool(active)}"
           + (" password changed" if password else ""), commit=False)
@@ -1270,11 +1528,50 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
     return go("/users", msg=f"User {u.username} saved")
 
 
+@app.post("/roles/save")
+async def role_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "users.manage")
+    f = await request.form()
+    name = str(f.get("name", "")).strip().upper().replace(" ", "_")[:30]
+    if not name or not name.replace("_", "").isalnum():
+        return go("/users", err="Role name: letters, numbers and _ only")
+    if name == "ADMIN":
+        return go("/users", err="ADMIN always has every permission and cannot be changed")
+    chosen = [p for p in PERMS if f.get(f"perm_{p}")]
+    if user["role"] != "ADMIN":
+        extra = [p for p in chosen if p not in user["perms"]]
+        if extra:
+            return go(f"/users?role={name}", err="You cannot give permissions you do not have: " + ", ".join(extra))
+    r = db.scalar(select(Role).where(Role.name == name))
+    if not r:
+        r = Role(name=name, builtin=False)
+        db.add(r)
+    r.label = str(f.get("label", "")).strip()[:120] or name.title()
+    r.permissions = ",".join(chosen)
+    audit(db, user, "ROLE_SAVE", f"{name}: {r.permissions}", commit=False)
+    db.commit()
+    return go(f"/users?role={name}", msg=f"Role {name} saved ({len(chosen)} permissions)")
+
+
+@app.post("/roles/{name}/delete")
+def role_delete(name: str, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "users.manage")
+    r = db.scalar(select(Role).where(Role.name == name))
+    if not r or r.builtin:
+        return go("/users", err="Built-in roles cannot be removed")
+    if db.scalar(select(func.count(User.id)).where(User.role == name)):
+        return go("/users", err="Some users still have this role - give them another role first")
+    audit(db, user, "ROLE_DELETE", name, commit=False)
+    db.delete(r)
+    db.commit()
+    return go("/users", msg=f"Role {name} removed")
+
+
 @app.get("/audit", response_class=HTMLResponse)
 def audit_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user)
-    rows = db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(500)).all()
-    return render(request, "audit.html", user, rows=rows)
+    need(user, "logs.view")
+    r = report_ctx(db, user, "audit", dict(request.query_params))
+    return render(request, "audit.html", user, r=r, q=request.query_params.get("q", ""))
 
 
 # ---------------------------------------------------------------- mobile attendance

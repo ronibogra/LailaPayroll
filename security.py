@@ -4,13 +4,13 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 
 from config import settings
 
 ALGORITHM = "HS256"
 COOKIE = "laila_session"
-ROLES = ("ADMIN", "HR", "ACCOUNTS", "VIEWER")
+MOBILE_ROLE = "EMPLOYEE"
 
 
 def hash_password(password: str) -> str:
@@ -59,25 +59,17 @@ def current_user(request: Request) -> dict:
         data = decode_token(token)
     except Exception:
         raise HTTPException(401, "Session expired - please log in again")
-    if data.get("role") not in ROLES:   # e.g. a mobile EMPLOYEE token
+    if not data.get("role") or data.get("role") == MOBILE_ROLE:   # mobile tokens are not staff logins
         raise HTTPException(401, "Login required")
     return {"username": data["sub"], "role": data["role"]}
 
 
-def require(*roles: str):
-    """Dependency: any logged-in user if no roles given, ADMIN always allowed."""
-    def dep(user: dict = Depends(current_user)) -> dict:
-        if roles and user["role"] != "ADMIN" and user["role"] not in roles:
-            raise HTTPException(403, "You do not have permission for this action")
-        return user
-    return dep
-
-
 def page_user(request: Request) -> dict:
-    """Logged-in staff user, re-checked against the database so a disabled
-    user or a changed role takes effect immediately."""
+    """Logged-in staff user, re-checked against the database so a disabled user or a changed role or
+    permission takes effect immediately. Returns username, role, company_id and the set of permissions."""
     from database import SessionLocal
-    from models import User
+    from models import Role, User
+    from services.permissions import PERMS, parse
     try:
         user = current_user(request)
     except HTTPException:
@@ -85,8 +77,14 @@ def page_user(request: Request) -> dict:
     db = SessionLocal()
     try:
         row = db.query(User).filter(User.username == user["username"]).first()
+        if not row or not row.active:
+            raise LoginRequired()
+        if row.role == "ADMIN":
+            perms = set(PERMS)
+        else:
+            role = db.query(Role).filter(Role.name == row.role).first()
+            perms = parse(role.permissions) if role else set()
+        return {"username": row.username, "role": row.role, "company_id": row.company_id, "perms": perms,
+                "full_name": row.full_name or row.username}
     finally:
         db.close()
-    if not row or not row.active:
-        raise LoginRequired()
-    return {"username": row.username, "role": row.role, "company_id": row.company_id}

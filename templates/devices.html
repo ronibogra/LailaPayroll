@@ -1,8 +1,9 @@
-{% extends "base.html" %}{% block title %}Machines{% endblock %}{% block heading %}Machines ({{ devices|length }}){% endblock %}
+{% extends "base.html" %}{% from "_report.html" import report_bar, report_table, import_box with context %}{% block title %}Machines{% endblock %}{% block heading %}Machines ({{ devices|length }}){% endblock %}
 {% block content %}
 <div class="panel"><form class="inline" method="post" action="/devices/pull-all" style="display:inline-flex">
 <button>Download now from all machines</button></form>
 <a class="btn sec" href="/devices?new=1">+ Add machine</a>
+<div style="margin-top:10px">{{ import_box("machines", "machines") }}</div>
 <span class="hint" style="margin-left:10px">Automatic download: ZKTeco every {{ settings.zk_poll_seconds // 60 }} min, Hikvision every {{ settings.device_poll_seconds }} s. Downloaded punches appear under <a href="/punches">Punch records</a>.</span></div>
 
 {% if show_form %}
@@ -39,17 +40,10 @@ brandChanged();
 </script>
 {% endif %}
 
-<div class="table-wrap"><table><tr><th>No.</th><th>Name</th><th>Type</th><th>IP : port</th><th>Location</th><th>In/Out</th><th>Status</th><th>Last contact</th><th>Last result</th><th class="num">Punches</th><th></th></tr>
-{% for d in devices %}<tr><td>{{ d.machine_no or '' }}</td><td><b>{{ d.name }}</b>{% if d.serial_number %}<div class="hint" style="margin:0">SN {{ d.serial_number }}</div>{% endif %}</td>
-<td>{{ brands.get(d.brand, d.brand) }}</td><td>{{ d.ip_address or '' }}{{ ':' ~ d.port if d.ip_address and d.brand != 'ZKTECO_PUSH' }}</td><td>{{ d.location or '' }}</td><td>{{ d.direction or 'BOTH' }}</td>
-<td>{% if not d.approved %}<span class="tag DRAFT">PENDING</span>{% elif d.enabled %}<span class="tag yes">ACTIVE</span>{% else %}<span class="tag">OFF</span>{% endif %}</td>
-<td>{{ d.last_seen.strftime('%d/%m %H:%M') if d.last_seen else 'never' }}</td>
-<td class="hint" style="white-space:normal;max-width:320px;{{ 'color:#8f1714' if d.last_status and 'ERROR' in d.last_status }}">{{ d.last_status or '' }}</td>
-<td class="num">{{ counts.get(d.id, 0) }}</td>
-<td style="white-space:nowrap"><a href="/devices?edit={{ d.id }}">Edit</a>
+{{ report_bar(r) }}
+{% call(d) report_table(r, empty='No machines yet - click "+ Add machine".') %}<a href="/devices?edit={{ d.id }}">Edit</a>
 <form method="post" action="/devices/{{ d.id }}/test" style="display:inline"><button class="link">Test</button></form>
 {% if d.brand != 'ZKTECO_PUSH' %}<form method="post" action="/devices/{{ d.id }}/pull" style="display:inline"><button class="link">Download</button></form>{% endif %}
-{% if user.role == 'ADMIN' %}<form method="post" action="/devices/{{ d.id }}/delete" style="display:inline" onsubmit="return confirm('Remove this machine? Its punches are kept.')"><button class="link">Remove</button></form>{% endif %}</td></tr>
-{% else %}<tr><td colspan="11" class="hint">No machines yet - click "+ Add machine".</td></tr>{% endfor %}</table></div>
+<form method="post" action="/devices/{{ d.id }}/delete" style="display:inline" onsubmit="return confirm('Remove this machine? Its punches are kept.')"><button class="link">Remove</button></form>{% endcall %}
 <p class="hint">Employees are matched by the user ID enrolled on the machine = <b>Card no.</b> on the employee record (the same person needs the same ID on every machine). Punches of IDs that are not employees yet are still kept and shown under Punch records.</p>
 {% endblock %}

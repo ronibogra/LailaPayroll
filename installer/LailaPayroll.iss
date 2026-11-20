@@ -9,7 +9,7 @@
 ;  4. Opens the first-time setup page in the browser.
 
 #define AppName "LAILA GROUP Attendance & Payroll"
-#define AppVersion "3.1.0"
+#define AppVersion "3.2.0"
 #define AppGuid "6C1E2B7A-4F3D-4E1B-9A57-1A9D2B3C4E5F"
 #define HttpPort "8585"
 #define HttpsPort "8443"

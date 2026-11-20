@@ -29,6 +29,22 @@ def main() -> None:
 
     from config import DATA_DIR, settings
 
+    # a restore chosen on the Backup page is applied here, before the database is opened
+    from services.backup import apply_pending_restore
+    restore_msgs = []
+    apply_pending_restore(restore_msgs.append)
+
+    if os.environ.get("LAILA_WAIT_FOR_PORT"):      # restarted by the program itself: wait for the old copy to exit
+        import socket
+        for _ in range(90):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+                try:
+                    sk.bind(("0.0.0.0", settings.port))
+                    break
+                except OSError:
+                    import time
+                    time.sleep(1)
+
     handler = logging.handlers.RotatingFileHandler(DATA_DIR / "logs" / "server.log", maxBytes=5_000_000,
                                                    backupCount=5, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -36,6 +52,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, handlers=handlers)
     log = logging.getLogger("laila")
     log.info("Starting %s (%s) from %s", settings.app_name, settings.developer_credit, HERE)
+    for m in restore_msgs:
+        log.info(m)
 
     import uvicorn
     from main import app

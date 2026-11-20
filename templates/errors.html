@@ -1,11 +1,11 @@
-{% extends "base.html" %}{% block title %}Error log{% endblock %}{% block heading %}Error log ({{ rows|length }}){% endblock %}
+{% extends "base.html" %}{% from "_report.html" import report_bar, report_table with context %}{% block title %}Error log{% endblock %}{% block heading %}Error log ({{ r.total }}){% endblock %}
 {% block content %}
 <div class="panel"><form class="inline" method="get"><div><label>Type</label><select name="source"><option value="">All</option>{% for s in sources %}<option {{ 'selected' if s == source }}>{{ s }}</option>{% endfor %}</select></div><button class="sec">Show</button>
-{% if user.role == 'ADMIN' %}<a class="btn sec" href="/errors/server.log">Download full server log</a>
+{% if 'logs.view' in user.perms %}<a class="btn sec" href="/errors/server.log">Download full server log</a>
 <form method="post" action="/errors/clear" onsubmit="return confirm('Delete all error log entries?')" style="display:inline"><button class="sec">Clear log</button></form>{% endif %}</form>
 <p class="hint" style="margin-top:8px">Everything that went wrong: machine connections and downloads (MACHINE), file imports (IMPORT), payroll (PAYROLL) and unexpected page errors (PAGE). Click a row with details to open them. Send a screenshot of this page to IT when something does not work.</p></div>
-<div class="table-wrap"><table><tr><th>Time</th><th>Type</th><th>Message</th><th>User</th></tr>
-{% for r in rows %}<tr><td>{{ r.created_at.strftime('%d/%m/%Y %H:%M:%S') }}</td><td><span class="tag {{ 'ABSENT' if r.source in ('PAGE','SYSTEM') else 'DRAFT' }}">{{ r.source }}</span></td>
-<td style="white-space:normal">{{ r.message }}{% if r.detail %}<details><summary class="hint" style="cursor:pointer">details</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:300px;overflow:auto">{{ r.detail }}</pre></details>{% endif %}</td><td>{{ r.username or '' }}</td></tr>
-{% else %}<tr><td colspan="4" class="hint">No errors. 👍</td></tr>{% endfor %}</table></div>
+{{ report_bar(r) }}
+<div class="table-wrap"><table><tr>{% for c in r.cols %}<th>{{ c.label }}</th>{% endfor %}</tr>
+{% for row in r.rows %}<tr>{% for c in r.cols %}<td class="wrap">{% if c.key == 'type' %}<span class="tag {{ 'ABSENT' if row.source in ('PAGE','SYSTEM') else 'DRAFT' }}">{{ row.source }}</span>{% elif c.key == 'message' %}{{ row.message }}{% if row.detail and 'detail' not in r.cols|map(attribute='key')|list %}<details><summary class="hint" style="cursor:pointer">details</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:300px;overflow:auto">{{ row.detail }}</pre></details>{% endif %}{% else %}{{ c.text(row) }}{% endif %}</td>{% endfor %}</tr>
+{% else %}<tr><td colspan="{{ r.cols|length }}" class="hint">No errors.</td></tr>{% endfor %}</table></div>
 {% endblock %}

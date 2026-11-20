@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Restoring…</title><link rel="stylesheet" href="/static/css/style.css">
+<link rel="icon" href="/brand/logo.png"></head>
+<body class="login-page"><div class="login-card"><img src="/brand/logo.png" alt=""><h1>Restoring backup…</h1>
+<p class="hint">{{ name }}<br>The program is restarting with the restored data. This page reloads by itself in about a minute.</p>
+{% if safety %}<p class="hint">Your data from before the restore was saved as <b>{{ safety }}</b>.</p>{% endif %}
+<p id="st" class="hint">waiting…</p></div>
+<script>
+let n = 0;
+async function check(){ n++; try { const r = await fetch('/health', {cache:'no-store'}); if (r.ok && n > 3) { location.href = '/login'; return; } } catch(e) {}
+  document.getElementById('st').textContent = 'waiting… ' + n * 3 + ' s'; setTimeout(check, 3000); }
+setTimeout(check, 3000);
+</script></body></html>

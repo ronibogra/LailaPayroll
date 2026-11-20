@@ -1,0 +1,32 @@
+{% extends "base.html" %}{% block title %}Backup & restore{% endblock %}{% block heading %}Backup &amp; restore{% endblock %}
+{% block content %}
+{% if not sqlite %}<div class="alert info">The program uses SQL Server: back up that database with SQL Server tools. This page still backs up photos, logo and keys.</div>{% endif %}
+<div class="grid2">
+<div class="panel"><h3>Make a backup now</h3>
+<p class="hint">One ZIP file with everything: database (employees, punches, attendance, payroll, users, settings), employee photos, Head Office logo and the security key. Copy it to a USB drive or another PC to keep it safe.</p>
+<form method="post" action="/backup/create"><button>Back up now</button></form></div>
+<div class="panel"><h3>Automatic backup</h3>
+<form method="post" action="/backup/settings"><div class="form-grid">
+<div><label><input type="checkbox" name="auto" value="1" {{ 'checked' if auto == '1' }}> Back up automatically every day</label></div>
+<div><label>At (24h)</label><input name="at" value="{{ at }}" placeholder="02:00"></div>
+<div><label>Keep automatic backups for (days)</label><input name="keep" type="number" min="1" value="{{ keep }}"></div>
+<div style="grid-column:1/-1"><label>Backup folder (blank = {{ data_dir }}\backups). Another disk or a network share like <code>\\NAS\Backups\Payroll</code> is safer.</label>
+<input name="folder" value="{{ custom_dir }}" style="width:100%" placeholder="D:\Backups\LailaPayroll"></div></div>
+<p><button>Save</button> <span class="hint">Last automatic backup: {{ last or 'not yet' }}. Manual and uploaded backups are never deleted automatically.</span></p></form></div>
+</div>
+<div class="panel"><h3>Backups in {{ folder }}</h3>
+<div class="table-wrap"><table><tr><th>File</th><th>Made</th><th>Type</th><th>Head Office</th><th class="num">Employees</th><th class="num">Punches</th><th class="num">Size</th><th></th></tr>
+{% for b in backups %}{% set m = b.manifest %}<tr><td>{{ b.name }}</td><td>{{ b.time.strftime('%d/%m/%Y %H:%M') }}</td>
+<td>{{ m.reason or '' }}{{ ' by ' ~ m.by if m.by and m.by != 'system' }}</td><td>{{ m.head_office or '' }}</td>
+<td class="num">{{ m.counts.employees if m.counts else '' }}</td><td class="num">{{ '{:,}'.format(m.counts.attendance_logs) if m.counts else '' }}</td>
+<td class="num">{{ '%.1f'|format(b.size / 1048576) }} MB</td>
+<td style="white-space:nowrap"><a href="/backup/download/{{ b.name }}">Download</a>
+<details style="display:inline-block"><summary class="link" style="cursor:pointer;color:var(--red)">Restore</summary>
+<form method="post" action="/backup/restore" style="margin-top:6px" onsubmit="return confirm('Replace ALL current data with this backup? The program restarts.')">
+<input type="hidden" name="name" value="{{ b.name }}"><input name="confirm" placeholder="type RESTORE" required style="width:120px"> <button class="red">Restore</button></form></details>
+<form method="post" action="/backup/delete" style="display:inline" onsubmit="return confirm('Delete this backup file?')"><input type="hidden" name="name" value="{{ b.name }}"><button class="link">Delete</button></form></td></tr>
+{% else %}<tr><td colspan="8" class="hint">No backups yet - click "Back up now".</td></tr>{% endfor %}</table></div></div>
+<div class="panel"><h3>Restore from a backup file</h3>
+<p class="hint">Upload a backup ZIP (e.g. from a USB drive or another server). It is checked first, then listed above - click <b>Restore</b> there. Before restoring, the current data is backed up automatically and also kept in a <code>before_restore_…</code> folder, so a restore can always be undone.</p>
+<form class="inline" method="post" action="/backup/upload" enctype="multipart/form-data"><input type="file" name="file" accept=".zip" required><button class="sec">Upload backup</button></form></div>
+{% endblock %}

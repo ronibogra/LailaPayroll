@@ -1,6 +1,15 @@
-{% extends "base.html" %}{% block title %}Settings{% endblock %}{% block heading %}Settings{% endblock %}
+{% extends "base.html" %}{% from "_report.html" import report_bar, report_table, import_box with context %}{% block title %}Settings{% endblock %}{% block heading %}Settings{% endblock %}
 {% block content %}
-{% set admin = user.role == 'ADMIN' %}
+{% set admin = 'company.manage' in user.perms %}
+{% if admin %}<div class="panel"><h3>Head Office</h3>
+<form method="post" action="/settings/headoffice" enctype="multipart/form-data"><div class="profile-head">
+<img src="/brand/logo.png?v={{ brand.logo_version }}" alt="" style="width:110px;height:110px;object-fit:contain;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px">
+<div class="form-grid" style="flex:1"><div><label>Head Office name (shown everywhere)</label><input name="ho_name" value="{{ brand.name }}" required></div>
+<div><label>Address</label><input name="ho_address" value="{{ brand.address }}"></div>
+<div><label>Phone</label><input name="ho_phone" value="{{ brand.phone }}"></div><div><label>Email</label><input name="ho_email" value="{{ brand.email }}"></div>
+<div><label>New logo (PNG with transparent background is best)</label><input type="file" name="logo" accept="image/*"></div>
+<div><label><input type="checkbox" name="reset_logo" value="1"> go back to the LG logo</label></div></div></div>
+<p><button>Save Head Office</button> <span class="hint">The companies below are all under this Head Office.</span></p></form></div>{% endif %}
 <div class="grid2">
 <div class="panel"><h3>Pay policy</h3>
 <form class="inline" method="get" style="margin-bottom:10px"><div><label>Policy for</label><select name="policy_company" onchange="this.form.submit()">
@@ -8,13 +17,13 @@
 {% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == policy_company }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div></form>
 <p class="hint">{% if policy_company %}Values marked <span class="tag DRAFT">own</span> differ from the group default; the rest follow it.{% else %}Applies to every company that has no own value.{% endif %} Confirm with HR / Accounts before paying salaries. Finalized months are not affected.</p>
 <form method="post" action="/settings/policy"><input type="hidden" name="policy_company" value="{{ policy_company }}"><div class="form-grid">
-{% for key, label, value, own in policy %}<div><label>{{ label }} {% if own %}<span class="tag DRAFT">own</span>{% endif %}</label><input name="{{ key }}" value="{{ value }}" {{ 'disabled' if user.role not in ('ADMIN','ACCOUNTS') }}></div>{% endfor %}
-</div>{% if user.role in ('ADMIN','ACCOUNTS') %}<p><button>Save policy</button></p>{% endif %}</form></div>
+{% for key, label, value, own in policy %}<div><label>{{ label }} {% if own %}<span class="tag DRAFT">own</span>{% endif %}</label><input name="{{ key }}" value="{{ value }}" {{ 'disabled' if 'policy.edit' not in user.perms }}></div>{% endfor %}
+</div>{% if 'policy.edit' in user.perms %}<p><button>Save policy</button></p>{% endif %}</form></div>
 <div class="panel"><h3>Holidays (all companies)</h3>
-{% if user.role in ('ADMIN','HR') %}<form class="inline" method="post" action="/settings/holidays"><div><label>Date</label><input type="date" name="day" required></div><div><label>Name</label><input name="name" required></div><button>Add</button></form>{% endif %}
-<div class="table-wrap" style="margin-top:12px;max-height:380px"><table><tr><th>Date</th><th>Name</th><th></th></tr>
-{% for h in holidays %}<tr><td>{{ h.day.strftime('%a %d %b %Y') }}</td><td>{{ h.name }}</td><td>{% if user.role in ('ADMIN','HR') %}<form method="post" action="/settings/holidays/{{ h.id }}/delete"><button class="link">remove</button></form>{% endif %}</td></tr>
-{% else %}<tr><td colspan="3" class="hint">No holidays entered.</td></tr>{% endfor %}</table></div></div>
+{% if 'holidays.manage' in user.perms %}<form class="inline" method="post" action="/settings/holidays"><div><label>Date</label><input type="date" name="day" required></div><div><label>Name</label><input name="name" required></div><button>Add</button></form>{% endif %}
+<div style="margin-top:10px">{{ import_box("holidays", "holidays") }}</div>
+<div style="margin-top:12px">{{ report_bar(r) }}</div>
+{% call(h) report_table(r, empty='No holidays entered.') %}{% if 'holidays.manage' in user.perms %}<form method="post" action="/settings/holidays/{{ h.id }}/delete"><button class="link">remove</button></form>{% endif %}{% endcall %}</div>
 </div>
 {% if admin %}
 <div class="grid2">
@@ -25,7 +34,8 @@
 <div><label>Edit existing (or leave for new)</label><select name="company_id"><option value="">+ New company</option>{% for c in all_companies %}<option value="{{ c.id }}">{{ c.code }}</option>{% endfor %}</select></div>
 <div><label>Code</label><input name="code" required maxlength="20"></div><div><label>Name</label><input name="name" required></div>
 <div><label>Address</label><input name="address"></div><div><label><input type="checkbox" name="active" value="1" checked> Active</label></div></div>
-<p><button>Save company</button></p></form></div>
+<p><button>Save company</button></p></form>
+{{ import_box("companies", "companies") }}</div>
 <div class="panel"><h3>Weekly off day &amp; office location</h3>
 <form method="post" action="/settings/general">
 {% for n in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<label style="display:inline-block;margin-right:12px;color:inherit"><input type="checkbox" name="wd{{ loop.index0 }}" value="1" {{ 'checked' if loop.index0 in weekend }}> {{ n }}</label>{% endfor %}
@@ -34,6 +44,6 @@
 <p><button>Save</button></p></form>
 <h3 style="margin-top:18px">Data &amp; backup</h3>
 <p class="hint">Database: {{ db_kind }} · Data folder: <b>{{ data_dir }}</b><br>A backup is made automatically every day (kept {{ settings.backup_keep_days }} days) in the backups folder.</p>
-<form method="post" action="/settings/backup"><button class="sec">Back up now</button></form></div>
+<a class="btn sec" href="/backup">Backup &amp; restore</a></div>
 </div>{% endif %}
 {% endblock %}

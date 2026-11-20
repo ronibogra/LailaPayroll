@@ -1,12 +1,30 @@
-{% extends "base.html" %}{% block title %}Users{% endblock %}{% block heading %}Users{% endblock %}
+{% extends "base.html" %}{% block title %}Users & roles{% endblock %}{% block heading %}Users &amp; roles{% endblock %}
 {% block content %}
-<div class="panel"><h3>Add or update user</h3>
+<div class="grid2">
+<div class="panel"><h3>Add or change a user</h3>
 <form method="post" action="/users/save"><div class="form-grid"><div><label>Username</label><input name="username" required></div>
-<div><label>Role</label><select name="role">{% for r in roles %}<option>{{ r }}</option>{% endfor %}</select></div>
-<div><label>Company access</label><select name="company_id"><option value="">All companies</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }} only</option>{% endfor %}</select></div>
+<div><label>Full name</label><input name="full_name"></div>
+<div><label>Role</label><select name="role">{% for r in roles %}<option value="{{ r.name }}">{{ r.name }} - {{ r.label }}</option>{% endfor %}</select></div>
+<div><label>Company access</label><select name="company_id"><option value="">All companies (Head Office)</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }} only</option>{% endfor %}</select></div>
 <div><label>Password (8+ chars; blank keeps current)</label><input name="password" type="password" autocomplete="new-password"></div>
 <div><label><input type="checkbox" name="active" value="1" checked> Active</label></div></div><p><button>Save user</button></p></form>
-<p class="hint">ADMIN: everything · HR: employees, attendance, leave, shifts, draft payroll · ACCOUNTS: payroll, finalize, pay policy · VIEWER: attendance only, no salaries. A user limited to one company sees only that company's staff and payroll.</p></div>
-<div class="table-wrap"><table><tr><th>Username</th><th>Role</th><th>Company access</th><th>Active</th></tr>
-{% for u in users %}<tr><td>{{ u.username }}</td><td>{{ u.role }}</td><td>{% for c in companies if c.id == u.company_id %}{{ c.code }} only{% else %}All{% endfor %}</td><td>{{ 'yes' if u.active else 'no' }}</td></tr>{% endfor %}</table></div>
+<p class="hint">To change an existing user, type their username and choose the new role / company / password. A user limited to one company only sees that company's staff, punches and payroll.</p></div>
+<div class="panel"><h3>{{ 'Edit role ' ~ edit_role.name if edit_role else 'New role' }}</h3>
+<form method="post" action="/roles/save">
+<div class="form-grid"><div><label>Role name (e.g. HR_LAUNDRY)</label><input name="name" required value="{{ edit_role.name if edit_role else '' }}" {{ 'readonly' if edit_role }}></div>
+<div><label>Description</label><input name="label" value="{{ edit_role.label if edit_role else '' }}"></div></div>
+{% set have = role_perms.get(edit_role.name, []) if edit_role else [] %}
+{% for gname, plist in groups %}<div style="margin-top:10px"><b style="font-size:13px">{{ gname }}</b><br>
+{% for p in plist %}<label style="display:inline-block;margin:3px 14px 3px 0;color:inherit;font-size:13px"><input type="checkbox" name="perm_{{ p }}" value="1" {{ 'checked' if p in have }}> {{ perms[p] }}</label>{% endfor %}</div>{% endfor %}
+<p><button>Save role</button>{% if edit_role %} <a class="btn sec" href="/users">New role</a>{% endif %}</p></form></div>
+</div>
+<div class="grid2">
+<div class="panel"><h3>Roles</h3><div class="table-wrap"><table><tr><th>Role</th><th>Description</th><th class="num">Users</th><th class="num">Permissions</th><th></th></tr>
+{% for r in roles %}<tr><td><b>{{ r.name }}</b>{% if r.builtin %} <span class="tag">built-in</span>{% endif %}</td><td>{{ r.label }}</td><td class="num">{{ counts.get(r.name, 0) }}</td>
+<td class="num">{{ role_perms[r.name]|length }} / {{ perms|length }}</td>
+<td>{% if r.name != 'ADMIN' %}<a href="/users?role={{ r.name }}">Edit</a>{% endif %}
+{% if not r.builtin %}<form method="post" action="/roles/{{ r.name }}/delete" style="display:inline" onsubmit="return confirm('Remove role {{ r.name }}?')"><button class="link">Remove</button></form>{% endif %}</td></tr>{% endfor %}</table></div></div>
+<div class="panel"><h3>Users</h3><div class="table-wrap"><table><tr><th>Username</th><th>Name</th><th>Role</th><th>Company access</th><th>Active</th></tr>
+{% for u in users %}<tr><td>{{ u.username }}</td><td>{{ u.full_name or '' }}</td><td>{{ u.role }}</td><td>{% for c in companies if c.id == u.company_id %}{{ c.code }} only{% else %}All{% endfor %}</td><td>{{ 'yes' if u.active else 'no' }}</td></tr>{% endfor %}</table></div></div>
+</div>
 {% endblock %}

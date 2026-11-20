@@ -1,10 +1,8 @@
-{% extends "base.html" %}{% block title %}Shifts{% endblock %}{% block heading %}Shifts{% endblock %}
+{% extends "base.html" %}{% from "_report.html" import report_bar, report_table, import_box with context %}{% block title %}Shifts{% endblock %}{% block heading %}Shifts{% endblock %}
 {% block content %}
-<div class="table-wrap" style="margin-bottom:16px"><table><tr><th>Code</th><th>Name</th><th>Start</th><th>End</th><th class="num">Grace</th><th class="num">Break</th><th class="num">OT block</th><th class="num">Daily OT cap</th><th>Off-day work = OT</th><th class="num">Employees</th><th></th></tr>
-{% for s in shifts %}<tr><td><b>{{ s.code }}</b></td><td>{{ s.name }}</td><td>{{ s.start.strftime('%H:%M') }}</td><td>{{ s.end.strftime('%H:%M') }}{{ ' (+1 day)' if s.end <= s.start }}</td>
-<td class="num">{{ s.grace_minutes }} m</td><td class="num">{{ s.break_minutes }} m</td><td class="num">{{ s.ot_round_minutes }} m</td><td class="num">{{ s.max_ot_minutes }} m</td>
-<td>{{ 'yes' if s.offday_work_is_ot else 'no' }}</td><td class="num">{{ used.get(s.id, 0) }}</td><td>{% if user.role in ('ADMIN','HR') %}<a href="/shifts?edit={{ s.id }}">Edit</a>{% endif %}</td></tr>{% endfor %}</table></div>
-{% if user.role in ('ADMIN','HR') %}
+{{ report_bar(r) }}
+{% call(sh) report_table(r) %}{% if 'shifts.manage' in user.perms %}<a href="/shifts?edit={{ sh.id }}">Edit</a>{% endif %}{% endcall %}<div style="margin-bottom:16px"></div>
+{% if 'shifts.manage' in user.perms %}
 <div class="grid2">
 <div class="panel"><h3>{{ 'Edit shift ' ~ e.code if e else 'Add shift' }}</h3>
 <form method="post" action="/shifts/save"><input type="hidden" name="shift_id" value="{{ e.id if e else '' }}"><div class="form-grid">
@@ -25,6 +23,7 @@
 <label style="margin-top:10px">Employee codes</label><textarea name="employee_codes" rows="5" style="width:100%"></textarea>
 <label style="margin-top:10px">Department (exact name)</label><input name="department" style="width:100%">
 <label style="margin-top:10px">Or a whole company</label><select name="company_id" style="width:100%"><option value="">-</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }} - {{ c.name }}</option>{% endfor %}</select>
-<p><button>Assign</button></p></form><p class="hint">After changing shifts, process the month again on the Daily attendance page.</p></div>
+<p><button>Assign</button></p></form><p class="hint">After changing shifts, process the month again on the Daily attendance page.</p>
+{{ import_box("shifts", "shifts") }}</div>
 </div>{% endif %}
 {% endblock %}

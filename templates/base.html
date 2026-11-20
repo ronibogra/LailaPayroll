@@ -2,40 +2,40 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}{% endblock %} · {{ settings.group_name }}</title>
-<link rel="icon" href="/static/img/favicon.png"><link rel="stylesheet" href="/static/css/style.css">
+<title>{% block title %}{% endblock %} · {{ brand.name }}</title>
+<link rel="icon" href="/brand/logo.png?v={{ brand.logo_version }}"><link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 {% set path = request.url.path %}
-{% set r = user.role %}
+{% set pm = user.perms %}
 <aside class="sidebar">
-  <div class="brand"><img src="/static/img/lg-logo.png" alt="LG"><div><b>{{ settings.group_name }}</b><small>Attendance &amp; Payroll</small></div></div>
-  <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
-  <div class="nav-label">PUNCH</div>
-  <a href="/punches" class="{{ 'active' if path == '/punches' }}">Punch records</a>
-  <a href="/punches/first-last" class="{{ 'active' if path.startswith('/punches/first-last') }}">First &amp; last punch</a>
-  {% if r in ('ADMIN','HR') %}<a href="/devices" class="{{ 'active' if path.startswith('/devices') }}">Machines</a>{% endif %}
-  <div class="nav-label">ATTENDANCE</div>
+  <div class="brand"><img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><div><b>{{ brand.name }}</b><small>Attendance &amp; Payroll</small></div></div>
+  {% if 'dashboard.view' in pm %}<a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>{% endif %}
+  {% if 'punches.view' in pm or 'machines.manage' in pm %}<div class="nav-label">PUNCH</div>{% endif %}
+  {% if 'punches.view' in pm %}<a href="/punches" class="{{ 'active' if path == '/punches' }}">Punch records</a>
+  <a href="/punches/first-last" class="{{ 'active' if path.startswith('/punches/first-last') }}">First &amp; last punch</a>{% endif %}
+  {% if 'machines.manage' in pm %}<a href="/devices" class="{{ 'active' if path.startswith('/devices') }}">Machines</a>{% endif %}
+  {% if 'attendance.view' in pm %}<div class="nav-label">ATTENDANCE</div>
   <a href="/attendance" class="{{ 'active' if path == '/attendance' }}">Daily attendance</a>
   <a href="/leaves" class="{{ 'active' if path.startswith('/leaves') }}">Leave</a>
-  <a href="/shifts" class="{{ 'active' if path.startswith('/shifts') }}">Shifts</a>
+  <a href="/shifts" class="{{ 'active' if path.startswith('/shifts') }}">Shifts</a>{% endif %}
   <div class="nav-label">PEOPLE &amp; PAY</div>
-  <a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>
-  {% if r in ('ADMIN','HR','ACCOUNTS') %}<a href="/payroll" class="{{ 'active' if path.startswith('/payroll') }}">Payroll</a>{% endif %}
+  {% if 'employees.view' in pm %}<a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>{% endif %}
+  {% if 'payroll.view' in pm %}<a href="/payroll" class="{{ 'active' if path.startswith('/payroll') }}">Payroll</a>{% endif %}
   <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
-  {% if r in ('ADMIN','HR') %}<div class="nav-label">ADMIN</div>
-  <a href="/errors" class="{{ 'active' if path.startswith('/errors') }}">Error log</a>{% endif %}
-  {% if r == 'ADMIN' %}
-  <a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users</a>
+  {% if 'logs.view' in pm or 'users.manage' in pm or 'backup.manage' in pm %}<div class="nav-label">ADMIN</div>{% endif %}
+  {% if 'users.manage' in pm %}<a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users &amp; roles</a>{% endif %}
+  {% if 'backup.manage' in pm %}<a href="/backup" class="{{ 'active' if path.startswith('/backup') }}">Backup &amp; restore</a>{% endif %}
+  {% if 'logs.view' in pm %}<a href="/errors" class="{{ 'active' if path.startswith('/errors') }}">Error log</a>
   <a href="/audit" class="{{ 'active' if path.startswith('/audit') }}">Activity log</a>{% endif %}
   <div class="side-foot">{{ settings.developer_credit }}</div>
 </aside>
 <main class="main">
   <div class="topbar"><h1>{% block heading %}{% endblock %}</h1>
-    <div class="who">{{ user.username }} ({{ user.role }}) · <a href="/logout">Log out</a></div></div>
+    <div class="who">{{ user.full_name }} ({{ user.role }}) · <a href="/logout">Log out</a></div></div>
   {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
   {% if err %}<div class="alert err">{{ err }}</div>{% endif %}
   {% block content %}{% endblock %}
-  <footer>{{ settings.group_name }} · {{ settings.developer_credit }}</footer>
+  <footer>{{ brand.name }} · {{ settings.developer_credit }}</footer>
 </main>
 </body></html>

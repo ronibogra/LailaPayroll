@@ -136,8 +136,6 @@ def test_net_never_negative():
 
 # ---------- machine protocols ----------
 def test_zk_attlog_push_and_usb():
-    import sys, types
-    sys.modules.setdefault("config", types.SimpleNamespace(settings=types.SimpleNamespace(timezone_offset_hours=6)))
     from integration.zk_adms import parse_attlog, options_response
     body = "1001\t2026-11-20 08:01:02\t0\t15\t0\t0\t0\r\n1002\t2026-11-20 08:03:10\t0\t15\r\n\r\nbad line\n"
     p, bad = parse_attlog(body)
@@ -149,8 +147,6 @@ def test_zk_attlog_push_and_usb():
 
 
 def test_hikvision_events():
-    import sys, types
-    sys.modules.setdefault("config", types.SimpleNamespace(settings=types.SimpleNamespace(timezone_offset_hours=6)))
     from integration.hikvision import parse_events, build_query, to_local
     payload = {"AcsEvent": {"searchID": "x", "responseStatusStrg": "MORE", "numOfMatches": 3, "totalMatches": 40,
                "InfoList": [
@@ -178,8 +174,6 @@ def _xlsx(rows):
 
 
 def test_punch_import_formats():
-    import sys, types
-    sys.modules.setdefault("config", types.SimpleNamespace(settings=types.SimpleNamespace(timezone_offset_hours=6)))
     from integration.punch_import import read_punch_file, ImportProblem
     # ZKTeco style export: AC-No, Date + Time separate, In/Out text
     rows, err = read_punch_file("x.csv", b"AC-No.,Name,Date,Time,State\n12127,Rahim,20/11/2026,08:01,C/In\n12160,Karim,2026-11-20,6:05 PM,C/Out\n")

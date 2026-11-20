@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% block title %}Punch records{% endblock %}{% block heading %}Punch records ({{ '{:,}'.format(total) }}){% endblock %}
+{% extends "base.html" %}{% from "_report.html" import report_bar, report_table with context %}{% block title %}Punch records{% endblock %}{% block heading %}Punch records ({{ '{:,}'.format(r.total) }}){% endblock %}
 {% block content %}
 <div class="panel"><form class="inline" method="get">
 <div><label>From</label><input type="date" name="start" value="{{ start }}"></div>
@@ -8,26 +8,21 @@
 <div><label>Machine</label><select name="machine"><option value="">All</option>{% for m in machines %}<option value="{{ m.id }}" {{ 'selected' if machine == m.id|string }}>{{ m.name }}</option>{% endfor %}</select></div>
 <div><label>Source</label><select name="source"><option value="">All</option>{% for s in ('ZKTECO','HIKVISION','FILE','USB','MANUAL','MOBILE') %}<option {{ 'selected' if s == source }}>{{ s }}</option>{% endfor %}</select></div>
 <div><label><input type="checkbox" name="unknown" value="1" {{ 'checked' if unknown }}> only IDs that are not employees</label></div>
-<button class="sec">Show</button><a class="btn sec" href="/punches.xlsx?{{ qs }}">Excel</a>
-<a class="btn" href="/punches/first-last?{{ qs }}">First &amp; last punch</a></form></div>
-{% if user.role in ('ADMIN','HR') %}
+<button class="sec">Show</button>
+<a class="btn" href="/punches/first-last?{{ request.url.query }}">First &amp; last punch</a></form></div>
+{% if 'punches.edit' in user.perms %}
 <div class="grid2">
 <div class="panel"><h3>Download from machines</h3><p class="hint">Gets new punches from every active machine now (it also runs automatically).</p>
 <form method="post" action="/punches/download"><button>Download now</button> <a class="btn sec" href="/devices">Machines</a></form></div>
-<div class="panel"><h3>Import a punch file</h3><p class="hint">Excel (.xlsx), CSV, or ZKTeco USB file (attlog.dat). Columns are recognised by name (e.g. AC-No / Employee ID / User ID + Date &amp; Time or Punch Time). Punches already stored are skipped.</p>
+<div class="panel"><h3>Import a punch file</h3><p class="hint">Excel (.xlsx), CSV, or ZKTeco USB file (attlog.dat). <a href="/templates/punches.xlsx">Template</a>. Columns are recognised by name (e.g. AC-No / Employee ID / User ID + Date &amp; Time or Punch Time). Punches already stored are skipped.</p>
 <form class="inline" method="post" action="/punches/import" enctype="multipart/form-data"><input type="file" name="file" accept=".xlsx,.csv,.dat,.txt" required><button class="sec">Import</button></form></div>
 </div>
 <div class="panel"><h3>Manual punch</h3>
 <form class="inline" method="post" action="/attendance/manual"><div><label>Card no. or employee code</label><input name="card_no" required></div>
 <div><label>Date &amp; time</label><input type="datetime-local" name="punch_time" required></div><div><label>Reason</label><input name="reason" required style="width:260px"></div><button class="sec">Add punch</button></form></div>
 {% endif %}
-<div class="table-wrap"><table><tr><th>Card / ID</th><th>Employee</th><th>Company</th><th>Date</th><th>Time</th><th>Machine</th><th>In/Out</th><th>Source</th><th>Note</th></tr>
-{% for p in rows %}{% set e = emps.get(p.card_no) %}<tr>
-<td>{{ p.card_no }}</td><td>{% if e %}<a href="/employees/{{ e.id }}">{{ e.full_name }}</a> <span class="hint">{{ e.employee_code }}</span>{% else %}<span class="tag DRAFT">not an employee</span>{% endif %}</td>
-<td>{{ e.company.code if e and e.company }}</td><td>{{ p.punch_time.strftime('%d/%m/%Y') }}</td><td><b>{{ p.punch_time.strftime('%H:%M:%S') }}</b></td>
-<td>{{ p.device or '' }}</td><td>{{ p.direction or '' }}</td><td><span class="tag">{{ p.source }}</span></td>
-<td class="hint">{% if p.latitude %}<a href="https://maps.google.com/?q={{ p.latitude }},{{ p.longitude }}" target="_blank" rel="noopener">map</a> {% endif %}{{ p.note or '' }}</td></tr>
-{% else %}<tr><td colspan="9" class="hint">No punches for these filters.</td></tr>{% endfor %}</table></div>
-{% if pages > 1 %}<div class="pager">{% if page > 1 %}<a class="btn sec" href="?{{ qs|replace('page=' ~ page, '') }}&page={{ page-1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }}</span>
-{% if page < pages %}<a class="btn sec" href="?{{ qs|replace('page=' ~ page, '') }}&page={{ page+1 }}">Next ›</a>{% endif %}</div>{% endif %}
+{{ report_bar(r) }}
+{{ report_table(r, empty='No punches for these filters.') }}
+{% if pages > 1 %}<div class="pager">{% set base = request.url.query|replace('page=' ~ page, '') %}{% if page > 1 %}<a class="btn sec" href="?{{ base }}&page={{ page-1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }}</span>
+{% if page < pages %}<a class="btn sec" href="?{{ base }}&page={{ page+1 }}">Next ›</a>{% endif %}</div>{% endif %}
 {% endblock %}
