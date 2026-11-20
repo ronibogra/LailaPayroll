@@ -292,15 +292,15 @@ def main():
             "gross": "12500", "auto_split": "1", "payment_mode": "BANK", "employment_status": "ACTIVE",
             "allow_mobile": "1", "mobile_pin": "4321"}
     post(s, "/employees/save", form, files={"_": ("", b"")}, must="Saved HO-0001")
-    m = requests.Session()
-    r = m.get(HTTPS + "/m", verify=False, timeout=30)
+    mob = requests.Session()
+    r = mob.get(HTTPS + "/m", verify=False, timeout=30)
     ok(r.ok and "Employee ID" in r.text, f"mobile page: {r.status_code}")
-    r = m.post(HTTPS + "/m/login", data={"employee_code": "HO-0001", "pin": "4321"}, verify=False, timeout=30)
+    r = mob.post(HTTPS + "/m/login", data={"employee_code": "HO-0001", "pin": "4321"}, verify=False, timeout=30)
     ok("PUNCH" in r.text, "mobile login failed")
-    r = m.post(HTTPS + "/m/punch", data={"latitude": "23.8001", "longitude": "90.4001", "accuracy": "15"},
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.8001", "longitude": "90.4001", "accuracy": "15"},
                verify=False, timeout=30)
     ok(r.json().get("ok"), f"mobile punch inside office: {r.text}")
-    r = m.post(HTTPS + "/m/punch", data={"latitude": "23.90", "longitude": "90.40", "accuracy": "15"},
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.90", "longitude": "90.40", "accuracy": "15"},
                verify=False, timeout=30)
     ok(not r.json().get("ok"), "punch far away must be refused")
 
