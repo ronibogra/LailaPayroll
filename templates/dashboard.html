@@ -8,8 +8,8 @@
   <div class="metric"><span>On leave</span><strong>{{ total.leave }}</strong></div>
   <div class="metric"><span>Punches received today</span><strong>{{ punches_today }}</strong></div>
 </div>
-{% if pending and user.role in ('ADMIN','HR') %}<div class="alert err">{{ pending }} punch machine(s) are waiting for approval. <a href="/devices">Open Punch machines</a></div>{% endif %}
-{% if not processed and total.active %}<div class="alert err">Today's attendance hasn't been processed yet, so the counts above are zero. Click <b>Process month</b> on the Daily attendance page.</div>{% endif %}
+{% if pending and user.role in ('ADMIN','HR') %}<div class="alert info">{{ pending }} punch machine(s) are waiting for approval. <a href="/devices">Open Punch machines</a></div>{% endif %}
+{% if not processed and total.active %}<div class="alert info">Today's attendance hasn't been processed yet, so the counts above are zero. Click <b>Process month</b> on the Daily attendance page.</div>{% endif %}
 {% if not total.active %}<div class="panel"><h3>Getting started</h3><ol class="hint" style="font-size:13px;line-height:1.9;margin:0;padding-left:18px">
 <li><a href="/devices">Connect the punch machines</a> (ZKTeco: set the server address on the machine; Hikvision: add by IP).</li>
 <li><a href="/settings">Check companies, holidays and the pay policy.</a></li><li><a href="/shifts">Create the shifts.</a></li>
