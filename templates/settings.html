@@ -1,0 +1,39 @@
+{% extends "base.html" %}{% block title %}Settings{% endblock %}{% block heading %}Settings{% endblock %}
+{% block content %}
+{% set admin = user.role == 'ADMIN' %}
+<div class="grid2">
+<div class="panel"><h3>Pay policy</h3>
+<form class="inline" method="get" style="margin-bottom:10px"><div><label>Policy for</label><select name="policy_company" onchange="this.form.submit()">
+{% if not user.company_id %}<option value="0">Group default (all companies)</option>{% endif %}
+{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == policy_company }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div></form>
+<p class="hint">{% if policy_company %}Values marked <span class="tag DRAFT">own</span> differ from the group default; the rest follow it.{% else %}Applies to every company that has no own value.{% endif %} Confirm with HR / Accounts before paying salaries. Finalized months are not affected.</p>
+<form method="post" action="/settings/policy"><input type="hidden" name="policy_company" value="{{ policy_company }}"><div class="form-grid">
+{% for key, label, value, own in policy %}<div><label>{{ label }} {% if own %}<span class="tag DRAFT">own</span>{% endif %}</label><input name="{{ key }}" value="{{ value }}" {{ 'disabled' if user.role not in ('ADMIN','ACCOUNTS') }}></div>{% endfor %}
+</div>{% if user.role in ('ADMIN','ACCOUNTS') %}<p><button>Save policy</button></p>{% endif %}</form></div>
+<div class="panel"><h3>Holidays (all companies)</h3>
+{% if user.role in ('ADMIN','HR') %}<form class="inline" method="post" action="/settings/holidays"><div><label>Date</label><input type="date" name="day" required></div><div><label>Name</label><input name="name" required></div><button>Add</button></form>{% endif %}
+<div class="table-wrap" style="margin-top:12px;max-height:380px"><table><tr><th>Date</th><th>Name</th><th></th></tr>
+{% for h in holidays %}<tr><td>{{ h.day.strftime('%a %d %b %Y') }}</td><td>{{ h.name }}</td><td>{% if user.role in ('ADMIN','HR') %}<form method="post" action="/settings/holidays/{{ h.id }}/delete"><button class="link">remove</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="3" class="hint">No holidays entered.</td></tr>{% endfor %}</table></div></div>
+</div>
+{% if admin %}
+<div class="grid2">
+<div class="panel"><h3>Companies</h3>
+<div class="table-wrap"><table><tr><th>Code</th><th>Name</th><th>Address (on payslips)</th><th>Active</th></tr>
+{% for c in all_companies %}<tr><td><b>{{ c.code }}</b></td><td>{{ c.name }}</td><td>{{ c.address or '' }}</td><td>{{ 'yes' if c.active else 'no' }}</td></tr>{% endfor %}</table></div>
+<form method="post" action="/settings/companies" style="margin-top:12px"><div class="form-grid">
+<div><label>Edit existing (or leave for new)</label><select name="company_id"><option value="">+ New company</option>{% for c in all_companies %}<option value="{{ c.id }}">{{ c.code }}</option>{% endfor %}</select></div>
+<div><label>Code</label><input name="code" required maxlength="20"></div><div><label>Name</label><input name="name" required></div>
+<div><label>Address</label><input name="address"></div><div><label><input type="checkbox" name="active" value="1" checked> Active</label></div></div>
+<p><button>Save company</button></p></form></div>
+<div class="panel"><h3>Weekly off day &amp; office location</h3>
+<form method="post" action="/settings/general">
+{% for n in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<label style="display:inline-block;margin-right:12px;color:inherit"><input type="checkbox" name="wd{{ loop.index0 }}" value="1" {{ 'checked' if loop.index0 in weekend }}> {{ n }}</label>{% endfor %}
+<div class="form-grid" style="margin-top:12px"><div><label>Office latitude</label><input name="geofence_lat" value="{{ lat }}"></div>
+<div><label>Office longitude</label><input name="geofence_lon" value="{{ lon }}"></div><div><label>Mobile punch radius (m)</label><input name="geofence_radius_m" value="{{ radius }}"></div></div>
+<p><button>Save</button></p></form>
+<h3 style="margin-top:18px">Data &amp; backup</h3>
+<p class="hint">Database: {{ db_kind }} · Data folder: <b>{{ data_dir }}</b><br>A backup is made automatically every day (kept {{ settings.backup_keep_days }} days) in the backups folder.</p>
+<form method="post" action="/settings/backup"><button class="sec">Back up now</button></form></div>
+</div>{% endif %}
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block title %}Users{% endblock %}{% block heading %}Users{% endblock %}
+{% block content %}
+<div class="panel"><h3>Add or update user</h3>
+<form method="post" action="/users/save"><div class="form-grid"><div><label>Username</label><input name="username" required></div>
+<div><label>Role</label><select name="role">{% for r in roles %}<option>{{ r }}</option>{% endfor %}</select></div>
+<div><label>Company access</label><select name="company_id"><option value="">All companies</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }} only</option>{% endfor %}</select></div>
+<div><label>Password (8+ chars; blank keeps current)</label><input name="password" type="password" autocomplete="new-password"></div>
+<div><label><input type="checkbox" name="active" value="1" checked> Active</label></div></div><p><button>Save user</button></p></form>
+<p class="hint">ADMIN: everything · HR: employees, attendance, leave, shifts, draft payroll · ACCOUNTS: payroll, finalize, pay policy · VIEWER: attendance only, no salaries. A user limited to one company sees only that company's staff and payroll.</p></div>
+<div class="table-wrap"><table><tr><th>Username</th><th>Role</th><th>Company access</th><th>Active</th></tr>
+{% for u in users %}<tr><td>{{ u.username }}</td><td>{{ u.role }}</td><td>{% for c in companies if c.id == u.company_id %}{{ c.code }} only{% else %}All{% endfor %}</td><td>{{ 'yes' if u.active else 'no' }}</td></tr>{% endfor %}</table></div>
+{% endblock %}

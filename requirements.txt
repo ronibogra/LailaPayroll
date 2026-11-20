@@ -1,0 +1,12 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+SQLAlchemy>=2.0,<3
+pydantic-settings>=2.5,<3
+python-multipart>=0.0.9
+jinja2>=3.1,<4
+PyJWT>=2.9,<3
+openpyxl>=3.1,<4
+reportlab>=4.0,<5
+cryptography>=42
+tzdata
+pyodbc>=5.1    # only used if you switch to SQL Server

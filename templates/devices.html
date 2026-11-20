@@ -1,0 +1,41 @@
+{% extends "base.html" %}{% block title %}Punch machines{% endblock %}{% block heading %}Punch machines{% endblock %}
+{% block content %}
+<div class="grid2">
+<div class="panel"><h3>ZKTeco (SpeedFace etc.) - machine sends punches to this server</h3>
+<ol class="hint" style="font-size:13px;line-height:1.8;padding-left:18px;margin:0">
+<li>On the machine: <b>Menu › COMM › Cloud Server Setting</b></li>
+<li>Server address: <b>{{ ips[0] }}</b> &nbsp; Port: <b>{{ settings.port }}</b> &nbsp; HTTPS / Proxy: <b>off</b></li>
+<li>Within a minute the machine appears below as <span class="tag DRAFT">PENDING</span>. Click Edit, name it, tick <b>Approved</b>.</li>
+<li>Its stored punches upload automatically, and new punches arrive in real time.</li></ol>
+<p class="hint">Server address(es): {% for ip in ips %}{{ ip }} {% endfor %}. Machines that are not approved are ignored.</p></div>
+<div class="panel"><h3>Hikvision (DS-K1T...) - server reads punches every {{ settings.device_poll_seconds }} s</h3>
+<ol class="hint" style="font-size:13px;line-height:1.8;padding-left:18px;margin:0">
+<li>On the machine/web page: enable <b>ISAPI</b> (Network › Advanced › Integration Protocol).</li>
+<li>Add it with the form below: IP, port 80, admin username and password, tick Approved.</li>
+<li>Click <b>Test</b>, then <b>Pull</b> to read past punches (up to 180 days).</li></ol></div>
+</div>
+<div class="table-wrap" style="margin-bottom:16px"><table><tr><th>Name</th><th>Brand</th><th>Serial no.</th><th>IP</th><th>Location</th><th>Status</th><th>Last contact</th><th>Last result</th><th></th></tr>
+{% for d in devices %}<tr><td><b>{{ d.name }}</b></td><td>{{ d.brand }}</td><td>{{ d.serial_number or '' }}</td><td>{{ d.ip_address or '' }}{{ ':' ~ d.port if d.brand == 'HIKVISION' }}</td><td>{{ d.location or '' }}</td>
+<td>{% if not d.approved %}<span class="tag DRAFT">PENDING</span>{% elif d.enabled %}<span class="tag yes">ACTIVE</span>{% else %}<span class="tag">DISABLED</span>{% endif %}</td>
+<td>{{ d.last_seen.strftime('%d/%m %H:%M') if d.last_seen else 'never' }}</td><td class="hint" style="white-space:normal">{{ d.last_status or '' }}</td>
+<td style="white-space:nowrap"><a href="/devices?edit={{ d.id }}">Edit</a>
+{% if d.brand == 'HIKVISION' %}
+<form method="post" action="/devices/{{ d.id }}/test" style="display:inline"><button class="link">Test</button></form>
+<form method="post" action="/devices/{{ d.id }}/pull" style="display:inline"><input type="hidden" name="days_back" value="31"><button class="link">Pull 31 days</button></form>{% endif %}
+{% if user.role == 'ADMIN' %}<form method="post" action="/devices/{{ d.id }}/delete" style="display:inline" onsubmit="return confirm('Remove this machine? Its punches are kept.')"><button class="link">Remove</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="9" class="hint">No machines yet. Set up the ZKTeco machines as shown above, or add a Hikvision machine below.</td></tr>{% endfor %}</table></div>
+<div class="panel"><h3>{{ 'Edit ' ~ e.name if e else 'Add machine' }}</h3>
+<form method="post" action="/devices/save"><input type="hidden" name="device_id" value="{{ e.id if e else '' }}"><div class="form-grid">
+<div><label>Name</label><input name="name" required value="{{ e.name if e else '' }}" placeholder="Gate-1 Face"></div>
+<div><label>Brand</label><select name="brand">{% for b in ('HIKVISION','ZKTECO') %}<option {{ 'selected' if e and e.brand == b }}>{{ b }}</option>{% endfor %}</select></div>
+<div><label>Serial no. (ZKTeco)</label><input name="serial_number" value="{{ e.serial_number or '' if e else '' }}"></div>
+<div><label>IP address (Hikvision)</label><input name="ip_address" value="{{ e.ip_address or '' if e else '' }}"></div>
+<div><label>Port</label><input type="number" name="port" value="{{ e.port if e else 80 }}"></div>
+<div><label>Username (Hikvision)</label><input name="username" value="{{ e.username or 'admin' if e else 'admin' }}"></div>
+<div><label>Password {{ '(blank = keep)' if e and e.password_enc }}</label><input name="password" type="password" autocomplete="new-password"></div>
+<div><label>Location</label><input name="location" value="{{ e.location or '' if e else '' }}"></div>
+<div><label><input type="checkbox" name="approved" value="1" {{ 'checked' if not e or e.approved }}> Approved (accept its punches)</label></div>
+<div><label><input type="checkbox" name="enabled" value="1" {{ 'checked' if not e or e.enabled }}> Enabled</label></div>
+</div><p><button>Save machine</button>{% if e %} <a class="btn sec" href="/devices">Cancel</a>{% endif %}</p></form>
+<p class="hint">Employees are matched by the user ID enrolled on the machine = <b>Card no.</b> on the employee record. The same person must have the same ID on every machine.</p></div>
+{% endblock %}

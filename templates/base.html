@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %} · {{ settings.group_name }}</title>
+<link rel="icon" href="/static/img/favicon.png"><link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+{% set path = request.url.path %}
+{% set r = user.role %}
+<aside class="sidebar">
+  <div class="brand"><img src="/static/img/lg-logo.png" alt="LG"><div><b>{{ settings.group_name }}</b><small>Attendance &amp; Payroll</small></div></div>
+  <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
+  <div class="nav-label">ATTENDANCE</div>
+  <a href="/attendance" class="{{ 'active' if path == '/attendance' }}">Daily attendance</a>
+  <a href="/attendance/punches" class="{{ 'active' if path.startswith('/attendance/punches') }}">Raw punches</a>
+  <a href="/leaves" class="{{ 'active' if path.startswith('/leaves') }}">Leave</a>
+  <a href="/shifts" class="{{ 'active' if path.startswith('/shifts') }}">Shifts</a>
+  {% if r in ('ADMIN','HR') %}<a href="/devices" class="{{ 'active' if path.startswith('/devices') }}">Punch machines</a>{% endif %}
+  <div class="nav-label">PEOPLE &amp; PAY</div>
+  <a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>
+  {% if r in ('ADMIN','HR','ACCOUNTS') %}<a href="/payroll" class="{{ 'active' if path.startswith('/payroll') }}">Payroll</a>{% endif %}
+  <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
+  {% if r == 'ADMIN' %}<div class="nav-label">ADMIN</div>
+  <a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users</a>
+  <a href="/audit" class="{{ 'active' if path.startswith('/audit') }}">Activity log</a>{% endif %}
+  <div class="side-foot">{{ settings.developer_credit }}</div>
+</aside>
+<main class="main">
+  <div class="topbar"><h1>{% block heading %}{% endblock %}</h1>
+    <div class="who">{{ user.username }} ({{ user.role }}) · <a href="/logout">Log out</a></div></div>
+  {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
+  {% if err %}<div class="alert err">{{ err }}</div>{% endif %}
+  {% block content %}{% endblock %}
+  <footer>{{ settings.group_name }} · {{ settings.developer_credit }}</footer>
+</main>
+</body></html>

@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}Punches{% endblock %}{% block heading %}Raw punches around {{ day.strftime('%d %b %Y') }}{% endblock %}
+{% block content %}
+<div class="panel"><form class="inline" method="get"><div><label>Card no.</label><input name="card" value="{{ card }}"></div><div><label>Date</label><input type="date" name="day" value="{{ day }}"></div><button class="sec">Show</button></form>
+<p class="hint">Shows the day before to the day after (night shifts). Max 500 rows.</p></div>
+<div class="table-wrap"><table><tr><th>Card no.</th><th>Employee</th><th>Time</th><th>Source</th><th>Device</th><th>Location</th><th>Note</th><th>By</th></tr>
+{% for p in rows %}{% set e = names.get(p.card_no) %}<tr><td>{{ p.card_no }}</td><td>{% if e %}{{ e.full_name }} <span class="hint">{{ e.company.code if e.company }}</span>{% else %}<span class="tag DRAFT">not an employee</span>{% endif %}</td><td>{{ p.punch_time.strftime('%d/%m/%Y %H:%M:%S') }}</td><td><span class="tag">{{ p.source }}</span></td><td>{{ p.device or '' }}</td>
+<td>{% if p.latitude %}<a href="https://maps.google.com/?q={{ p.latitude }},{{ p.longitude }}" target="_blank" rel="noopener">map</a> ±{{ p.accuracy_m }} m{% endif %}</td><td>{{ p.note or '' }}</td><td>{{ p.created_by or '' }}</td></tr>
+{% else %}<tr><td colspan="8" class="hint">No punches.</td></tr>{% endfor %}</table></div>
+{% endblock %}

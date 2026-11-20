@@ -1,0 +1,34 @@
+{% extends "base.html" %}{% block title %}Employee{% endblock %}{% block heading %}{{ 'Edit ' ~ e.employee_code if e else 'New employee' }}{% endblock %}
+{% block content %}
+<form method="post" action="/employees/save"><input type="hidden" name="emp_id" value="{{ e.id if e else '' }}">
+<div class="panel"><h3>Details</h3><div class="form-grid">
+<div><label>Company *</label><select name="company_id" required>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if e and e.company_id == c.id }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div><label>Employee code *</label><input name="employee_code" required value="{{ e.employee_code if e else '' }}"></div>
+<div><label>Card no. / machine user ID *</label><input name="card_no" required value="{{ e.card_no if e else '' }}"></div>
+<div><label>Full name *</label><input name="full_name" required value="{{ e.full_name if e else '' }}"></div>
+<div><label>Department</label><input name="department" list="depts" value="{{ e.department.name if e and e.department else '' }}">
+<datalist id="depts">{% for d in departments %}<option value="{{ d.name }}">{% endfor %}</datalist></div>
+<div><label>Designation</label><input name="designation" value="{{ e.designation or '' if e else '' }}"></div>
+<div><label>Section / line</label><input name="section" value="{{ e.section or '' if e else '' }}"></div>
+<div><label>Grade</label><input name="grade" value="{{ e.grade or '' if e else '' }}"></div>
+<div><label>Shift</label><select name="shift_id"><option value="">GENERAL (default)</option>
+{% for s in shifts %}<option value="{{ s.id }}" {{ 'selected' if e and e.shift_id == s.id }}>{{ s.code }} - {{ s.name }}</option>{% endfor %}</select></div>
+<div><label>Joined on</label><input type="date" name="joined_on" value="{{ e.joined_on or '' if e else '' }}"></div>
+<div><label>Left on</label><input type="date" name="left_on" value="{{ e.left_on or '' if e else '' }}"></div>
+<div><label>Status</label><select name="employment_status">{% for s in ('ACTIVE','INACTIVE') %}<option {{ 'selected' if e and e.employment_status == s }}>{{ s }}</option>{% endfor %}</select></div>
+</div></div>
+<div class="panel"><h3>Salary</h3><div class="form-grid">
+<div><label>Gross (Tk) *</label><input name="gross" required value="{{ e.gross if e else '' }}"></div>
+<div><label><input type="checkbox" name="auto_split" value="1" {{ 'checked' if not e }}> Split gross automatically (Settings policy)</label></div>
+{% for f,lbl in [('basic','Basic'),('house_rent','House rent'),('medical','Medical'),('transport','Transport'),('food','Food')] %}
+<div><label>{{ lbl }}</label><input name="{{ f }}" value="{{ e[f] if e else '' }}"></div>{% endfor %}
+<div><label>Payment mode</label><select name="payment_mode">{% for m in ('CASH','BANK','MOBILE') %}<option {{ 'selected' if e and e.payment_mode == m }}>{{ m }}</option>{% endfor %}</select></div>
+<div><label>Bank / wallet (bKash, Nagad...)</label><input name="bank_name" value="{{ e.bank_name or '' if e else '' }}"></div>
+<div><label>Account / wallet number</label><input name="account_no" value="{{ e.account_no or '' if e else '' }}"></div>
+</div></div>
+<div class="panel"><h3>Mobile attendance</h3><div class="form-grid">
+<div><label><input type="checkbox" name="allow_mobile" value="1" {{ 'checked' if e and e.allow_mobile }}> Allow punching from phone</label></div>
+<div><label>Set new PIN (4+ digits, leave blank to keep)</label><input name="mobile_pin" inputmode="numeric" autocomplete="off"></div>
+</div><p class="hint">{{ 'A PIN is set.' if e and e.mobile_pin_hash else 'No PIN set yet.' }} The employee logs in at /m with their employee code and PIN.</p></div>
+<button>Save</button> <a class="btn sec" href="/employees">Cancel</a></form>
+{% endblock %}

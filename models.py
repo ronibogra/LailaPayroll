@@ -1,0 +1,263 @@
+from datetime import datetime, date, time
+from decimal import Decimal
+
+from sqlalchemy import (String, Integer, DateTime, Date, Time, Boolean, ForeignKey, Text,
+                        Numeric, UniqueConstraint, Index)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from database import Base
+from timeutil import now_local
+
+Money = Numeric(12, 2)
+
+
+class Company(Base):
+    """A Laila Group company whose staff work at / are handled by the head office."""
+    __tablename__ = "companies"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True)
+    name: Mapped[str] = mapped_column(String(150))
+    address: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Department(Base):
+    __tablename__ = "departments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    code: Mapped[str | None] = mapped_column(String(30), nullable=True)  # not unique: SQL Server allows only one NULL in a unique column
+    employees = relationship("Employee", back_populates="department")
+
+
+class Shift(Base):
+    __tablename__ = "shifts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(30), unique=True)
+    name: Mapped[str] = mapped_column(String(80))
+    start: Mapped[time] = mapped_column(Time)
+    end: Mapped[time] = mapped_column(Time)
+    grace_minutes: Mapped[int] = mapped_column(Integer, default=10)
+    break_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    break_after_minutes: Mapped[int] = mapped_column(Integer, default=300)
+    early_window_minutes: Mapped[int] = mapped_column(Integer, default=180)
+    ot_round_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    max_ot_minutes: Mapped[int] = mapped_column(Integer, default=120)
+    offday_work_is_ot: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Employee(Base):
+    __tablename__ = "employees"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    card_no: Mapped[str] = mapped_column(String(50), unique=True, index=True)  # user ID on the machines
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    full_name: Mapped[str] = mapped_column(String(180), index=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
+    designation: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    section: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    grade: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    factory: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    shift_id: Mapped[int | None] = mapped_column(ForeignKey("shifts.id"), nullable=True)
+    employment_status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
+    joined_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    left_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    gross: Mapped[Decimal] = mapped_column(Money, default=0)
+    basic: Mapped[Decimal] = mapped_column(Money, default=0)
+    house_rent: Mapped[Decimal] = mapped_column(Money, default=0)
+    medical: Mapped[Decimal] = mapped_column(Money, default=0)
+    transport: Mapped[Decimal] = mapped_column(Money, default=0)
+    food: Mapped[Decimal] = mapped_column(Money, default=0)
+    allow_mobile: Mapped[bool] = mapped_column(Boolean, default=False)    # may punch from phone
+    mobile_pin_hash: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    payment_mode: Mapped[str] = mapped_column(String(10), default="CASH")  # CASH / BANK / MOBILE
+    bank_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    account_no: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    department = relationship("Department", back_populates="employees")
+    shift = relationship("Shift")
+    company = relationship("Company")
+
+
+class Device(Base):
+    """A punch machine. ZKTeco machines push to /iclock (ADMS); Hikvision machines are polled (ISAPI).
+    Machines that contact the server but are not approved here are listed as pending and ignored."""
+    __tablename__ = "devices"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    brand: Mapped[str] = mapped_column(String(20))            # ZKTECO / HIKVISION
+    serial_number: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    port: Mapped[int] = mapped_column(Integer, default=80)
+    username: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    password_enc: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    cursor_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # Hikvision: newest event read
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+
+
+class AttendanceLog(Base):
+    __tablename__ = "attendance_logs"
+    __table_args__ = (
+        UniqueConstraint("card_no", "punch_time", name="uq_attendance_card_time"),
+        Index("ix_attendance_card_time", "card_no", "punch_time"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    card_no: Mapped[str] = mapped_column(String(50), index=True)
+    punch_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+    device: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="CSV")  # RAWDATA / CSV / MANUAL / MOBILE
+    latitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
+    accuracy_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+
+
+class Holiday(Base):
+    __tablename__ = "holidays"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[date] = mapped_column(Date, unique=True)
+    name: Mapped[str] = mapped_column(String(120))
+
+
+class Leave(Base):
+    __tablename__ = "leaves"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    leave_type: Mapped[str] = mapped_column(String(20))  # CASUAL / SICK / EARNED / MATERNITY / UNPAID
+    paid: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
+
+class DailyAttendance(Base):
+    __tablename__ = "daily_attendance"
+    __table_args__ = (UniqueConstraint("employee_id", "work_date", name="uq_daily_employee_date"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    work_date: Mapped[date] = mapped_column(Date, index=True)
+    shift_code: Mapped[str] = mapped_column(String(30), default="")
+    day_type: Mapped[str] = mapped_column(String(10), default="WORKDAY")
+    status: Mapped[str] = mapped_column(String(20))
+    in_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    out_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    punch_count: Mapped[int] = mapped_column(Integer, default=0)
+    late_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    early_leave_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    worked_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    ot_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    extra_ot_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)
+    employee = relationship("Employee")
+
+
+class Setting(Base):
+    """Key/value settings. company_id 0 = whole group (default); >0 = override for one company."""
+    __tablename__ = "settings"
+    __table_args__ = (UniqueConstraint("company_id", "key", name="uq_setting_company_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(Integer, default=0)
+    key: Mapped[str] = mapped_column(String(60))
+    value: Mapped[str] = mapped_column(String(250))
+
+
+class PayrollAdjustment(Base):
+    __tablename__ = "payroll_adjustments"
+    __table_args__ = (UniqueConstraint("employee_id", "year", "month", name="uq_adjust_emp_month"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    year: Mapped[int] = mapped_column(Integer)
+    month: Mapped[int] = mapped_column(Integer)
+    other_addition: Mapped[Decimal] = mapped_column(Money, default=0)
+    advance: Mapped[Decimal] = mapped_column(Money, default=0)
+    other_deduction: Mapped[Decimal] = mapped_column(Money, default=0)
+    tax: Mapped[Decimal] = mapped_column(Money, default=0)
+    note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
+
+class PayrollRun(Base):
+    __tablename__ = "payroll_runs"
+    __table_args__ = (UniqueConstraint("company_id", "year", "month", name="uq_payroll_company_month"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    year: Mapped[int] = mapped_column(Integer)
+    month: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(10), default="DRAFT")  # DRAFT / FINAL
+    policy_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    finalized_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lines = relationship("PayrollLine", back_populates="run", cascade="all, delete-orphan")
+    company = relationship("Company")
+
+
+class PayrollLine(Base):
+    __tablename__ = "payroll_lines"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("payroll_runs.id"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    # Snapshot so a finalized sheet never changes when master data changes later
+    employee_code: Mapped[str] = mapped_column(String(50))
+    full_name: Mapped[str] = mapped_column(String(180))
+    department: Mapped[str] = mapped_column(String(120), default="")
+    designation: Mapped[str] = mapped_column(String(120), default="")
+    grade: Mapped[str] = mapped_column(String(20), default="")
+    payment_mode: Mapped[str] = mapped_column(String(10), default="CASH")
+    bank_name: Mapped[str] = mapped_column(String(80), default="")
+    account_no: Mapped[str] = mapped_column(String(40), default="")
+    days_in_month: Mapped[int] = mapped_column(Integer)
+    employed_days: Mapped[int] = mapped_column(Integer)
+    present_days: Mapped[int] = mapped_column(Integer)
+    payable_days: Mapped[int] = mapped_column(Integer)
+    absent_days: Mapped[int] = mapped_column(Integer)
+    paid_leave_days: Mapped[int] = mapped_column(Integer)
+    offdays: Mapped[int] = mapped_column(Integer)
+    late_days: Mapped[int] = mapped_column(Integer)
+    gross: Mapped[Decimal] = mapped_column(Money)
+    basic: Mapped[Decimal] = mapped_column(Money)
+    house_rent: Mapped[Decimal] = mapped_column(Money)
+    medical: Mapped[Decimal] = mapped_column(Money)
+    transport: Mapped[Decimal] = mapped_column(Money)
+    food: Mapped[Decimal] = mapped_column(Money)
+    earned_gross: Mapped[Decimal] = mapped_column(Money)
+    absent_deduction: Mapped[Decimal] = mapped_column(Money)
+    ot_hours: Mapped[Decimal] = mapped_column(Money)
+    ot_rate: Mapped[Decimal] = mapped_column(Money)
+    ot_amount: Mapped[Decimal] = mapped_column(Money)
+    attendance_bonus: Mapped[Decimal] = mapped_column(Money)
+    other_addition: Mapped[Decimal] = mapped_column(Money)
+    advance: Mapped[Decimal] = mapped_column(Money)
+    other_deduction: Mapped[Decimal] = mapped_column(Money)
+    tax: Mapped[Decimal] = mapped_column(Money)
+    stamp: Mapped[Decimal] = mapped_column(Money)
+    total_earnings: Mapped[Decimal] = mapped_column(Money)
+    total_deductions: Mapped[Decimal] = mapped_column(Money)
+    net_pay: Mapped[Decimal] = mapped_column(Money)
+    warnings: Mapped[str] = mapped_column(Text, default="")
+    run = relationship("PayrollRun", back_populates="lines")
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(300))
+    role: Mapped[str] = mapped_column(String(20), default="VIEWER")  # ADMIN / HR / ACCOUNTS / VIEWER
+    company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True)  # None = all companies
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(80))
+    action: Mapped[str] = mapped_column(String(120))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, index=True)

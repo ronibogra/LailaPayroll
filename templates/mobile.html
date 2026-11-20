@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#00a651"><title>Mobile Attendance · {{ settings.group_name }}</title>
+<link rel="icon" href="/static/img/favicon.png"><link rel="apple-touch-icon" href="/static/img/lg-logo.png">
+<link rel="stylesheet" href="/static/css/style.css"></head>
+<body><div class="m-wrap">
+<div class="m-head"><img src="/static/img/lg-logo.png" alt="LG"><div><b>{{ settings.group_name }}</b><div class="hint" style="margin:0">Mobile attendance</div></div></div>
+{% if err %}<div class="alert err">{{ err }}</div>{% endif %}
+{% if not emp %}
+  <div class="panel"><form method="post" action="/m/login">
+  <label>Employee ID</label><input name="employee_code" required style="width:100%;margin-bottom:12px" autocomplete="username">
+  <label>PIN</label><input name="pin" type="password" inputmode="numeric" required style="width:100%;margin-bottom:16px" autocomplete="current-password">
+  <button style="width:100%">Log in</button></form>
+  <p class="hint">Ask HR to enable mobile attendance and give you a PIN.</p></div>
+{% else %}
+  <div class="clock" id="clock">--:--</div><div class="date" id="date"></div>
+  <div class="panel" style="text-align:center"><b>{{ emp.full_name }}</b><div class="hint" style="margin:0">{{ emp.employee_code }} · {{ emp.company.name if emp.company }}{{ ' · ' ~ emp.department.name if emp.department }}</div></div>
+  <button class="punch-btn" id="punch">PUNCH</button>
+  <div class="m-msg" id="msg"></div>
+  <div class="panel"><h3>Today</h3><div id="list">
+  {% for p in punches %}<div>{{ p.punch_time.strftime('%I:%M %p') }} <span class="tag">{{ p.source }}</span></div>{% else %}<div class="hint" id="none">No punches yet today.</div>{% endfor %}
+  </div></div>
+  <p style="text-align:center"><a href="/m/logout">Log out</a></p>
+{% endif %}
+<p class="hint" style="text-align:center">{{ settings.developer_credit }}</p>
+</div>
+{% if emp %}
+<script>
+const $ = id => document.getElementById(id);
+function tick(){const n=new Date();$("clock").textContent=n.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  $("date").textContent=n.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long',year:'numeric'});}
+tick(); setInterval(tick, 10000);
+function say(text, ok){$("msg").textContent=text;$("msg").style.color=ok?"#0b5d31":"#8f1714";}
+$("punch").onclick = () => {
+  if (!navigator.geolocation) { say("This phone/browser cannot share location."); return; }
+  const btn = $("punch"); btn.disabled = true; say("Getting your location…", true);
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const fd = new FormData();
+    fd.append("latitude", pos.coords.latitude); fd.append("longitude", pos.coords.longitude);
+    fd.append("accuracy", Math.round(pos.coords.accuracy));
+    try {
+      const r = await fetch("/m/punch", {method: "POST", body: fd, credentials: "same-origin"});
+      const j = await r.json();
+      say(j.message, j.ok);
+      if (r.status === 401) { setTimeout(() => location.href = "/m", 1500); }
+      if (j.ok) { const none=$("none"); if (none) none.remove();
+        const d=document.createElement("div"); d.innerHTML = j.time + ' <span class="tag">MOBILE</span>'; $("list").appendChild(d); }
+    } catch (e) { say("No connection to the server. Are you on the office Wi-Fi?"); }
+    btn.disabled = false;
+  }, err => {
+    say(err.code === 1 ? "Location permission denied. Allow location for this site and try again."
+                       : "Could not get your location. Go outside / near a window and try again.");
+    btn.disabled = false;
+  }, {enableHighAccuracy: true, timeout: 20000, maximumAge: 0});
+};
+</script>
+{% endif %}
+</body></html>

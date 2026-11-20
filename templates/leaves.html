@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block title %}Leave{% endblock %}{% block heading %}Leave{% endblock %}
+{% block content %}
+{% if user.role in ('ADMIN','HR') %}
+<div class="panel"><h3>Add leave</h3><form method="post" action="/leaves"><div class="form-grid">
+<div><label>Employee code</label><input name="employee_code" required></div>
+<div><label>From</label><input type="date" name="start_date" required></div><div><label>To</label><input type="date" name="end_date" required></div>
+<div><label>Type</label><select name="leave_type">{% for t in ('CASUAL','SICK','EARNED','MATERNITY','UNPAID') %}<option>{{ t }}</option>{% endfor %}</select></div>
+<div><label>Note</label><input name="note"></div></div><p><button>Save leave</button></p></form>
+<p class="hint">UNPAID leave is deducted like an absent day; the other types are paid. Leave on a day the person actually punched is ignored (they count as present).</p></div>
+{% endif %}
+<div class="table-wrap"><table><tr><th>Code</th><th>Name</th><th>Type</th><th>From</th><th>To</th><th>Paid</th><th>Note</th><th></th></tr>
+{% for lv, e in rows %}<tr><td>{{ e.employee_code }}</td><td>{{ e.full_name }}</td><td>{{ lv.leave_type }}</td><td>{{ lv.start_date }}</td><td>{{ lv.end_date }}</td>
+<td>{{ 'yes' if lv.paid else 'no' }}</td><td>{{ lv.note or '' }}</td><td>{% if user.role in ('ADMIN','HR') %}<form method="post" action="/leaves/{{ lv.id }}/delete" onsubmit="return confirm('Remove this leave?')"><button class="link">remove</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="8" class="hint">No leave in the last 60 days.</td></tr>{% endfor %}</table></div>
+{% endblock %}

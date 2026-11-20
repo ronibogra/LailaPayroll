@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% block title %}Payroll{% endblock %}
+{% block heading %}Payroll · {{ company.code if company }} · {{ month_name[m] }} {{ y }}{% if run %} <span class="tag {{ run.status }}">{{ run.status }}</span>{% endif %}{% endblock %}
+{% block content %}
+{% set mval = '%04d-%02d'|format(y, m) %}
+<div class="panel"><form class="inline" method="get">
+<div><label>Company</label><select name="company">{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div><label>Month</label><input type="month" name="month" value="{{ mval }}"></div><button class="sec">Open</button></form>
+{% if companies|length > 1 %}<p class="hint" style="margin-top:10px">{{ month_name[m] }} {{ y }}:
+{% for c in companies %}{% set r = runs.get(c.id) %}<a href="/payroll?company={{ c.id }}&month={{ mval }}">{{ c.code }}</a> <span class="tag {{ r.status if r }}">{{ r.status if r else 'not run' }}</span> &nbsp; {% endfor %}</p>{% endif %}</div>
+{% if not company %}<div class="alert err">Add a company under Settings first.</div>{% else %}
+{% if not run or run.status != 'FINAL' %}
+<div class="grid2">
+<div class="panel"><h3>1. Advances &amp; deductions</h3><p class="hint">Excel with employee_code, other_addition, advance, other_deduction, tax, note - for {{ company.name }} only.</p>
+<form class="inline" method="post" action="/payroll/adjustments" enctype="multipart/form-data"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}">
+<input type="file" name="file" accept=".xlsx" required><button class="sec">Upload</button><a class="btn sec" href="/payroll/adjustments-template.xlsx">Template</a></form></div>
+<div class="panel"><h3>2. Process payroll</h3><p class="hint">Re-processes {{ company.name }}'s attendance for the month, then calculates every employee with this company's pay policy. Can be re-run until finalized.</p>
+<form method="post" action="/payroll/process"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><button>{{ 'Re-process' if run else 'Process' }} payroll</button></form></div>
+</div>{% endif %}
+{% if run %}
+<div class="cards">
+<div class="metric"><span>Employees</span><strong>{{ lines|length }}</strong></div>
+<div class="metric"><span>Earned gross</span><strong>{{ '{:,.0f}'.format(totals.earned_gross or 0) }}</strong></div>
+<div class="metric"><span>Overtime</span><strong>{{ '{:,.0f}'.format(totals.ot_amount or 0) }}</strong></div>
+<div class="metric r"><span>Absent + other deductions</span><strong>{{ '{:,.0f}'.format((totals.absent_deduction or 0) + (totals.total_deductions or 0)) }}</strong></div>
+<div class="metric g"><span>Net pay</span><strong>{{ '{:,.0f}'.format(totals.net_pay or 0) }}</strong></div>
+</div>
+<div class="panel"><p>{% for k, v in by_mode.items() %}<b>{{ k }}</b>: Tk {{ '{:,.0f}'.format(v) }} &nbsp; {% endfor %}</p>
+<p class="hint">Processed by {{ run.created_by }} at {{ run.created_at.strftime('%d/%m/%Y %H:%M') }}{% if run.finalized_at %} · Finalized by {{ run.finalized_by }} at {{ run.finalized_at.strftime('%d/%m/%Y %H:%M') }}{% endif %}
+{% if warn_count %} · <b style="color:#8f1714">{{ warn_count }} employees have warnings (see Remarks)</b>{% endif %}</p>
+<a class="btn" href="/payroll/run/{{ run.id }}/salary.xlsx">Salary sheet + bank/cash sheets (Excel)</a> <a class="btn sec" href="/payroll/run/{{ run.id }}/payslips.pdf" target="_blank">All payslips (PDF)</a>
+{% if run.status != 'FINAL' and user.role in ('ADMIN','ACCOUNTS') %}
+<form class="inline" method="post" action="/payroll/finalize" style="margin-top:14px" onsubmit="return confirm('Finalize and lock {{ company.code }} for this month? This cannot be undone here.')">
+<input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><div><label>Type FINAL to lock {{ company.code }} for this month</label><input name="confirm" required></div><button class="red">Finalize</button></form>{% endif %}
+</div>
+<div class="table-wrap"><table><tr><th>Code</th><th>Name</th><th>Dept</th><th class="num">Present</th><th class="num">Absent</th><th class="num">Late</th><th class="num">Gross</th><th class="num">Earned</th><th class="num">Absent ded.</th><th class="num">OT h</th><th class="num">OT Tk</th><th class="num">Bonus</th><th class="num">Deductions</th><th class="num">Net</th><th>Mode</th><th>Remarks</th><th></th></tr>
+{% for l in lines %}<tr><td>{{ l.employee_code }}</td><td>{{ l.full_name }}</td><td>{{ l.department }}</td><td class="num">{{ l.present_days }}</td><td class="num">{{ l.absent_days }}</td><td class="num">{{ l.late_days }}</td>
+<td class="num">{{ '{:,.0f}'.format(l.gross) }}</td><td class="num">{{ '{:,.2f}'.format(l.earned_gross) }}</td><td class="num">{{ '{:,.2f}'.format(l.absent_deduction) }}</td>
+<td class="num">{{ l.ot_hours }}</td><td class="num">{{ '{:,.2f}'.format(l.ot_amount) }}</td><td class="num">{{ '{:,.0f}'.format(l.attendance_bonus) }}</td><td class="num">{{ '{:,.2f}'.format(l.total_deductions) }}</td>
+<td class="num"><b>{{ '{:,.0f}'.format(l.net_pay) }}</b></td><td>{{ l.payment_mode }}</td><td class="hint">{{ l.warnings }}</td>
+<td><a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ l.employee_code }}" target="_blank">payslip</a></td></tr>{% endfor %}</table></div>
+{% endif %}{% endif %}
+{% endblock %}

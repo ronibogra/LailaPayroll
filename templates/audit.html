@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block title %}Activity log{% endblock %}{% block heading %}Activity log (last 500){% endblock %}
+{% block content %}
+<div class="table-wrap"><table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>
+{% for a in rows %}<tr><td>{{ a.created_at.strftime('%d/%m/%Y %H:%M:%S') }}</td><td>{{ a.username }}</td><td>{{ a.action }}</td><td style="white-space:normal">{{ a.detail or '' }}</td></tr>{% endfor %}</table></div>
+{% endblock %}

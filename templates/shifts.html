@@ -1,0 +1,30 @@
+{% extends "base.html" %}{% block title %}Shifts{% endblock %}{% block heading %}Shifts{% endblock %}
+{% block content %}
+<div class="table-wrap" style="margin-bottom:16px"><table><tr><th>Code</th><th>Name</th><th>Start</th><th>End</th><th class="num">Grace</th><th class="num">Break</th><th class="num">OT block</th><th class="num">Daily OT cap</th><th>Off-day work = OT</th><th class="num">Employees</th><th></th></tr>
+{% for s in shifts %}<tr><td><b>{{ s.code }}</b></td><td>{{ s.name }}</td><td>{{ s.start.strftime('%H:%M') }}</td><td>{{ s.end.strftime('%H:%M') }}{{ ' (+1 day)' if s.end <= s.start }}</td>
+<td class="num">{{ s.grace_minutes }} m</td><td class="num">{{ s.break_minutes }} m</td><td class="num">{{ s.ot_round_minutes }} m</td><td class="num">{{ s.max_ot_minutes }} m</td>
+<td>{{ 'yes' if s.offday_work_is_ot else 'no' }}</td><td class="num">{{ used.get(s.id, 0) }}</td><td>{% if user.role in ('ADMIN','HR') %}<a href="/shifts?edit={{ s.id }}">Edit</a>{% endif %}</td></tr>{% endfor %}</table></div>
+{% if user.role in ('ADMIN','HR') %}
+<div class="grid2">
+<div class="panel"><h3>{{ 'Edit shift ' ~ e.code if e else 'Add shift' }}</h3>
+<form method="post" action="/shifts/save"><input type="hidden" name="shift_id" value="{{ e.id if e else '' }}"><div class="form-grid">
+<div><label>Code (e.g. NIGHT)</label><input name="code" required value="{{ e.code if e else '' }}"></div>
+<div><label>Name</label><input name="name" required value="{{ e.name if e else '' }}"></div>
+<div><label>Start</label><input type="time" name="start" required value="{{ e.start.strftime('%H:%M') if e else '08:00' }}"></div>
+<div><label>End (earlier than start = night shift)</label><input type="time" name="end" required value="{{ e.end.strftime('%H:%M') if e else '17:00' }}"></div>
+<div><label>Grace minutes before late</label><input type="number" name="grace_minutes" value="{{ e.grace_minutes if e else 10 }}" min="0"></div>
+<div><label>Unpaid break minutes</label><input type="number" name="break_minutes" value="{{ e.break_minutes if e else 60 }}" min="0"></div>
+<div><label>Deduct break only if day longer than (min)</label><input type="number" name="break_after_minutes" value="{{ e.break_after_minutes if e else 300 }}" min="0"></div>
+<div><label>Accept punches this early (min before start)</label><input type="number" name="early_window_minutes" value="{{ e.early_window_minutes if e else 180 }}" min="0" max="360"></div>
+<div><label>Count OT in blocks of (min)</label><input type="number" name="ot_round_minutes" value="{{ e.ot_round_minutes if e else 30 }}" min="1"></div>
+<div><label>Daily OT cap (min) - rest is "extra OT"</label><input type="number" name="max_ot_minutes" value="{{ e.max_ot_minutes if e else 120 }}" min="0"></div>
+<div><label><input type="checkbox" name="offday_work_is_ot" value="1" {{ 'checked' if not e or e.offday_work_is_ot }}> Weekend/holiday work counts as OT</label></div>
+</div><p><button>Save shift</button>{% if e %} <a class="btn sec" href="/shifts">Cancel</a>{% endif %}</p></form></div>
+<div class="panel"><h3>Assign shift</h3><p class="hint">Give employee codes (one per line or comma separated), a department and/or a whole company.</p>
+<form method="post" action="/shifts/assign"><label>Shift</label><select name="shift_id">{% for s in shifts %}<option value="{{ s.id }}">{{ s.code }} - {{ s.name }}</option>{% endfor %}</select>
+<label style="margin-top:10px">Employee codes</label><textarea name="employee_codes" rows="5" style="width:100%"></textarea>
+<label style="margin-top:10px">Department (exact name)</label><input name="department" style="width:100%">
+<label style="margin-top:10px">Or a whole company</label><select name="company_id" style="width:100%"><option value="">-</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }} - {{ c.name }}</option>{% endfor %}</select>
+<p><button>Assign</button></p></form><p class="hint">After changing shifts, process the month again on the Daily attendance page.</p></div>
+</div>{% endif %}
+{% endblock %}

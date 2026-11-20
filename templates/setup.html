@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>First-time setup · {{ settings.group_name }}</title><link rel="icon" href="/static/img/favicon.png"><link rel="stylesheet" href="/static/css/style.css"></head>
+<body class="login-page"><div class="login-card" style="width:min(640px,94vw);text-align:left">
+<div style="text-align:center"><img src="/static/img/lg-logo.png" alt="LG"><h1>{{ settings.group_name }} Attendance &amp; Payroll</h1>
+<p class="hint">Fresh installation - first-time setup (one time only)</p></div>
+{% if err %}<div class="alert err">{{ err }}</div>{% endif %}
+<form method="post" action="/setup">
+<div class="panel"><h3>1. Administrator account</h3><div class="form-grid">
+<div><label>Username</label><input name="username" value="admin" required></div>
+<div><label>Password (8+ characters)</label><input name="password" type="password" required minlength="8" autocomplete="new-password"></div>
+<div><label>Repeat password</label><input name="password2" type="password" required minlength="8" autocomplete="new-password"></div></div></div>
+<div class="panel"><h3>2. Companies handled by this head office</h3>
+<p class="hint">One per line as <b>CODE, Company name</b>. You can add more later under Settings.</p>
+<textarea name="companies" rows="5" style="width:100%">HO, LAILA GROUP - Head Office</textarea></div>
+<div class="panel"><h3>3. Weekly off day</h3>
+{% for n in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<label style="display:inline-block;margin-right:12px;color:inherit"><input type="checkbox" name="wd{{ loop.index0 }}" value="1" {{ 'checked' if loop.index0 == 4 }}> {{ n }}</label>{% endfor %}</div>
+<div class="panel"><h3>4. Office location for mobile punch (optional)</h3>
+<p class="hint">Google Maps: right-click the office gate and click the numbers to copy them. Leave blank to set later.</p>
+<div class="form-grid"><div><label>Latitude</label><input name="geofence_lat" placeholder="23.9999"></div>
+<div><label>Longitude</label><input name="geofence_lon" placeholder="90.3999"></div>
+<div><label>Allowed radius (m)</label><input name="geofence_radius_m" value="200"></div></div></div>
+<button style="width:100%">Finish setup</button></form>
+<p class="hint" style="margin-top:14px">Office PCs open: {% for ip in ips %}<b>http://{{ ip }}:{{ settings.port }}</b> {% endfor %}</p>
+<p class="hint" style="text-align:center">{{ settings.developer_credit }}</p></div></body></html>
