@@ -83,7 +83,7 @@ def main():
     post(s, "/setup", {"username": "admin", "password": "Admin@12345", "password2": "Admin@12345",
                        "companies": "HO, LAILA GROUP - Head Office\nLTL, Laila Textiles Ltd", "wd4": "1",
                        "geofence_lat": "23.80", "geofence_lon": "90.40", "geofence_radius_m": "200"},
-         must="Punch machines")
+         must="Machines (")
     page(s, "/setup")  # now redirects to login/dashboard, must not crash
 
     step("log out / log in")
