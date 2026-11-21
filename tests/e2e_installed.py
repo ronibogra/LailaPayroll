@@ -678,6 +678,17 @@ def main():
     r = page(s, "/idcards.pdf?codes=12127&layout=card&sides=front&status=")
     ok(r.content[:4] == b"%PDF", "designed card")
     post(s, "/idcards/design", {"style": "LABELS"}, must="Tick at least one field", must_not=None)
+    import zipfile
+    r = page(s, "/idcards/data.zip?codes=12127,HO-0001&status=")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        names = set(z.namelist())
+        ok({"id-card-data.xlsx", "id-card-data.csv", "signatures/12127.png", "authorized_signature.png"} <= names
+           and "photos/12127.jpg" in names, f"ID card data ZIP: {names}")
+        ws = load_workbook(io.BytesIO(z.read("id-card-data.xlsx"))).active
+        ok([ws.cell(1, i).value for i in range(2, 4)] == ["ID No", "Name"] and ws.cell(2, 2).value == "12127"
+           and ws.cell(2, 18).value == "photos\\12127.jpg", "ID card data columns")
+    r = page(s, "/idcards/data.csv?company=2")
+    ok(r.content.startswith(b"\xef\xbb\xbf") and b"Ms. Karima" in r.content, "ID card CSV")
     ok(c.get(BASE + "/payroll/components", timeout=30, headers={"accept": "text/html"}).status_code == 403,
        "pay components are Admin only")
     page(h, "/shifts", code=403)

@@ -826,15 +826,7 @@ def idcards_page(request: Request, user=Depends(page_user), db: Session = Depend
                   today=now_local().date())
 
 
-@app.get("/idcards.pdf")
-def idcards_pdf(request: Request, company: str = "", department: str = "", codes: str = "", status: str = "ACTIVE",
-                layout: str = "a4", sides: str = "both", valid: str = "", issued: str = "", signatory: str = "",
-                missing_photo: str = "", show_nid: str = "", preview: str = "", user=Depends(page_user),
-                db: Session = Depends(get_db)):
-    """Staff ID cards: whole company / department / chosen employee codes."""
-    need(user, "employees.view")
-    from services import idcard
-    from services.policy import get_setting
+def _idcard_staff(db, user, company, department, codes, status, missing_photo) -> list[Employee]:
     stmt = select(Employee)
     cid = company_filter(user, company)
     if cid:
@@ -855,6 +847,95 @@ def idcards_pdf(request: Request, company: str = "", department: str = "", codes
     else:
         emps.sort(key=lambda e: ((e.company.code if e.company else ""), (e.department.name if e.department else ""),
                                  e.employee_code))
+    return emps
+
+
+@app.get("/idcards/data.{fmt}")
+def idcards_data(fmt: str, company: str = "", department: str = "", codes: str = "", status: str = "ACTIVE",
+                 missing_photo: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    """ID card data for your own design (CorelDRAW / Photoshop / ID card software print merge):
+    xlsx or csv = the data; zip = data + photos/<ID>.jpg + signatures/<ID>.png + authorized_signature.png."""
+    need(user, "employees.view", "reports.export")
+    import csv
+    import zipfile
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    if fmt not in ("xlsx", "csv", "zip"):
+        raise HTTPException(404, "Unknown format")
+    emps = _idcard_staff(db, user, company, department, codes, status, missing_photo)
+    if not emps:
+        return go("/idcards", err="No employees match - check the company, department or codes")
+    head = ["SL", "ID No", "Name", "Designation", "Department", "Section", "Company", "Company code", "DOJ",
+            "Blood Group", "Mobile", "Address", "Emergency contact", "Father", "Date of birth", "NID", "Card no",
+            "Photo", "Signature"]
+    rows = []
+    for i, e in enumerate(emps, 1):
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", e.employee_code)
+        rows.append([i, e.employee_code, e.full_name, e.designation or "", e.department.name if e.department else "",
+                     e.section or "", e.company.name if e.company else "", e.company.code if e.company else "",
+                     e.joined_on.strftime("%d-%m-%Y") if e.joined_on else "", e.blood_group or "", e.phone or "",
+                     e.present_address or "", e.emergency_contact or "", e.father_name or "",
+                     e.date_of_birth.strftime("%d-%m-%Y") if e.date_of_birth else "", e.nid or "", e.card_no,
+                     f"photos\\{safe}.jpg" if photo_path(e.photo) else "",
+                     f"signatures\\{safe}.png" if photo_path(e.signature) else ""])
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ID card data"
+    ws.append(head)
+    for cell in ws[1]:
+        cell.font, cell.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="E8332F")
+    for r in rows:
+        ws.append(r)
+    for col, w in zip("ABCDEFGHIJKLMNOPQRS", (5, 12, 28, 24, 20, 12, 26, 10, 12, 8, 14, 32, 22, 22, 12, 18, 10, 20, 22)):
+        ws.column_dimensions[col].width = w
+    for r in range(2, ws.max_row + 1):
+        for c_ in (2, 11, 16, 17):
+            ws.cell(r, c_).number_format = "@"
+    xbuf = io.BytesIO()
+    wb.save(xbuf)
+    cbuf = io.StringIO()
+    csv.writer(cbuf).writerows([head] + rows)
+    csv_bytes = ("\ufeff" + cbuf.getvalue()).encode("utf-8")      # BOM: Excel / CorelDRAW read Bangla names right
+    audit(db, user, "IDCARD_DATA", f"{len(emps)} employees ({fmt})")
+    if fmt == "xlsx":
+        return Response(xbuf.getvalue(), media_type=XLSX,
+                        headers={"Content-Disposition": f"attachment; filename=id-card-data-{len(emps)}.xlsx"})
+    if fmt == "csv":
+        return Response(csv_bytes, media_type="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename=id-card-data-{len(emps)}.csv"})
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("id-card-data.xlsx", xbuf.getvalue())
+        z.writestr("id-card-data.csv", csv_bytes)
+        for e, r in zip(emps, rows):
+            if r[17]:
+                z.write(photo_path(e.photo), r[17].replace("\\", "/"))
+            if r[18]:
+                z.write(photo_path(e.signature), r[18].replace("\\", "/"))
+        if AUTH_SIGN_FILE.exists():
+            z.write(AUTH_SIGN_FILE, "authorized_signature.png")
+        z.writestr("README.txt", "ID card data from SPhere Payroll\r\n\r\n"
+                   "1. Unzip this folder (e.g. to C:\\IDCards).\r\n"
+                   "2. In CorelDRAW: Tools > Print Merge > Create/Load > choose id-card-data.csv. Add the text fields "
+                   "(Name, ID No, Designation ...) onto your design. For pictures, the 'Photo' and 'Signature' columns "
+                   "hold the file names (photos\\<ID>.jpg, signatures\\<ID>.png) relative to this folder.\r\n"
+                   "3. Other ID card software (BarTender, ID Card Workshop, Photoshop Data Sets): import the Excel/CSV "
+                   "and link the Photo / Signature columns as image fields.\r\n"
+                   "Signatures are PNG with a transparent background. Photos are JPG, at most 600 px.\r\n")
+    return Response(zbuf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename=id-card-data-{len(emps)}.zip"})
+
+
+@app.get("/idcards.pdf")
+def idcards_pdf(request: Request, company: str = "", department: str = "", codes: str = "", status: str = "ACTIVE",
+                layout: str = "a4", sides: str = "both", valid: str = "", issued: str = "", signatory: str = "",
+                missing_photo: str = "", show_nid: str = "", preview: str = "", user=Depends(page_user),
+                db: Session = Depends(get_db)):
+    """Staff ID cards: whole company / department / chosen employee codes."""
+    need(user, "employees.view")
+    from services import idcard
+    from services.policy import get_setting
+    emps = _idcard_staff(db, user, company, department, codes, status, missing_photo)
     if not emps:
         return go("/idcards", err="No employees match - check the company, department or codes")
     if len(emps) > 1500:

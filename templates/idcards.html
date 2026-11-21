@@ -16,7 +16,13 @@
 <div><label>Valid until (blank = while in service)</label><input type="date" name="valid"></div>
 <div><label>Signature title on the back</label><input name="signatory" value="{{ signatory }}"></div>
 <div><label style="color:inherit"><input type="checkbox" name="show_nid" value="1"> Print NID number on the back</label></div>
-</div><p><button>🪪 Make ID cards (PDF)</button></p></form></div>
+</div><p><button>🪪 Make ID cards (PDF)</button></p>
+<h3 style="margin-top:16px">Using your own card design?</h3>
+<p class="hint">Download only the data for the staff chosen above and merge it into your design (CorelDRAW Print Merge, BarTender, ID card software, Photoshop data sets).</p>
+<p><button class="sec" formaction="/idcards/data.zip">⬇ Data + photos + signatures (ZIP)</button>
+<button class="sec" formaction="/idcards/data.xlsx">⬇ Data only (Excel)</button>
+<button class="sec" formaction="/idcards/data.csv">⬇ Data only (CSV)</button></p>
+<p class="hint">Columns: ID No, Name, Designation, Department, Section, Company, DOJ, Blood Group, Mobile, Address, Emergency contact, Father, Date of birth, NID, Card no, Photo, Signature. In the ZIP: <code>photos\&lt;ID&gt;.jpg</code>, <code>signatures\&lt;ID&gt;.png</code> (transparent background) and <code>authorized_signature.png</code>.</p></form></div>
 <div class="panel"><h3>What is printed</h3>
 {% if 'company.manage' in user.perms %}<p><a class="btn sec" href="/idcards/design">🎨 Change the card design</a></p>{% endif %}
 <p><b>Front:</b> logo, company name (HO, BDL, LAUNDRY, LSL…), photo, then Name, ID No., Designation, Department, DOJ, Blood Group, and the card holder and authorized signatures (fields, labels, colours can be changed in the design).</p>
