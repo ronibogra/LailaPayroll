@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% block title %}Employee{% endblock %}{% block heading %}{{ 'Edit ' ~ e.full_name ~ ' (' ~ e.employee_code ~ ')' if e else 'New employee' }}{% endblock %}
+{% extends "base.html" %}{% from "_weekly.html" import weekly_picker with context %}{% block title %}Employee{% endblock %}{% block heading %}{{ 'Edit ' ~ e.full_name ~ ' (' ~ e.employee_code ~ ')' if e else 'New employee' }}{% endblock %}
 {% block content %}
 {% macro f(name, label, type='text', extra='') %}<div><label>{{ label }}</label><input name="{{ name }}" type="{{ type }}" value="{{ (e[name] if e and e[name] is not none else '') }}" {{ extra|safe }}></div>{% endmacro %}
 {% macro sel(name, label, options) %}<div><label>{{ label }}</label><select name="{{ name }}"><option value=""></option>{% for o in options %}<option {{ 'selected' if e and e[name] == o }}>{{ o }}</option>{% endfor %}</select></div>{% endmacro %}
@@ -17,6 +17,7 @@
 {{ f('designation', 'Designation') }}{{ f('section', 'Section / line') }}{{ f('grade', 'Grade') }}
 <div><label>Shift</label><select name="shift_id"><option value="">GENERAL (default)</option>
 {% for s in shifts %}<option value="{{ s.id }}" {{ 'selected' if e and e.shift_id == s.id }}>{{ s.code }} - {{ s.name }}</option>{% endfor %}</select></div>
+{% if 'shifts.manage' in user.perms %}<div style="grid-column:span 2"><label>Weekly off day(s)</label>{{ weekly_picker('ew', e.weekly_off if e else '', 'From shift / Settings') }}</div>{% endif %}
 {{ f('joined_on', 'Joined on', 'date') }}{{ f('left_on', 'Left on', 'date') }}
 <div><label>Status</label><select name="employment_status">{% for s in ('ACTIVE','INACTIVE') %}<option {{ 'selected' if e and e.employment_status == s }}>{{ s }}</option>{% endfor %}</select></div>
 </div></div>

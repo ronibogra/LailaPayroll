@@ -45,6 +45,7 @@ class Shift(Base):
     max_ot_minutes: Mapped[int] = mapped_column(Integer, default=120)
     offday_work_is_ot: Mapped[bool] = mapped_column(Boolean, default=True)
     late_count_from: Mapped[str] = mapped_column(String(10), default="START")   # START or GRACE_END
+    weekly_off: Mapped[str] = mapped_column(String(20), default="")   # "4" = Friday, "5,6" = Sat+Sun; "" = Settings default
 
 
 class Employee(Base):
@@ -82,7 +83,8 @@ class Employee(Base):
     nid: Mapped[str | None] = mapped_column(String(30), nullable=True)
     birth_certificate_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
     passport_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    ot_eligible: Mapped[bool] = mapped_column(Boolean, default=True)   # officers / management: False
+    ot_eligible: Mapped[bool] = mapped_column(Boolean, default=True)
+    weekly_off: Mapped[str] = mapped_column(String(20), default="")   # own weekly off day(s); "" = from shift / Settings   # officers / management: False
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     email: Mapped[str | None] = mapped_column(String(120), nullable=True)
     emergency_contact: Mapped[str | None] = mapped_column(String(150), nullable=True)

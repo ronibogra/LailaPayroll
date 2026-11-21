@@ -1,4 +1,5 @@
 import io
+import re
 import json
 from calendar import month_name
 from datetime import date, datetime, time, timedelta
@@ -95,12 +96,53 @@ def dec(value: str, field: str) -> Decimal:
         raise ValueError(f"{field}: not a number")
 
 
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def weekly_off_from_form(f, prefix: str) -> str:
+    """Form has <prefix>_mode = DEFAULT / DAYS / NONE and <prefix>_d0..d6 tick boxes."""
+    mode = str(f.get(f"{prefix}_mode") or "DEFAULT")
+    if mode == "NONE":
+        return "NONE"
+    if mode == "DAYS":
+        days = [str(d) for d in range(7) if f.get(f"{prefix}_d{d}")]
+        if not days:
+            raise ValueError("tick at least one weekly off day, or choose 'no weekly off'")
+        return ",".join(days)
+    return ""
+
+
+def weekly_off_text(raw: str | None) -> str:
+    raw = (raw or "").strip().upper()
+    if not raw:
+        return "default"
+    if raw == "NONE":
+        return "none"
+    return ", ".join(DAY_NAMES[int(x)] for x in raw.split(",") if x.isdigit() and int(x) < 7)
+
+
+templates.env.globals.update(DAY_NAMES=DAY_NAMES, weekly_off_text=weekly_off_text)
+
+_MONTHS = {n.lower(): i for i, n in enumerate(month_name) if n} | {n.lower()[:3]: i for i, n in enumerate(month_name) if n}
+
+
 def parse_month(value: str | None) -> tuple[int, int]:
-    if value:
-        y, m = value.split("-")[:2]
-        return int(y), int(m)
+    """Accepts 2026-11, 2026/11, 11/2026, 11-2026, Nov 2026, November 2026, 2026-11-05 ... (a browser without a month
+    picker shows a plain text box, so people type it in many ways)."""
     t = now_local()
-    return t.year, t.month
+    v = (value or "").strip()
+    if not v:
+        return t.year, t.month
+    parts = [p for p in re.split(r"[\s/.,_-]+", v) if p]
+    nums = [int(p) for p in parts if p.isdigit()]
+    names = [_MONTHS[p.lower()] for p in parts if p.lower() in _MONTHS]
+    year = next((n for n in nums if 1900 < n < 2200), None)
+    month = names[0] if names else next((n for n in nums if 1 <= n <= 12 and n != year), None)
+    if not names and len(nums) >= 2 and nums[0] == year:
+        month = nums[1] if 1 <= nums[1] <= 12 else None
+    if year and month:
+        return year, month
+    raise HTTPException(400, f"Month '{v}' not understood - choose it in the box or type it like {t:%Y-%m}")
 
 
 def cookie_kwargs(request: Request, hours: int) -> dict:
@@ -816,6 +858,68 @@ def employee_profile_pdf(emp_id: int, user=Depends(page_user), db: Session = Dep
                     headers={"Content-Disposition": f'inline; filename="profile-{emp.employee_code}.pdf"'})
 
 
+@app.post("/employees/{emp_id}/appointment")
+async def employee_appointment(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Appointment letter PDF from the template (Settings > Appointment letter); optional copy to Documents."""
+    need(user, "employees.view", "salary.view")
+    from services import appointment as apt
+    emp = _emp_or_404(db, user, emp_id)
+    f = await request.form()
+    try:
+        letter_date = date.fromisoformat(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
+        joining = date.fromisoformat(str(f.get("joining_date"))) if f.get("joining_date") else emp.joined_on
+    except ValueError:
+        return go(f"/employees/{emp.id}", err="Give valid dates for the letter")
+    ref = str(f.get("ref") or "").strip()[:60] or \
+        f"{emp.company.code if emp.company else 'HO'}/HR/APT/{letter_date:%Y}/{emp.employee_code}"
+    tpl = apt.load_template(db)
+    values = apt.values_for(db, emp, letter_date, joining, ref, tpl)
+    pdf = apt.letter_pdf(emp, values, tpl, comp_svc.for_employee(emp, *comp_svc.load_all(db)))
+    if f.get("save_copy") and "employees.edit" in user["perms"]:
+        stored, size = docs.save_file(f"emp_{emp.id}", f"appointment-{emp.employee_code}.pdf", pdf)
+        db.add(EmployeeDocument(employee_id=emp.id, doc_type="APPOINTMENT", title=f"Appointment letter {ref}",
+                                stored_name=stored, original_name=f"appointment-{emp.employee_code}.pdf", size=size,
+                                uploaded_by=user["username"]))
+    audit(db, user, "APPOINTMENT_LETTER", f"{emp.employee_code} ref {ref}" + (" (saved)" if f.get("save_copy") else ""))
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="appointment-{emp.employee_code}.pdf"'})
+
+
+@app.get("/appointment-letter", response_class=HTMLResponse)
+def appointment_template_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "company.manage")
+    from services import appointment as apt
+    return render(request, "appointment_template.html", user, tpl=apt.load_template(db), fields=apt.FIELDS,
+                  default_body=apt.DEFAULT_BODY)
+
+
+@app.post("/appointment-letter")
+async def appointment_template_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "company.manage")
+    from services import appointment as apt
+    f = await request.form()
+    if f.get("reset"):
+        for k in apt.SETTING_KEYS:
+            set_setting(db, f"appointment.{k}", "", commit=False)
+        audit(db, user, "APPOINTMENT_TEMPLATE", "reset to default", commit=False)
+        db.commit()
+        return go("/appointment-letter", msg="Template set back to the standard letter")
+    body = str(f.get("body") or "").strip()
+    if len(body) < 20:
+        return go("/appointment-letter", err="The letter text is too short")
+    pm = str(f.get("probation_months") or "6").strip()
+    if not pm.isdigit() or not 0 <= int(pm) <= 24:
+        return go("/appointment-letter", err="Probation months must be 0-24")
+    vals = {"subject": str(f.get("subject") or "").strip()[:200], "body": body[:20000], "probation_months": pm,
+            "signatory_name": str(f.get("signatory_name") or "").strip()[:100],
+            "signatory_title": str(f.get("signatory_title") or "").strip()[:100]}
+    for k, v in vals.items():
+        set_setting(db, f"appointment.{k}", v, commit=False)
+    audit(db, user, "APPOINTMENT_TEMPLATE", "saved", commit=False)
+    db.commit()
+    return go("/appointment-letter", msg="Appointment letter template saved")
+
+
 @app.post("/employees/save")
 async def employee_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "employees.edit")
@@ -872,6 +976,9 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
             e.basic, e.house_rent, e.medical, e.transport, e.food = parts
             e.payment_mode = val("payment_mode") or "CASH"
             e.bank_name, e.account_no = val("bank_name") or None, val("account_no") or None
+        if "shifts.manage" in user["perms"] and f.get("ew_mode"):
+            e.weekly_off = weekly_off_from_form(f, "ew")
+        if can_salary:
             if f.get("ot_field"):       # the form has the OT tick box (other callers leave OT unchanged)
                 e.ot_eligible = bool(f.get("ot_eligible"))
             elif not emp_id:
@@ -1097,14 +1204,30 @@ def attendance_page(request: Request, user=Depends(page_user), db: Session = Dep
 
 
 @app.post("/attendance/process")
-def attendance_process(month: str = Form(...), user=Depends(page_user), db: Session = Depends(get_db)):
+def attendance_process(month: str = Form(...), company: str = Form(""), pull_first: str = Form(""),
+                       user=Depends(page_user), db: Session = Depends(get_db)):
+    """Processes every punch stored in the program for that month (all machines, files, mobile, manual)."""
     need(user, "attendance.process")
     y, m = parse_month(month)
-    ids = [c.id for c in visible_companies(db, user)]
+    pulled, err = "", ""
+    if pull_first and "punches.edit" in user["perms"]:
+        results = devices.pull_all()      # punches still only on the machines are fetched first
+        bad = [r for r in results if "ERROR" in r]
+        pulled = f"Downloaded from {len(results) - len(bad)} machine(s) first. " if results else ""
+        err = ("Could not reach: " + "; ".join(bad)) if bad else ""
+        db.expire_all()
+    cid = company_filter(user, company)
+    ids = [cid] if cid else [c.id for c in visible_companies(db, user)]
+    first, last = month_bounds(y, m)
+    punches = db.scalar(select(func.count(AttendanceLog.id)).where(
+        AttendanceLog.punch_time >= datetime.combine(first, time.min),
+        AttendanceLog.punch_time < datetime.combine(last + timedelta(days=1), time.min)))
     n = len(process_month(db, y, m, company_ids=ids))
-    audit(db, user, "ATTENDANCE_PROCESS", f"{y}-{m:02d}: {n} employees")
-    return go("/attendance", msg=f"Processed {month_name[m]} {y} for {n} employees "
-                                 "(companies with a FINAL payroll for that month are locked and skipped)")
+    audit(db, user, "ATTENDANCE_PROCESS", f"{y}-{m:02d}: {n} employees, {punches} punches in the month"
+                                          + (f" (companies {ids})" if cid else ""))
+    return go(f"/attendance?day={first if first <= now_local().date() else now_local().date()}",
+              msg=f"{pulled}Processed {month_name[m]} {y}: {punches:,} punches, {n} employees "
+                  "(companies with a FINAL payroll for that month are locked and skipped)", err=err)
 
 
 @app.post("/attendance/manual")
@@ -1492,17 +1615,26 @@ async def leave_workflow_save(request: Request, user=Depends(page_user), db: Ses
 def shifts_page(request: Request, edit: int | None = None, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "attendance.view")
     r = report_ctx(db, user, "shifts", {})
+    so = select(Employee).where(Employee.weekly_off.is_not(None), Employee.weekly_off != "",
+                                Employee.employment_status == "ACTIVE").order_by(Employee.employee_code).limit(300)
+    if user.get("company_id"):
+        so = so.where(Employee.company_id == user["company_id"])
     return render(request, "shifts.html", user, r=r, shifts=r["rows"], companies=visible_companies(db, user),
+                  staff_off=db.scalars(so).all(),
                   e=db.get(Shift, edit) if edit else None)
 
 
 @app.post("/shifts/save")
-def shift_save(shift_id: str = Form(""), code: str = Form(...), name: str = Form(...), start: str = Form(...),
+async def shift_save(request: Request, shift_id: str = Form(""), code: str = Form(...), name: str = Form(...), start: str = Form(...),
                end: str = Form(...), grace_minutes: int = Form(10), break_minutes: int = Form(60),
                break_after_minutes: int = Form(300), early_window_minutes: int = Form(180),
                ot_round_minutes: int = Form(30), max_ot_minutes: int = Form(120), offday_work_is_ot: str = Form(""),
                late_count_from: str = Form("START"), user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "shifts.manage")
+    try:
+        weekly = weekly_off_from_form(await request.form(), "wo")
+    except ValueError as exc:
+        return go("/shifts", err=str(exc))
     code = code.strip().upper()
     s = db.get(Shift, int(shift_id)) if shift_id else Shift()
     if db.scalar(select(Shift).where(Shift.code == code, Shift.id != (s.id or 0))):
@@ -1515,11 +1647,42 @@ def shift_save(shift_id: str = Form(""), code: str = Form(...), name: str = Form
     s.early_window_minutes, s.ot_round_minutes, s.max_ot_minutes = early_window_minutes, ot_round_minutes, max_ot_minutes
     s.offday_work_is_ot = bool(offday_work_is_ot)
     s.late_count_from = "GRACE_END" if late_count_from == "GRACE_END" else "START"
+    s.weekly_off = weekly
     if not shift_id:
         db.add(s)
     audit(db, user, "SHIFT_SAVE", f"{code} {start}-{end}", commit=False)
     db.commit()
     return go("/shifts", msg=f"Shift {code} saved - process the month again to apply changes")
+
+
+@app.post("/shifts/weekly-off")
+async def weekly_off_assign(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Give employees their own weekly off day(s), e.g. some Friday, others Saturday or Sunday."""
+    need(user, "shifts.manage")
+    f = await request.form()
+    try:
+        weekly = weekly_off_from_form(f, "ew")
+    except ValueError as exc:
+        return go("/shifts", err=str(exc))
+    codes = [c.strip() for c in str(f.get("employee_codes") or "").replace(",", "\n").splitlines() if c.strip()]
+    conds = []
+    if codes:
+        conds.append(or_(Employee.employee_code.in_(codes), Employee.card_no.in_(codes)))
+    dept = str(f.get("department") or "").strip()
+    if dept:
+        conds.append(Employee.department.has(Department.name == dept))
+    if not conds:
+        return go("/shifts", err="Give employee codes or a department")
+    stmt = select(Employee).where(or_(*conds))
+    if user.get("company_id"):
+        stmt = stmt.where(Employee.company_id == user["company_id"])
+    emps = db.scalars(stmt).all()
+    for e in emps:
+        e.weekly_off = weekly
+    audit(db, user, "WEEKLY_OFF", f"{weekly_off_text(weekly)} -> {len(emps)} employees", commit=False)
+    db.commit()
+    return go("/shifts", msg=f"Weekly off '{weekly_off_text(weekly)}' set for {len(emps)} employees - "
+                             "process the month again to apply it")
 
 
 @app.post("/shifts/assign")

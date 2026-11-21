@@ -7,8 +7,12 @@
 {% if 'attendance.process' in user.perms %}
 <div class="grid2">
 <div class="panel"><h3>Process month</h3><p class="hint">Rebuilds daily attendance from punches, shifts, holidays and leave. Run after new punches, manual punches, leave or shift changes.</p>
-<form class="inline" method="post" action="/attendance/process"><input type="month" name="month" value="{{ day.strftime('%Y-%m') }}" required><button>Process month</button></form>
-<p class="hint" style="margin-top:10px">Punches come from the machines automatically. To import a file or download now, use <a href="/punches">Punch records</a>.</p>
+<form class="inline" method="post" action="/attendance/process">
+<div><label>Month</label><input type="month" name="month" value="{{ day.strftime('%Y-%m') }}" placeholder="{{ day.strftime('%Y-%m') }}" required></div>
+{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }}</option>{% endfor %}</select></div>{% endif %}
+{% if 'punches.edit' in user.perms %}<div><label style="color:inherit"><input type="checkbox" name="pull_first" value="1" checked> Download from all machines first</label></div>{% endif %}
+<button>Process month</button></form>
+<p class="hint" style="margin-top:10px">Uses <b>every punch saved in the program for that month</b> - from all machines, imported files, mobile and manual punches. Machines are also downloaded automatically every few minutes; punches still only inside a machine are fetched when you tick the box above. Older months: import the machine file on <a href="/punches">Punch records</a>, then process that month.</p>
 </div>
 {% if 'punches.edit' in user.perms %}
 <div class="panel"><h3>Manual punch</h3><p class="hint">For a forgotten punch or a machine fault. The reason is saved in the activity log.</p>

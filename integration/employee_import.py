@@ -14,12 +14,30 @@ from models import Company, Employee, Department, Shift
 from payroll.engine import split_gross
 from services.policy import load_policy
 
+_DAYS = {d: i for i, d in enumerate(("mon", "tue", "wed", "thu", "fri", "sat", "sun"))}
+
+
+def parse_weekly_off(text: str) -> str:
+    """'Fri' / 'Friday' / 'Sat, Sun' / 'none' -> '4' / '4' / '5,6' / 'NONE'."""
+    t = text.strip().lower()
+    if t in ("none", "no", "0", "-"):
+        return "NONE"
+    days = set()
+    for part in t.replace("/", ",").replace("+", ",").replace(" ", ",").split(","):
+        if not part:
+            continue
+        if part[:3] not in _DAYS:
+            raise ValueError(f"weekly_off: '{text}' - use day names like Fri or Sat,Sun, or NONE")
+        days.add(_DAYS[part[:3]])
+    return ",".join(str(d) for d in sorted(days))
+
+
 COLUMNS = ["company", "employee_code", "card_no", "full_name", "department", "designation", "section", "grade",
            "shift_code", "joined_on", "left_on", "gross", "basic", "house_rent", "medical", "transport", "food",
            "payment_mode", "bank_name", "account_no", "status",
            "father_name", "mother_name", "spouse_name", "date_of_birth", "gender", "blood_group", "religion",
            "marital_status", "nid", "birth_certificate_no", "passport_no", "phone", "email", "emergency_contact", "present_address", "permanent_address",
-           "education", "notes"]
+           "education", "notes", "weekly_off"]
 TEXT_PROFILE = ("father_name", "mother_name", "spouse_name", "gender", "blood_group", "religion", "marital_status",
                 "nid", "birth_certificate_no", "passport_no", "phone", "email", "emergency_contact", "present_address", "permanent_address", "education",
                 "notes", "designation", "section", "grade", "bank_name", "account_no")
@@ -29,7 +47,7 @@ ALIASES = {"code": "employee_code", "emp code": "employee_code", "employee id": 
            "machine id": "card_no", "user id": "card_no", "name": "full_name", "employee name": "full_name",
            "dept": "department", "joining date": "joined_on", "join date": "joined_on", "dob": "date_of_birth",
            "birth date": "date_of_birth", "mobile": "phone", "phone no": "phone", "gross salary": "gross",
-           "salary": "gross", "nid no": "nid", "national id": "nid", "father": "father_name", "mother": "mother_name"}
+           "salary": "gross", "weekly off": "weekly_off", "off day": "weekly_off", "weekend": "weekly_off", "nid no": "nid", "national id": "nid", "father": "father_name", "mother": "mother_name"}
 
 
 def template_bytes() -> bytes:
@@ -40,7 +58,7 @@ def template_bytes() -> bytes:
     ws.append(["HO", "12127", "12127", "Md. Example", "Accounts", "Officer", "", "", "GENERAL", "2024-01-15", None,
                25000, None, None, None, None, None, "BANK", "Dutch-Bangla Bank", "1234567890", "ACTIVE",
                "Father Name", "Mother Name", "", "1990-05-01", "Male", "B+", "Islam", "Married", "", "", "", "01700000000",
-               "", "Wife: 01800000000", "Dhaka", "Bogura", "BBA", ""])
+               "", "Wife: 01800000000", "Dhaka", "Bogura", "BBA", "", "Fri"])
     help_ws = wb.create_sheet("Help")
     for line in [
         "Only employee_code is required. Fill whatever else you have - you can upload again later to add more.",
@@ -51,6 +69,7 @@ def template_bytes() -> bytes:
         "If you fill basic, also fill house_rent, medical, transport, food: they must add up to gross.",
         "payment_mode: CASH, BANK or MOBILE. status: ACTIVE or INACTIVE. Dates: YYYY-MM-DD or real Excel dates.",
         "shift_code must exist on the Shifts page (empty = GENERAL shift). Photos are added on the employee page.",
+        "weekly_off: the employee's own day(s) off, e.g. Fri, or Sat,Sun, or NONE (works every day). Empty = shift / Settings.",
         "Column names like 'Name', 'Employee ID', 'Card No', 'Joining Date', 'Mobile', 'Gross Salary' also work.",
     ]:
         help_ws.append([line])
@@ -179,6 +198,9 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
                 if mode not in ("CASH", "BANK", "MOBILE"):
                     raise ValueError("payment_mode must be CASH, BANK or MOBILE")
                 p["payment_mode"] = mode
+            wo = (_text(get("weekly_off")) or "").strip()
+            if wo:
+                p["weekly_off"] = parse_weekly_off(wo)
             status = (_text(get("status")) or "").upper()
             if status:
                 if status not in ("ACTIVE", "INACTIVE"):

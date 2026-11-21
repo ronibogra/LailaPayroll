@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_report.html" import report_bar, report_table, import_box with context %}{% block title %}Shifts{% endblock %}{% block heading %}Shifts{% endblock %}
+{% extends "base.html" %}{% from "_weekly.html" import weekly_picker with context %}{% from "_report.html" import report_bar, report_table, import_box with context %}{% block title %}Shifts{% endblock %}{% block heading %}Shifts{% endblock %}
 {% block content %}
 {{ report_bar(r) }}
 {% call(sh) report_table(r) %}{% if 'shifts.manage' in user.perms %}<a href="/shifts?edit={{ sh.id }}">Edit</a>{% endif %}{% endcall %}<div style="margin-bottom:16px"></div>
@@ -19,6 +19,7 @@
 <div><label>Accept punches this early (min before start)</label><input type="number" name="early_window_minutes" value="{{ e.early_window_minutes if e else 180 }}" min="0" max="360"></div>
 <div><label>Count OT in blocks of (min)</label><input type="number" name="ot_round_minutes" value="{{ e.ot_round_minutes if e else 30 }}" min="1"></div>
 <div><label>Daily OT cap (min) - rest is "extra OT"</label><input type="number" name="max_ot_minutes" value="{{ e.max_ot_minutes if e else 120 }}" min="0"></div>
+<div style="grid-column:1/-1"><label>Weekly off day(s) for this shift</label>{{ weekly_picker('wo', e.weekly_off if e else '', 'Same as Settings (company weekly off)') }}</div>
 <div><label><input type="checkbox" name="offday_work_is_ot" value="1" {{ 'checked' if not e or e.offday_work_is_ot }}> Weekend/holiday work counts as OT</label></div>
 </div><p><button>Save shift</button>{% if e %} <a class="btn sec" href="/shifts">Cancel</a>{% endif %}</p></form></div>
 <div class="panel"><h3>Assign shift</h3><p class="hint">Give employee codes (one per line or comma separated), a department and/or a whole company.</p>
@@ -28,5 +29,15 @@
 <label style="margin-top:10px">Or a whole company</label><select name="company_id" style="width:100%"><option value="">-</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }} - {{ c.name }}</option>{% endfor %}</select>
 <p><button>Assign</button></p></form><p class="hint">After changing shifts, process the month again on the Daily attendance page.</p>
 {{ import_box("shifts", "shifts") }}</div>
+</div>
+<div class="panel"><h3>Weekly off day per employee</h3>
+<p class="hint">Some staff are off on Friday, others on Saturday or Sunday? Set it here for employee codes or a whole department. Order used: the employee's own day &rarr; the shift's day &rarr; Settings. Holidays and approved leave are added on top.</p>
+<form method="post" action="/shifts/weekly-off"><div class="form-grid">
+<div><label>Employee codes (one per line or comma separated)</label><textarea name="employee_codes" rows="3" style="width:100%"></textarea></div>
+<div><label>Or a department (exact name)</label><input name="department" style="width:100%"></div>
+<div><label>Weekly off</label>{{ weekly_picker('ew', '4', 'Back to shift / Settings default') }}</div>
+</div><p><button>Set weekly off</button></p></form>
+{% if staff_off %}<div class="table-wrap"><table><tr><th>Employee</th><th>Company</th><th>Department</th><th>Own weekly off</th></tr>
+{% for e2 in staff_off %}<tr><td><a href="/employees/{{ e2.id }}">{{ e2.employee_code }} {{ e2.full_name }}</a></td><td>{{ e2.company.code if e2.company }}</td><td>{{ e2.department.name if e2.department }}</td><td>{{ weekly_off_text(e2.weekly_off) }}</td></tr>{% endfor %}</table></div>{% endif %}
 </div>{% endif %}
 {% endblock %}

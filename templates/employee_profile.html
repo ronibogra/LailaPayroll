@@ -8,9 +8,19 @@
 <div>Status</div><div><span class="tag {{ 'yes' if e.employment_status == 'ACTIVE' else '' }}">{{ e.employment_status }}</span></div>
 <div>Joined</div><div>{{ e.joined_on.strftime('%d %b %Y') if e.joined_on else '-' }}{{ ' · left ' ~ e.left_on.strftime('%d %b %Y') if e.left_on }}</div>
 <div>Shift</div><div>{{ e.shift.code ~ ' (' ~ e.shift.start.strftime('%H:%M') ~ '-' ~ e.shift.end.strftime('%H:%M') ~ ')' if e.shift else 'GENERAL' }}</div>
+<div>Weekly off</div><div>{{ weekly_off_text(e.weekly_off) if e.weekly_off else ('shift: ' ~ weekly_off_text(e.shift.weekly_off) if e.shift and e.shift.weekly_off else 'company default') }}</div>
 <div>Mobile</div><div>{{ e.phone or '-' }}</div></div></div>
-<div style="display:flex;flex-direction:column;gap:6px"><a class="btn" href="/employees/{{ e.id }}/profile.pdf" target="_blank">⬇ Profile PDF</a>{% if 'employees.edit' in user.perms %}<a class="btn sec" href="/employees/{{ e.id }}/edit">Edit</a>{% endif %}<a class="btn sec" href="/employees">Back</a></div>
+<div style="display:flex;flex-direction:column;gap:6px"><a class="btn" href="/employees/{{ e.id }}/profile.pdf" target="_blank">⬇ Profile PDF</a>{% if show_salary %}<a class="btn sec" href="#appointment" onclick="document.getElementById('appointment').style.display='';">📄 Appointment letter</a>{% endif %}{% if 'employees.edit' in user.perms %}<a class="btn sec" href="/employees/{{ e.id }}/edit">Edit</a>{% endif %}<a class="btn sec" href="/employees">Back</a></div>
 </div></div>
+{% if show_salary %}<div class="panel" id="appointment" style="display:none"><h3>Appointment letter</h3>
+<form method="post" action="/employees/{{ e.id }}/appointment" target="_blank"><div class="form-grid">
+<div><label>Letter date</label><input type="date" name="letter_date" value="{{ today }}"></div>
+<div><label>Joining date</label><input type="date" name="joining_date" value="{{ e.joined_on or '' }}"></div>
+<div><label>Reference no. (blank = automatic)</label><input name="ref" placeholder="{{ (e.company.code if e.company else 'HO') ~ '/HR/APT/' ~ today.year ~ '/' ~ e.employee_code }}"></div>
+{% if 'employees.edit' in user.perms %}<div><label style="color:inherit"><input type="checkbox" name="save_copy" value="1" checked> Save a copy in Documents</label></div>{% endif %}
+</div><p><button>Make appointment letter (PDF)</button>{% if 'company.manage' in user.perms %} <a class="btn sec" href="/appointment-letter">Edit letter text</a>{% endif %}</p>
+{% if not e.designation or not e.gross %}<p class="hint" style="color:#b3261e">Fill the designation and salary in the profile first - they are printed in the letter.</p>{% endif %}
+</form></div>{% endif %}
 <div class="cards">
 <div class="metric g"><span>Present ({{ today.strftime('%B') }})</span><strong>{{ summary.present }}</strong></div>
 <div class="metric a"><span>Late</span><strong>{{ summary.late }}</strong></div>

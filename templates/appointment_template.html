@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block title %}Appointment letter{% endblock %}{% block heading %}Appointment letter template{% endblock %}
+{% block content %}
+<div class="grid2">
+<div class="panel"><h3>Letter text</h3>
+<p class="hint">This text is filled with each employee's data automatically. Write a field in curly brackets, e.g. <b>{name}</b>. Put <b>{salary_table}</b> on its own line where the salary breakdown table should appear. The letterhead (logo, company name, address), reference no., date, "To" address, signature and acceptance parts are added automatically.</p>
+<form method="post" action="/appointment-letter">
+<label>Subject</label><input name="subject" value="{{ tpl.subject }}" style="width:100%">
+<label style="margin-top:10px">Letter body</label><textarea name="body" rows="26" style="width:100%;font-family:inherit;line-height:1.45">{{ tpl.body }}</textarea>
+<div class="form-grid" style="margin-top:10px">
+<div><label>Probation (months)</label><input name="probation_months" value="{{ tpl.probation_months }}"></div>
+<div><label>Signed by (name)</label><input name="signatory_name" value="{{ tpl.signatory_name }}"></div>
+<div><label>Signed by (title)</label><input name="signatory_title" value="{{ tpl.signatory_title }}"></div>
+</div>
+<p><button>Save template</button> <button class="sec" name="reset" value="1" onclick="return confirm('Go back to the standard letter text?')">Standard letter</button></p></form></div>
+<div class="panel"><h3>Fields you can use</h3><div class="table-wrap"><table>
+{% for k, v in fields.items() %}<tr><td><code>{{ '{' ~ k ~ '}' }}</code></td><td>{{ v }}</td></tr>{% endfor %}</table></div>
+<p class="hint">To print a letter: open an employee's profile → <b>Appointment letter</b>. Weekly holiday, shift, overtime and leave days come from the shift, weekly off, pay policy and leave policy, so they are always up to date.</p></div>
+</div>
+{% endblock %}

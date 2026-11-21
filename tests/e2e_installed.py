@@ -8,6 +8,7 @@ import io
 import re
 import sys
 import time
+from calendar import month_name as month_name_
 from datetime import date, timedelta
 
 import requests
@@ -38,9 +39,9 @@ def page(s, path, must=None, code=200):
     return r
 
 
-def post(s, path, data=None, files=None, must=None, must_not="alert err"):
+def post(s, path, data=None, files=None, must=None, must_not="alert err", code=200):
     r = s.post(BASE + path, data=data, files=files, timeout=180)
-    ok(r.status_code == 200, f"POST {path} -> {r.status_code}: {r.text[:800]}")
+    ok(r.status_code == code, f"POST {path} -> {r.status_code}: {r.text[:800]}")
     if must:
         ok(must in r.text, f"POST {path}: '{must}' not in result. URL {r.url} Page: {r.text[:1500]}")
     if must_not and must_not in r.text:
@@ -583,6 +584,41 @@ def main():
     ok(c.get(BASE + "/payroll/components", timeout=30, headers={"accept": "text/html"}).status_code == 403,
        "pay components are Admin only")
     page(h, "/shifts", code=403)
+
+    step("month typed in other ways + process with download from machines first")
+    for typed in (f"{m:02d}/{y}", f"{month_name_[m]} {y}"):
+        post(s, "/attendance/process", {"month": typed}, must=f"Processed {month_name_[m]} {y}")
+    post(s, "/attendance/process", {"month": "not a month"}, must="not understood", must_not=None, code=400)
+    post(s, "/attendance/process", {"month": month, "company": "2", "pull_first": "1"}, must="punches",
+         must_not=None)   # the CI's test machines are unreachable on purpose
+
+    step("weekly off per employee (Saturday for one person) and per shift")
+    post(s, "/shifts/weekly-off", {"employee_codes": "LTL-0001", "ew_mode": "DAYS", "ew_d5": "1"},
+         must="set for 1 employees")
+    page(s, "/shifts", must="Sat")
+    post(s, "/shifts/save", {"code": "ROSTER", "name": "Roster Sunday off", "start": "08:00", "end": "17:00",
+                             "grace_minutes": "10", "break_minutes": "60", "break_after_minutes": "300",
+                             "early_window_minutes": "180", "ot_round_minutes": "30", "max_ot_minutes": "120",
+                             "wo_mode": "DAYS", "wo_d6": "1"}, must="saved")
+    page(s, "/shifts", must="Sun")
+    post(s, "/shifts/weekly-off", {"employee_codes": "LTL-0001", "ew_mode": "DAYS"}, must="tick at least one",
+         must_not=None)
+    post(s, "/attendance/process", {"month": month, "company": "2"}, must="Processed")
+    sats = [d for d in range(1, prev_last.day + 1) if date(y, m, d).weekday() == 5]
+    ws = load_workbook(io.BytesIO(page(s, f"/export/attendance.xlsx?start={date(y, m, sats[0])}&end={date(y, m, sats[0])}&q=LTL-0001").content)).active
+    head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
+    ok(ws.cell(6, head.index("Status") + 1).value in ("OFFDAY", "OFFDAY_WORK"), "Saturday must be the weekly off for LTL-0001")
+
+    step("appointment letter: template, PDF, copy saved in Documents")
+    page(s, "/appointment-letter", must="{salary_table}")
+    post(s, "/appointment-letter", {"subject": "Appointment as {designation}", "body": page(s, "/appointment-letter").text.split(
+        '<textarea name="body" rows="26" style="width:100%;font-family:inherit;line-height:1.45">')[1].split("</textarea>")[0]
+        .replace("&#39;", "'").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&#34;", '"'),
+        "probation_months": "3", "signatory_name": "Md. HR Head", "signatory_title": "Head of HR"}, must="template saved")
+    r = s.post(BASE + f"/employees/{kid}/appointment", data={"letter_date": str(today), "save_copy": "1"}, timeout=60)
+    ok(r.ok and r.content[:4] == b"%PDF", f"appointment letter: {r.status_code} {r.text[:300]}")
+    page(s, f"/employees/{kid}", must="Appointment letter HO/HR/APT/")
+    ok(c.post(BASE + f"/employees/{kid}/appointment", timeout=30).status_code == 403, "clerk must not make letters")
 
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")

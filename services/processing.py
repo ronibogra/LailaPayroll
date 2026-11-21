@@ -30,6 +30,25 @@ def shift_rule(s: Shift | None) -> ShiftRule:
                      late_count_from=s.late_count_from or "START")
 
 
+def parse_days(raw: str | None) -> set[int] | None:
+    """'4' -> {4}; '5,6' -> {5, 6}; 'NONE' -> set() (works every day); '' -> None (not set)."""
+    raw = (raw or "").strip().upper()
+    if not raw:
+        return None
+    if raw == "NONE":
+        return set()
+    return {int(x) for x in raw.split(",") if x.strip().isdigit() and 0 <= int(x) <= 6}
+
+
+def weekly_off_for(e, shift_off: str | None, default: set[int]) -> set[int]:
+    """Employee's own weekly off day(s) first, then the shift's, then the Settings default."""
+    for raw in (getattr(e, "weekly_off", None), shift_off):
+        days = parse_days(raw)
+        if days is not None:
+            return days
+    return default
+
+
 def holiday_applies(h: SpecialHoliday, e: Employee) -> bool:
     v = (h.scope_value or "").strip()
     if h.scope == "COMPANY":
@@ -68,6 +87,7 @@ def process_month(db: Session, year: int, month: int, company_ids=None, save: bo
     # employees without a shift use the GENERAL shift (created on first start, editable on the Shifts page)
     default = next((shift_rule(s) for s in all_shifts if s.code == "GENERAL"), DEFAULT_SHIFT)
     weekend = weekend_set(db)
+    shift_off = {s.id: s.weekly_off for s in all_shifts}
     # One query for all punches; widen by a day each side for night shifts.
     lo = datetime.combine(first - timedelta(days=1), datetime.min.time())
     hi = datetime.combine(last + timedelta(days=2), datetime.min.time())
@@ -96,7 +116,7 @@ def process_month(db: Session, year: int, month: int, company_ids=None, save: bo
             rule = replace(rule, ot_allowed=False)
         own = holidays | {h.day for h in specials if holiday_applies(h, e)}
         results[e.id] = evaluate_month(year, month, punches.get(e.card_no, []), rule,
-                                       weekend, own, leave_map.get(e.id),
+                                       weekly_off_for(e, shift_off.get(e.shift_id), weekend), own, leave_map.get(e.id),
                                        e.joined_on, e.left_on)
 
     if save:

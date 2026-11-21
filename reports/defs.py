@@ -90,6 +90,7 @@ EMP_COLS = [
     Col("nid", "NID", lambda e: e.nid, False),
     Col("birth_cert", "Birth certificate", lambda e: e.birth_certificate_no, False),
     Col("passport", "Passport", lambda e: e.passport_no, False),
+    Col("weekly_off", "Own weekly off", lambda e: _wo(e.weekly_off), False),
     Col("ot_eligible", "OT eligible", lambda e: e.ot_eligible is not False, False),
     Col("email", "Email", lambda e: e.email, False),
     Col("emergency", "Emergency contact", lambda e: e.emergency_contact, False),
@@ -339,10 +340,18 @@ def fetch_holidays(db, user, p, export):
     return rows, f"from {year - 1}", len(rows)
 
 
+def _wo(raw) -> str:
+    raw = (raw or "").strip().upper()
+    if raw == "NONE":
+        return "none"
+    return ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][int(x)] for x in raw.split(",") if x.isdigit() and int(x) < 7)
+
+
 SHIFT_COLS = [
     Col("code", "Code", lambda s: s.code), Col("name", "Name", lambda s: s.name),
     Col("start", "Start", lambda s: s.start, kind="time"), Col("end", "End", lambda s: s.end, kind="time"),
     Col("grace", "Grace (min)", lambda s: s.grace_minutes, kind="num"),
+    Col("weekly_off", "Weekly off", lambda s: _wo(s.weekly_off) or "Settings default"),
     Col("late_from", "Late counted from", lambda s: "end of grace" if s.late_count_from == "GRACE_END" else "shift start"),
     Col("break", "Break (min)", lambda s: s.break_minutes, kind="num"),
     Col("ot_block", "OT block (min)", lambda s: s.ot_round_minutes, kind="num"),

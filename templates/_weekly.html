@@ -1,0 +1,5 @@
+{% macro weekly_picker(prefix, raw, default_label='Use the default') %}{% set r = (raw or '')|upper %}{% set mode = 'DEFAULT' if not r else ('NONE' if r == 'NONE' else 'DAYS') %}{% set ticked = r.split(',') if mode == 'DAYS' else [] %}
+<div class="wo-pick" id="wp_{{ prefix }}"><select name="{{ prefix }}_mode" onchange="this.parentNode.querySelector('.wo-days').style.display=this.value==='DAYS'?'':'none'">
+<option value="DEFAULT" {{ 'selected' if mode == 'DEFAULT' }}>{{ default_label }}</option><option value="DAYS" {{ 'selected' if mode == 'DAYS' }}>These days off every week:</option><option value="NONE" {{ 'selected' if mode == 'NONE' }}>No weekly off (works every day)</option></select>
+<div class="wo-days" style="{{ '' if mode == 'DAYS' else 'display:none' }};margin-top:6px">{% for n in DAY_NAMES %}<label style="display:inline-block;margin-right:10px;color:inherit"><input type="checkbox" name="{{ prefix }}_d{{ loop.index0 }}" value="1" {{ 'checked' if loop.index0|string in ticked }}> {{ n }}</label>{% endfor %}</div></div>
+{% endmacro %}
