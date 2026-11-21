@@ -616,5 +616,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:  # noqa: BLE001
-        print(f"\nFAILED at step {STEP[0]}: {exc}", flush=True)
+        print(f"\nFAILED at step {STEP[0]}: {exc}".encode("ascii", "replace").decode(), flush=True)
         sys.exit(1)

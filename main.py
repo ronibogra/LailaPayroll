@@ -64,7 +64,9 @@ _state = {"setup_done": None, "started": False}
 # ---------------------------------------------------------------- helpers
 def go(url: str, msg: str = "", err: str = "") -> RedirectResponse:
     q = {k: v for k, v in (("msg", msg), ("err", err)) if v}
-    return RedirectResponse(url + (("&" if "?" in url else "?") + urlencode(q) if q else ""), status_code=303)
+    url, _, frag = url.partition("#")        # the message goes before the #anchor, or the browser drops it
+    url += ("&" if "?" in url else "?") + urlencode(q) if q else ""
+    return RedirectResponse(url + (f"#{frag}" if frag else ""), status_code=303)
 
 
 def need(user: dict, *perms: str) -> None:
