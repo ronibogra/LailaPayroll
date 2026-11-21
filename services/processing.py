@@ -1,4 +1,7 @@
 """Turns stored punches into daily attendance and monthly summaries."""
+import logging
+import threading
+import time as _time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
@@ -77,8 +80,16 @@ def employees_for_month(db: Session, first: date, last: date, company_ids=None) 
     return [e for e in db.scalars(stmt) if e.employment_status != "INACTIVE" or e.left_on]
 
 
+_lock = threading.RLock()       # manual and automatic processing never run at the same time
+
+
 def process_month(db: Session, year: int, month: int, company_ids=None, save: bool = True) -> dict[int, MonthSummary]:
     """company_ids: None = all companies. Companies whose payroll for the month is FINAL are skipped (locked)."""
+    with _lock:
+        return _process_month(db, year, month, company_ids, save)
+
+
+def _process_month(db: Session, year: int, month: int, company_ids=None, save: bool = True) -> dict[int, MonthSummary]:
     first, last = month_bounds(year, month)
     locked = final_company_ids(db, year, month)
     employees = [e for e in employees_for_month(db, first, last, company_ids) if e.company_id not in locked]
@@ -139,3 +150,38 @@ def process_month(db: Session, year: int, month: int, company_ids=None, save: bo
         db.add_all(rows)
         db.commit()
     return results
+
+
+def start_auto_refresh(every_seconds: int = 300) -> None:
+    """Keeps daily attendance up to date: when new punches have arrived (machines, mobile, files), the current month
+    (and the previous one during the first 5 days) is processed again in the background."""
+    from database import SessionLocal
+    from sqlalchemy import func
+    from timeutil import now_local
+    log = logging.getLogger("laila.autoprocess")
+    state = {"last_id": None}
+
+    def loop():
+        _time.sleep(60)
+        while True:
+            try:
+                with SessionLocal() as db:
+                    top = db.scalar(select(func.max(AttendanceLog.id))) or 0
+                    today = now_local().date()
+                    if top != state["last_id"] or state.get("day") != today:
+                        months = [(today.year, today.month)]
+                        if today.day <= 5:
+                            prev = today.replace(day=1) - timedelta(days=1)
+                            months.append((prev.year, prev.month))
+                        for y, m in months:
+                            process_month(db, y, m)
+                        state["last_id"], state["day"] = top, today
+            except Exception as exc:  # noqa: BLE001 - never let the thread die
+                log.warning("automatic processing failed: %s", exc)
+                try:
+                    from services.errors import log_error
+                    log_error("PROCESS", f"automatic attendance processing failed: {exc}", exc=exc)
+                except Exception:  # noqa: BLE001
+                    pass
+            _time.sleep(every_seconds)
+    threading.Thread(target=loop, name="auto-process", daemon=True).start()

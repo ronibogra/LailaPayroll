@@ -42,7 +42,8 @@ FILTERS: dict[str, Filter] = {f.key: f for f in [
     Filter("late_after", "First punch after", "time", help="e.g. 09:10 = came late"),
     Filter("early_before", "Last punch before", "time", help="e.g. 17:00 = left early"),
     Filter("att_status", "Attendance status", "multi", choices=[
-        ("PRESENT", "Present"), ("LATE", "Late"), ("MISSING_OUT", "Single punch"), ("ABSENT", "Absent"),
+        ("CAME", "Present - everyone who came"), ("PRESENT", "On time"), ("LATE", "Late"),
+        ("MISSING_OUT", "In only / single punch"), ("ABSENT", "Absent"),
         ("LEAVE_PAID", "Leave (paid)"), ("LEAVE_UNPAID", "Leave (unpaid)"), ("OFFDAY", "Off day"),
         ("OFFDAY_WORK", "Worked off day")]),
     Filter("late_only", "Only late", "check"), Filter("ot_only", "Only with overtime", "check"),

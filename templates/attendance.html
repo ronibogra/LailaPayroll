@@ -1,12 +1,12 @@
 {% extends "base.html" %}{% from "_report.html" import report_bar, report_table with context %}{% block title %}Attendance{% endblock %}{% block heading %}Daily attendance · {{ day.strftime('%d %b %Y') }}{% endblock %}
 {% block content %}
 <div class="panel"><form class="inline" method="get">{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == company }}>{{ c.code }}</option>{% endfor %}</select></div>{% endif %}<div><label>Date</label><input type="date" name="day" value="{{ day }}"></div>
-<div><label>Status</label><select name="att_status"><option value="">All</option>{% for s in ('PRESENT','LATE','MISSING_OUT','ABSENT','LEAVE_PAID','LEAVE_UNPAID','OFFDAY','OFFDAY_WORK') %}<option {{ 'selected' if s == status }}>{{ s }}</option>{% endfor %}</select></div>
+<div><label>Status</label><select name="att_status"><option value="">All</option>{% for s, lab in [('CAME','Present - everyone who came'),('PRESENT','On time'),('LATE','Late'),('MISSING_OUT','In only / single punch'),('ABSENT','Absent'),('LEAVE_PAID','Leave (paid)'),('LEAVE_UNPAID','Leave (unpaid)'),('OFFDAY','Off day'),('OFFDAY_WORK','Worked off day')] %}<option value="{{ s }}" {{ 'selected' if s == status }}>{{ lab }}</option>{% endfor %}</select></div>
 <button class="sec">Show</button>
 <a class="btn sec" href="/attendance/month.xlsx?month={{ day.strftime('%Y-%m') }}&company={{ company }}">Month Excel (job card)</a></form></div>
 {% if 'attendance.process' in user.perms %}
 <div class="grid2">
-<div class="panel"><h3>Process month</h3><p class="hint">Rebuilds daily attendance from punches, shifts, holidays and leave. Run after new punches, manual punches, leave or shift changes.</p>
+<div class="panel"><h3>Process month</h3><p class="hint">Rebuilds daily attendance from punches, shifts, holidays and leave. This month is processed <b>automatically every 5 minutes</b> when new punches arrive; run it by hand after leave, shift or holiday changes, or for an older month.</p>
 <form class="inline" method="post" action="/attendance/process">
 <div><label>Month</label><input type="month" name="month" value="{{ day.strftime('%Y-%m') }}" placeholder="{{ day.strftime('%Y-%m') }}" required></div>
 {% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }}</option>{% endfor %}</select></div>{% endif %}

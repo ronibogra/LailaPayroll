@@ -362,6 +362,11 @@ def main():
     ws = load_workbook(io.BytesIO(page(s, f"/export/punches.xlsx?{rng}&company=2").content)).active
     cards = {ws.cell(i, 1).value for i in range(6, ws.max_row + 1)} - {None}
     ok(cards == {"2002"}, f"company filter on punches: {cards}")
+    ws = load_workbook(io.BytesIO(page(s, f"/export/attendance.xlsx?{rng}&att_status=CAME").content)).active
+    head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
+    st = {ws.cell(i, head.index("Status") + 1).value for i in range(6, ws.max_row + 1)} - {None}
+    ok(st and st <= {"PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK"} and len(st) > 1,
+       f"'Present - everyone who came' must include late and single-punch days like the dashboard: {st}")
     ws = load_workbook(io.BytesIO(page(s, f"/export/attendance.xlsx?{rng}&att_status=ABSENT").content)).active
     head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
     st = {ws.cell(i, head.index("Status") + 1).value for i in range(6, ws.max_row + 1)} - {None}

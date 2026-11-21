@@ -260,6 +260,8 @@ def startup():
     finally:
         db.close()
     devices.start_poller()
+    from services.processing import start_auto_refresh
+    start_auto_refresh()
     backups.start_scheduler()
 
 

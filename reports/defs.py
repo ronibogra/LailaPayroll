@@ -215,6 +215,8 @@ def _att_stmt(p, user, s, e):
                                                          *emp_conditions(p, user)))
     st = p.get("att_status")
     st = st if isinstance(st, list) else [x for x in str(st or "").split(",") if x]
+    if "CAME" in st:      # same as the dashboard "Present": on time, late, in only (no out yet) and off-day work
+        st = list(dict.fromkeys([x for x in st if x != "CAME"] + ["PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK"]))
     if st:
         stmt = stmt.where(DailyAttendance.status.in_(st))
     if p.get("late_only"):
