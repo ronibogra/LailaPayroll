@@ -604,6 +604,25 @@ def main():
     head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
     ok("Allowances" in head and "Late ded." in head, f"payroll report columns: {head}")
     page(s, f"/payroll/line?company=1&month={month}&emp={kid}", must="final (locked)")
+    for t in ("manual", "advances", "tax", "other"):
+        page(s, f"/payroll/inputs?company=2&month={month}&tab={t}", must="Ms. Karima")
+    r = page(s, f"/payroll/adjustments-template.xlsx?tab=tax&company=2&month={month}")
+    ws = load_workbook(io.BytesIO(r.content)).active
+    ok([ws.cell(1, i).value for i in range(1, 5)] == ["employee_code", "name", "department", "tax"]
+       and ws.cell(2, 1).value == "LTL-0001", "tax Excel must list the company's staff")
+    post(s, "/payroll/inputs", {"tab": "tax", "company_id": "2", "month": month, "emp": kar, f"tax_{kar}": "275"},
+         must="1 employee(s) changed")
+    post(s, "/payroll/inputs", {"tab": "tax", "company_id": "2", "month": month, "emp": kar, f"tax_{kar}": "-5"},
+         must="cannot be negative", must_not=None)
+    r = post(s, "/payroll/inputs", {"tab": "other", "company_id": "2", "month": month, "emp": kar,
+                                    f"other_addition_{kar}": "1200", f"note_{kar}": "Night allowance", "process": "1"},
+             must="Draft payroll ready")
+    post(s, "/report-columns/payroll", {"col": ["code", "tax", "addition"], "back": "/reports/payroll"})
+    ws = load_workbook(io.BytesIO(page(s, f"/export/payroll.xlsx?company=2&month={month}").content)).active
+    row = [ws.cell(6, i).value for i in range(1, 4)]
+    ok(row[0] == "LTL-0001" and float(row[1]) == 275 and float(row[2]) == 1200, f"tax / other addition not applied: {row}")
+    post(s, "/report-columns/payroll", {"reset": "1", "back": "/reports/payroll"})
+    page(s, f"/payroll/inputs?company=1&month={month}&tab=tax", must="final (locked)")
     ok(c.get(BASE + "/payroll/components", timeout=30, headers={"accept": "text/html"}).status_code == 403,
        "pay components are Admin only")
     page(h, "/shifts", code=403)

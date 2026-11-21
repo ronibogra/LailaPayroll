@@ -25,6 +25,11 @@
   <div class="nav-label">PEOPLE &amp; PAY</div>
   {% if 'employees.view' in pm %}<a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>{% endif %}
   {% if 'payroll.view' in pm %}<a href="/payroll" class="{{ 'active' if path == '/payroll' or path.startswith('/payroll/line') }}">Payroll</a>{% endif %}
+  {% if 'payroll.process' in pm %}{% set ptab = request.query_params.get('tab', 'manual') %}
+  <a class="sub {{ 'active' if path == '/payroll/inputs' and ptab == 'manual' }}" href="/payroll/inputs?tab=manual">Employee-wise (manual)</a>
+  <a class="sub {{ 'active' if path == '/payroll/inputs' and ptab == 'advances' }}" href="/payroll/inputs?tab=advances">Advances &amp; deductions</a>
+  <a class="sub {{ 'active' if path == '/payroll/inputs' and ptab == 'tax' }}" href="/payroll/inputs?tab=tax">Tax</a>
+  <a class="sub {{ 'active' if path == '/payroll/inputs' and ptab == 'other' }}" href="/payroll/inputs?tab=other">Other</a>{% endif %}
   {% if 'payroll.edit' in pm %}<a href="/payroll/components" class="{{ 'active' if path.startswith('/payroll/components') }}">Pay components</a>{% endif %}
   <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
   {% if 'logs.view' in pm or 'users.manage' in pm or 'backup.manage' in pm or 'company.manage' in pm %}<div class="nav-label">ADMIN</div>{% endif %}

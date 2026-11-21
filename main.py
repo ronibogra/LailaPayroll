@@ -5,7 +5,7 @@ from calendar import month_name
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse, PlainTextResponse, FileResponse
@@ -1999,13 +1999,14 @@ async def payroll_line_save(request: Request, user=Depends(page_user), db: Sessi
 
 @app.post("/payroll/adjustments")
 async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...), file: UploadFile = File(...),
-                              user=Depends(page_user), db: Session = Depends(get_db)):
+                              tab: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
     """Excel: employee_code, other_addition, advance, other_deduction, tax, note (one company)."""
     need(user, "payroll.process")
     check_company(user, company_id)
     from openpyxl import load_workbook
     y, m = parse_month(month)
-    back = _payroll_url(company_id, y, m)
+    back = _payroll_url(company_id, y, m) if tab not in INPUT_TABS else \
+        f"/payroll/inputs?company={company_id}&month={y:04d}-{m:02d}&tab={tab}"
     run = get_run(db, company_id, y, m)
     if run and run.status == "FINAL":
         return go(back, err="Payroll is final - adjustments are locked")
@@ -2033,8 +2034,10 @@ async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...
                 a = PayrollAdjustment(employee_id=e.id, year=y, month=m)
                 db.add(a)
             for k in ("other_addition", "advance", "other_deduction", "tax"):
-                setattr(a, k, dec(str(r.get(k) or 0), k))
-            a.note = (str(r.get("note") or "").strip() or None)
+                if k in head:          # columns not in the file are left as they are
+                    setattr(a, k, dec(str(r.get(k) or 0), k))
+            if "note" in head:
+                a.note = (str(r.get("note") or "").strip() or None)
             n += 1
         audit(db, user, "ADJUSTMENT_IMPORT", f"company {company_id} {y}-{m:02d}: {n} rows", commit=False)
         db.commit()
@@ -2045,16 +2048,158 @@ async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...
 
 
 @app.get("/payroll/adjustments-template.xlsx")
-def adjustments_template(user=Depends(page_user)):
+def adjustments_template(tab: str = "manual", company: str = "", month: str = "", user=Depends(page_user),
+                         db: Session = Depends(get_db)):
+    """Excel for the chosen input (manual / advances / tax / other); with company + month it lists the staff
+    and the values already entered, ready to fill in and upload."""
     need(user, "payroll.process")
     from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    cols = INPUT_TABS.get(tab, INPUT_TABS["manual"])["cols"]
     wb = Workbook()
-    wb.active.append(["employee_code", "other_addition", "advance", "other_deduction", "tax", "note"])
-    wb.active.append(["LG0001", 0, 1000, 0, 0, "Advance"])
+    ws = wb.active
+    ws.title = INPUT_TABS.get(tab, INPUT_TABS["manual"])["title"][:30]
+    ws.append(["employee_code", "name", "department"] + [c for c, _ in cols])
+    for cell in ws[1]:
+        cell.font, cell.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="E8332F")
+    cid = company_filter(user, company)
+    if cid:
+        y, m = parse_month(month)
+        emps, adj = _input_rows(db, cid, y, m, "", "")
+        for e in emps:
+            a = adj.get(e.id)
+            ws.append([e.employee_code, e.full_name, e.department.name if e.department else ""]
+                      + [(getattr(a, c) or "") if a else ("" if c == "note" else 0) for c, _ in cols])
+    else:
+        ws.append(["LG0001", "Example name", "Accounts"] + [("" if c == "note" else 0) for c, _ in cols])
+    for col, w in zip("ABCDEFGH", (14, 28, 18, 14, 14, 14, 14, 30)):
+        ws.column_dimensions[col].width = w
     buf = io.BytesIO()
     wb.save(buf)
     return Response(buf.getvalue(), media_type=XLSX,
-                    headers={"Content-Disposition": "attachment; filename=adjustments-template.xlsx"})
+                    headers={"Content-Disposition": f"attachment; filename=payroll-{tab}-template.xlsx"})
+
+
+# ---------------------------------------------------------------- payroll inputs (manual, advances, tax, other)
+INPUT_TABS = {
+    "manual": {"title": "Employee-wise (manual)", "cols": [("other_addition", "Other addition"), ("advance", "Advance"),
+                                                           ("other_deduction", "Deduction"), ("tax", "Tax"),
+                                                           ("note", "Note")],
+               "help": "Type each employee's amounts for this month in one place."},
+    "advances": {"title": "Advances & deductions", "cols": [("advance", "Advance (Tk)"), ("other_deduction",
+                                                                                         "Other deduction (Tk)"),
+                                                            ("note", "Note")],
+                 "help": "Salary advances to recover and deductions like fines, loss or canteen bills."},
+    "tax": {"title": "Tax", "cols": [("tax", "Income tax / TDS (Tk)")],
+            "help": "Income tax deducted at source this month."},
+    "other": {"title": "Other", "cols": [("other_addition", "Other addition (Tk)"), ("note", "Note")],
+              "help": "Arrears, night allowance, special bonus or any other one-time payment."},
+}
+
+
+def _input_rows(db: Session, cid: int, y: int, m: int, q: str, dept: str):
+    from services.processing import employees_for_month
+    first, last = month_bounds(y, m)
+    emps = [e for e in employees_for_month(db, first, last, [cid])]
+    if dept:
+        emps = [e for e in emps if e.department and str(e.department.id) == dept]
+    if q:
+        ql = q.lower()
+        emps = [e for e in emps if ql in e.employee_code.lower() or ql in (e.card_no or "").lower()
+                or ql in e.full_name.lower()]
+    emps.sort(key=lambda e: ((e.department.name if e.department else ""), e.employee_code))
+    ids = [e.id for e in emps] or [0]
+    adj = {}
+    for i in range(0, len(ids), 500):
+        for a in db.scalars(select(PayrollAdjustment).where(PayrollAdjustment.year == y, PayrollAdjustment.month == m,
+                                                            PayrollAdjustment.employee_id.in_(ids[i:i + 500]))):
+            adj[a.employee_id] = a
+    return emps, adj
+
+
+@app.get("/payroll/inputs", response_class=HTMLResponse)
+def payroll_inputs(request: Request, tab: str = "manual", company: str = "", month: str = "", q: str = "",
+                   department: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "payroll.process")
+    tab = tab if tab in INPUT_TABS else "manual"
+    y, m = parse_month(month)
+    comps = visible_companies(db, user)
+    cid = company_filter(user, company) or (comps[0].id if comps else None)
+    if not cid:
+        return go("/settings", err="Add a company first")
+    check_company(user, cid)
+    emps, adj = _input_rows(db, cid, y, m, q.strip(), department)
+    run = get_run(db, cid, y, m)
+    cols = INPUT_TABS[tab]["cols"]
+    totals = {c: sum((getattr(adj[e.id], c) or 0) for e in emps if e.id in adj) for c, _ in cols if c != "note"}
+    return render(request, "payroll_inputs.html", user, tab=tab, tabs=INPUT_TABS, cols=cols, emps=emps, adj=adj,
+                  y=y, m=m, mval=f"{y:04d}-{m:02d}", cid=cid, companies=comps, company=db.get(Company, cid), run=run,
+                  q=q, department=department, totals=totals,
+                  depts=db.scalars(select(Department).order_by(Department.name)).all())
+
+
+@app.post("/payroll/inputs")
+async def payroll_inputs_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "payroll.process")
+    f = await request.form(max_fields=50000)
+    tab = str(f.get("tab") or "manual")
+    tab = tab if tab in INPUT_TABS else "manual"
+    cid = int(f.get("company_id"))
+    check_company(user, cid)
+    y, m = parse_month(str(f.get("month")))
+    back = f"/payroll/inputs?company={cid}&month={y:04d}-{m:02d}&tab={tab}"
+    for k in ("q", "department"):
+        if f.get(k):
+            back += f"&{k}={quote(str(f.get(k)))}"
+    run = get_run(db, cid, y, m)
+    if run and run.status == "FINAL":
+        return go(back, err="This month's payroll is final (locked) - nothing can be changed")
+    cols = [c for c, _ in INPUT_TABS[tab]["cols"]]
+    ids = [int(x) for x in f.getlist("emp") if str(x).isdigit()]
+    valid = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(ids or [0]), Employee.company_id == cid))}
+    existing = {a.employee_id: a for a in db.scalars(select(PayrollAdjustment).where(
+        PayrollAdjustment.year == y, PayrollAdjustment.month == m, PayrollAdjustment.employee_id.in_(list(valid) or [0])))}
+    changed, errors = 0, []
+    for eid, e in valid.items():
+        try:
+            new = {}
+            for c in cols:
+                raw = str(f.get(f"{c}_{eid}") or "").strip()
+                if c == "note":
+                    new[c] = raw[:250] or None
+                else:
+                    v = dec(raw, f"{e.employee_code} {c.replace('_', ' ')}")
+                    if v < 0:
+                        raise ValueError(f"{e.employee_code}: amounts cannot be negative")
+                    new[c] = v
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        a = existing.get(eid)
+        if a is None:
+            if not any(v for v in new.values()):
+                continue          # nothing typed for this person
+            a = PayrollAdjustment(employee_id=eid, year=y, month=m)
+            db.add(a)
+        if any((getattr(a, c) or (None if c == "note" else Decimal(0))) != v for c, v in new.items()):
+            for c, v in new.items():
+                setattr(a, c, v)
+            a.edited_by = user["username"]
+            changed += 1
+    if errors:
+        db.rollback()
+        return go(back, err="Nothing saved: " + "; ".join(errors[:10]))
+    audit(db, user, "PAYROLL_INPUTS", f"company {cid} {y}-{m:02d} {tab}: {changed} employees changed", commit=False)
+    db.commit()
+    if f.get("process"):
+        try:
+            run = run_payroll(db, cid, y, m, user)
+        except (PayrollLocked, ValueError) as exc:
+            return go(back, err=f"Saved {changed}, but payroll was not processed: {exc}")
+        return go(_payroll_url(cid, y, m), msg=f"Saved {changed} employee(s). Draft payroll ready for "
+                                                f"{len(run.lines)} employees",
+                  err=("Skipped: " + "; ".join(run.errors)[:1200]) if run.errors else "")
+    return go(back, msg=f"Saved - {changed} employee(s) changed. Process the payroll to apply.")
 
 
 # ---------------------------------------------------------------- settings

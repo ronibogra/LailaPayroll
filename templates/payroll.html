@@ -10,13 +10,9 @@
 {% for c in companies %}{% set r = runs.get(c.id) %}<a href="/payroll?company={{ c.id }}&month={{ mval }}">{{ c.code }}</a> <span class="tag {{ r.status if r }}">{{ r.status if r else 'not run' }}</span> &nbsp; {% endfor %}</p>{% endif %}</div>
 {% if not company %}<div class="alert err">Add a company under Settings first.</div>{% else %}
 {% if not run or run.status != 'FINAL' %}
-<div class="grid2">
-<div class="panel"><h3>1. Advances &amp; deductions</h3><p class="hint">Excel with employee_code, other_addition, advance, other_deduction, tax, note - for {{ company.name }} only.</p>
-<form class="inline" method="post" action="/payroll/adjustments" enctype="multipart/form-data"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}">
-<input type="file" name="file" accept=".xlsx" required><button class="sec">Upload</button><a class="btn sec" href="/payroll/adjustments-template.xlsx">Template</a></form></div>
-<div class="panel"><h3>2. Process payroll</h3><p class="hint">Re-processes {{ company.name }}'s attendance for the month, then calculates every employee with this company's pay policy. Can be re-run until finalized.</p>
-<form method="post" action="/payroll/process"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><button>{{ 'Re-process' if run else 'Process' }} payroll</button></form></div>
-</div>{% endif %}
+<div class="steps">{% for k, t in [('manual','Employee-wise (manual)'),('advances','Advances & deductions'),('tax','Tax'),('other','Other')] %}<a href="/payroll/inputs?company={{ cid }}&month={{ mval }}&tab={{ k }}"><b>{{ loop.index }}</b> {{ t }}</a>{% endfor %}<a class="on" href="#process"><b>5</b> Process payroll</a></div>
+<div class="panel" id="process"><h3>5. Process payroll</h3><p class="hint">Enter this month's advances, deductions, tax and other additions with steps 1-4 (type them per employee or upload Excel). Processing re-reads {{ company.name }}'s attendance for the month and calculates every employee with this company's pay policy and pay components. You can re-process until the payroll is finalized.</p>
+<form method="post" action="/payroll/process"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><button>{{ 'Re-process' if run else 'Process' }} payroll</button></form></div>{% endif %}
 {% if run %}
 <div class="cards">
 <div class="metric"><span>Employees</span><strong>{{ lines|length }}</strong></div>
