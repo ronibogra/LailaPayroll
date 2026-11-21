@@ -18,11 +18,13 @@
 <div><label style="color:inherit"><input type="checkbox" name="show_nid" value="1"> Print NID number on the back</label></div>
 </div><p><button>🪪 Make ID cards (PDF)</button></p></form></div>
 <div class="panel"><h3>What is printed</h3>
-<p><b>Front:</b> Head Office logo, company name (HO, BDL, LAUNDRY, LSL…), photo, name, designation, department, ID number, blood group.</p>
+{% if 'company.manage' in user.perms %}<p><a class="btn sec" href="/idcards/design">🎨 Change the card design</a></p>{% endif %}
+<p><b>Front:</b> logo, company name (HO, BDL, LAUNDRY, LSL…), photo, then Name, ID No., Designation, Department, DOJ, Blood Group, and the card holder and authorized signatures (fields, labels, colours can be changed in the design).</p>
 <p><b>Back:</b> joining date, blood group, mobile, emergency contact, issue / valid-until date, a QR code with the employee ID, authorised signature line and the "if found, return to" Head Office address and phone (from Settings → Head Office).</p>
 <h3>Before printing</h3><ul class="hint" style="margin:0;padding-left:18px;line-height:1.7">
 <li>Photos: upload one per employee, or many at once on Employees → photo import (file name = employee code).</li>
-<li>Check name, designation, department and blood group in the profiles (or the Employees Excel import).</li>
+<li>Check name, designation, department, joining date and blood group in the profiles (or the Employees Excel import).</li>
+<li>Signatures: card holder signatures on each profile (or bulk: <code>12127_sign.jpg</code>); the authorized signature once in the card design.</li>
 <li>Set the Head Office address and phone in Settings - they go on the back.</li>
 <li>Card printer: CR80 (54 × 85.6 mm), portrait, scale 100% / "actual size", double-sided if the printer can.</li>
 <li>A4: print at 100% (not "fit to page"). For both sides, print page 1, put the sheet back and print page 2 on the back (flip on long edge) - the backs are mirrored to match. Cut on the marks, laminate, punch a slot for the lanyard.</li>

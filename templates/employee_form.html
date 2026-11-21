@@ -6,7 +6,10 @@
 <div class="panel"><h3>Photo</h3><div class="profile-head">
 <img class="photo" src="{{ '/employees/' ~ e.id ~ '/photo' if e else '/static/img/no-photo.png' }}" alt="">
 <div><label>Upload a photo (JPG or PNG; it is resized automatically)</label><input type="file" name="photo" accept="image/*">
-{% if e and e.photo %}<p><label style="color:inherit"><input type="checkbox" name="remove_photo" value="1"> remove current photo</label></p>{% endif %}</div></div></div>
+{% if e and e.photo %}<p><label style="color:inherit"><input type="checkbox" name="remove_photo" value="1"> remove current photo</label></p>{% endif %}</div>
+<div style="margin-left:24px">{% if e and e.signature %}<img src="/employees/{{ e.id }}/signature?v={{ range(1000)|random }}" alt="signature" style="max-width:220px;max-height:70px;display:block;margin-bottom:6px;border-bottom:1px solid #ccc">{% endif %}
+<label>Signature (photo or scan of the signature on white paper - the background is removed automatically; used on the ID card)</label><input type="file" name="signature" accept="image/*">
+{% if e and e.signature %}<p><label style="color:inherit"><input type="checkbox" name="remove_signature" value="1"> remove signature</label></p>{% endif %}</div></div></div>
 <div class="panel"><h3>Job</h3><div class="form-grid">
 <div><label>Company *</label><select name="company_id" required>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if e and e.company_id == c.id }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
 {{ f('employee_code', 'Employee code *', extra='required') }}

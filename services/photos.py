@@ -25,6 +25,43 @@ def save_photo(emp_id: int, content: bytes) -> str:
     return name
 
 
+def clean_signature(content: bytes, max_size=(700, 240)):
+    """Signature photo / scan -> PNG with a transparent background (paper removed), trimmed and resized."""
+    from PIL import Image, ImageOps
+    if not content:
+        raise ValueError("empty signature file")
+    if len(content) > MAX_BYTES:
+        raise ValueError("signature file is larger than 15 MB")
+    try:
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(content)))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("this file is not an image (use JPG or PNG)") from exc
+    gray = img.convert("L")
+    if img.mode in ("RGBA", "LA") and img.getchannel("A").getextrema()[0] < 250:
+        alpha = img.getchannel("A")
+    else:      # ink = darker than the paper
+        lo, hi = gray.getextrema()
+        cut = lo + (hi - lo) * 0.55
+        alpha = gray.point(lambda v: 255 if v < cut else 0)
+    box = alpha.getbbox()
+    if not box:
+        raise ValueError("no signature found in the image - use a clear photo or scan")
+    ink = Image.new("RGBA", img.size, (16, 24, 64, 0))
+    ink.putalpha(alpha)
+    ink = ink.crop(box)
+    ink.thumbnail(max_size)
+    buf = io.BytesIO()
+    ink.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def save_signature(emp_id: int, content: bytes) -> str:
+    PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"sig_{emp_id}.png"
+    (PHOTO_DIR / name).write_bytes(clean_signature(content))
+    return name
+
+
 def photo_path(name: str | None):
     if not name or "/" in name or "\\" in name or ".." in name:
         return None
@@ -65,12 +102,20 @@ def bulk_photos(db, files: list[tuple[str, bytes]], only_company_id: int | None 
     done, unmatched, bad = [], [], []
     for name, content in images:
         stem = PurePath(name).stem.strip().lower()
+        is_sig = False
+        for suffix in ("_signature", "-signature", " signature", "_sign", "-sign", " sign", "_sig", "-sig"):
+            if stem.endswith(suffix):        # 12127_sign.png = signature of 12127
+                stem, is_sig = stem[: -len(suffix)].strip(), True
+                break
         e = by_code.get(stem) or by_card.get(stem)
         if e is None or (only_company_id and e.company_id != only_company_id):
             unmatched.append(name)
             continue
         try:
-            e.photo = save_photo(e.id, content)
+            if is_sig:
+                e.signature = save_signature(e.id, content)
+            else:
+                e.photo = save_photo(e.id, content)
             done.append(e.employee_code)
         except ValueError as exc:
             bad.append(f"{name}: {exc}")

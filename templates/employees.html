@@ -11,8 +11,8 @@
 <p class="hint">Only <b>employee_code</b> is required - card no., name, company, salary and personal details are optional. Existing employees are updated (empty cells keep the old value). If a row has a problem nothing is saved and the errors are listed (also in the Error log).</p>
 <form class="inline" method="post" action="/employees/import" enctype="multipart/form-data">
 <input type="file" name="file" accept=".xlsx" required><button>Upload</button><a class="btn sec" href="/employees/template.xlsx">Template</a></form></div>
-<div class="panel"><h3>Import photos</h3>
-<p class="hint">A <b>ZIP</b> file or several photos at once. Name each photo with the <b>employee code</b> or <b>card no.</b>, e.g. <code>12127.jpg</code>. Photos are matched automatically and resized.</p>
+<div class="panel"><h3>Import photos &amp; signatures</h3>
+<p class="hint">A <b>ZIP</b> file or several images at once. Name each photo with the <b>employee code</b> or <b>card no.</b>, e.g. <code>12127.jpg</code>; name signatures <code>12127_sign.jpg</code>. They are matched automatically; signature backgrounds are removed.</p>
 <form class="inline" method="post" action="/employees/photos" enctype="multipart/form-data">
 <input type="file" name="files" accept=".zip,image/*" multiple required><button>Upload photos</button></form></div>
 </div>{% endif %}

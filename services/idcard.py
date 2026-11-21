@@ -73,7 +73,170 @@ def _qr(c, text, x, y, size):
     renderPDF.draw(d, c, x, y)
 
 
+DEFAULT_DESIGN = {
+    "style": "LABELS",                 # LABELS = rows "Name: ..." + two signatures (Head Office sample); CLASSIC
+    "header_color": "#E8332F", "accent_color": "#00a651", "text_color": "#1f2733",
+    "title": "EMPLOYEE IDENTITY CARD",
+    "front_fields": ["full_name", "employee_code", "designation", "department", "joined_on", "blood_group"],
+    "back_fields": ["joined_on", "blood_group", "phone", "emergency_contact", "issued", "valid"],
+    "labels": {},
+    "show_photo": True, "show_holder_sign": True, "show_auth_sign": True,
+    "holder_sign_label": "Card holder Signature", "auth_sign_label": "Authorized Signature",
+    "show_qr": True, "show_address": True,
+    "back_note": "This card is the property of the company and must be shown on request. If found, please return to:",
+}
+FIELDS = {"full_name": "Name", "employee_code": "ID No.", "card_no": "Card No.", "designation": "Designation",
+          "department": "Department", "section": "Section", "grade": "Grade", "company": "Company",
+          "joined_on": "DOJ", "blood_group": "Blood Group", "phone": "Mobile", "emergency_contact": "Emergency",
+          "nid": "NID", "date_of_birth": "Date of Birth", "father_name": "Father", "present_address": "Address",
+          "issued": "Issued", "valid": "Valid until"}
+
+
+def design_of(opt) -> dict:
+    d = dict(DEFAULT_DESIGN)
+    d.update({k: v for k, v in (opt.get("design") or {}).items() if v is not None})
+    d["labels"] = {**FIELDS, **(d.get("labels") or {})}
+    return d
+
+
+def _colors(opt):
+    d = design_of(opt)
+    try:
+        return (colors.HexColor(d["header_color"]), colors.HexColor(d["accent_color"]), colors.HexColor(d["text_color"]))
+    except Exception:  # noqa: BLE001 - a typed colour that is not valid falls back to the defaults
+        return colors.HexColor("#E8332F"), colors.HexColor("#00a651"), colors.HexColor("#1f2733")
+
+
+def value_of(e, key, opt) -> str:
+    if key == "department":
+        return e.department.name if e.department else ""
+    if key == "company":
+        return e.company.name if e.company else ""
+    if key in ("joined_on", "date_of_birth"):
+        v = getattr(e, key, None)
+        return v.strftime("%d-%m-%Y") if v else ""
+    if key == "issued":
+        return opt["issued"].strftime("%d-%m-%Y")
+    if key == "valid":
+        return opt["valid"].strftime("%d-%m-%Y") if opt.get("valid") else "While in service"
+    return str(getattr(e, key, "") or "")
+
+
+def _header(c, e, opt, RED, GREEN, h=15 * mm):
+    c.setFillColor(RED)
+    c.rect(0, CH - h, CW, h, stroke=0, fill=1)
+    c.setFillColor(GREEN)
+    c.rect(0, CH - h - 1.1 * mm, CW, 1.1 * mm, stroke=0, fill=1)
+    try:
+        c.setFillColor(colors.white)
+        c.circle(7.8 * mm, CH - h / 2, 5.4 * mm, stroke=0, fill=1)
+        c.drawImage(opt["logo"], 3.3 * mm, CH - h / 2 - 4.5 * mm, 9 * mm, 9 * mm, mask="auto", preserveAspectRatio=True)
+    except Exception:  # noqa: BLE001
+        pass
+    c.setFillColor(colors.white)
+    comp = e.company.name if e.company else opt["group"]
+    lines = _wrap(comp.upper(), "Helvetica-Bold", 7.4, CW - 16.5 * mm)
+    sub = opt["group"].lower() not in comp.lower()
+    ty = CH - h / 2 + (1.2 * mm if len(lines) == 1 else 2.6 * mm) + (1 * mm if sub else -1 * mm)
+    for i, ln in enumerate(lines):
+        _fit(c, ln, "Helvetica-Bold", 7.4, CW - 16.5 * mm)
+        c.drawString(14.8 * mm, ty - i * 3.2 * mm, ln)
+    if sub:
+        c.setFont("Helvetica", 5.3)
+        c.drawString(14.8 * mm, ty - len(lines) * 3.2 * mm + 0.4 * mm, f"A concern of {opt['group']}"[:48])
+
+
+def _sign_img(c, path, x, y, w, h):
+    if not path:
+        return
+    try:
+        c.drawImage(str(path), x, y, w, h, mask="auto", preserveAspectRatio=True, anchor="s")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def front_labels(c, e, x, y, opt):
+    """Head Office sample: photo, then Name / ID No. / Designation / Department / DOJ / Blood Group rows,
+    card holder signature (from the profile) and authorized signature."""
+    RED, GREEN, DARK = _colors(opt)
+    d = design_of(opt)
+    c.saveState()
+    c.translate(x, y)
+    p = c.beginPath()
+    p.roundRect(0, 0, CW, CH, 3 * mm)
+    c.clipPath(p, stroke=0)
+    c.setFillColor(colors.white)
+    c.rect(0, 0, CW, CH, stroke=0, fill=1)
+    _header(c, e, opt, RED, GREEN)
+    top = CH - 18 * mm
+    if d["show_photo"]:
+        pw, ph = 20 * mm, 25 * mm
+        px, py = (CW - pw) / 2, top - ph
+        img = _photo(opt["photo"](e))
+        if img:
+            c.drawImage(img, px, py, pw, ph)
+        else:
+            c.setFillColor(colors.HexColor("#eef0f3"))
+            c.rect(px, py, pw, ph, stroke=0, fill=1)
+            c.setFillColor(colors.HexColor("#9aa3af"))
+            c.setFont("Helvetica", 6.5)
+            c.drawCentredString(CW / 2, py + ph / 2, "PHOTO")
+        c.setStrokeColor(GREEN)
+        c.setLineWidth(1)
+        c.rect(px, py, pw, ph, stroke=1, fill=0)
+        top = py - 2.2 * mm
+    signs = d["show_holder_sign"] or d["show_auth_sign"]
+    bottom = (16.5 if signs else 7.5) * mm
+    fields = [f for f in d["front_fields"] if f in FIELDS]
+    lab_w = max([stringWidth(d["labels"][f], "Helvetica", 6.2) for f in fields] or [0]) + 1.2 * mm
+    lab_w = min(lab_w, 19 * mm)
+    val_x, val_w = 3.5 * mm + lab_w + 2 * mm, CW - (3.5 * mm + lab_w + 2 * mm) - 3 * mm
+    rows = []
+    for f in fields:
+        v = value_of(e, f, opt)
+        font = "Helvetica-Bold"
+        rows.append((d["labels"][f], _wrap(v or "-", font, 6.6, val_w, 2)))
+    n_lines = sum(len(r[1]) for r in rows) or 1
+    step = min(3.7 * mm, max(2.6 * mm, (top - bottom) / n_lines))
+    yy = top - step + 0.6 * mm
+    for label, vals in rows:
+        c.setFillColor(colors.HexColor("#4a5361"))
+        c.setFont("Helvetica", 6.2)
+        c.drawString(3.5 * mm, yy, label)
+        c.drawString(3.5 * mm + lab_w, yy, ":")
+        c.setFillColor(DARK)
+        for i, v in enumerate(vals):
+            _fit(c, v, "Helvetica-Bold", 6.6, val_w, 5)
+            c.drawString(val_x, yy - i * step * 0.85, v)
+        yy -= step * (1 + 0.85 * (len(vals) - 1))
+    if signs:
+        half = (CW - 7 * mm) / 2
+        line_y = 9.3 * mm
+        c.setStrokeColor(colors.HexColor("#6b7585"))
+        c.setLineWidth(0.4)
+        for i, (show, label, path) in enumerate([(d["show_holder_sign"], d["holder_sign_label"], opt["signature"](e)),
+                                                 (d["show_auth_sign"], d["auth_sign_label"], opt.get("auth_sign"))]):
+            if not show:
+                continue
+            sx = 3.5 * mm + i * (half + 0 * mm) + (0 if i == 0 else 0)
+            _sign_img(c, path, sx + 1 * mm, line_y + 0.4 * mm, half - 2 * mm, 6 * mm)
+            c.line(sx + 1 * mm, line_y, sx + half - 1 * mm, line_y)
+            c.setFillColor(colors.HexColor("#4a5361"))
+            _fit(c, label, "Helvetica", 5, half - 1 * mm, 4)
+            c.drawCentredString(sx + half / 2, line_y - 2.3 * mm, label)
+    c.setFillColor(GREEN)
+    c.rect(0, 0, CW, 4.5 * mm, stroke=0, fill=1)
+    c.setFillColor(colors.white)
+    _fit(c, d["title"], "Helvetica-Bold", 6, CW - 4 * mm)
+    c.drawCentredString(CW / 2, 1.6 * mm, d["title"])
+    c.restoreState()
+    _border(c, x, y)
+
+
 def front(c, e, x, y, opt):
+    if design_of(opt)["style"] != "CLASSIC":
+        return front_labels(c, e, x, y, opt)
+    RED, GREEN, DARK = _colors(opt)
     c.saveState()
     c.translate(x, y)
     p = c.beginPath()
@@ -156,12 +319,14 @@ def front(c, e, x, y, opt):
     c.rect(0, 0, CW, 5 * mm, stroke=0, fill=1)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 6)
-    c.drawCentredString(CW / 2, 1.8 * mm, "EMPLOYEE IDENTITY CARD")
+    c.drawCentredString(CW / 2, 1.8 * mm, design_of(opt)["title"])
     c.restoreState()
     _border(c, x, y)
 
 
 def back(c, e, x, y, opt):
+    RED, GREEN, DARK = _colors(opt)
+    d = design_of(opt)
     c.saveState()
     c.translate(x, y)
     p = c.beginPath()
@@ -174,11 +339,9 @@ def back(c, e, x, y, opt):
     c.setFillColor(colors.white)
     _fit(c, (e.company.name if e.company else opt["group"]).upper(), "Helvetica-Bold", 6.6, CW - 6 * mm)
     c.drawCentredString(CW / 2, CH - 4 * mm, (e.company.name if e.company else opt["group"]).upper())
-    rows = [("Joined", e.joined_on.strftime("%d %b %Y") if e.joined_on else "-"),
-            ("Blood group", e.blood_group or "-"), ("Mobile", e.phone or "-"),
-            ("Emergency", e.emergency_contact or "-"), ("NID", e.nid or "-") if opt.get("show_nid") else None,
-            ("Issued", opt["issued"].strftime("%d %b %Y")),
-            ("Valid until", opt["valid"].strftime("%d %b %Y") if opt.get("valid") else "while in service")]
+    rows = [(d["labels"][f], value_of(e, f, opt) or "-") for f in d["back_fields"] if f in FIELDS]
+    if opt.get("show_nid") and "nid" not in d["back_fields"]:
+        rows.append((d["labels"]["nid"], e.nid or "-"))
     yy = CH - 10.5 * mm
     for r in [r for r in rows if r]:
         c.setFillColor(colors.HexColor("#6b7585"))
@@ -190,30 +353,33 @@ def back(c, e, x, y, opt):
             _fit(c, ln, "Helvetica-Bold", 6.2, CW - 22 * mm)
             c.drawString(18.5 * mm, yy - i * 2.7 * mm, ln)
         yy -= 3.6 * mm + 2.7 * mm * (len(lines) - 1)
-    # QR (employee code) for quick lookup
-    q = 17 * mm
-    _qr(c, f"{opt['group']}|{e.company.code if e.company else ''}|{e.employee_code}|{e.full_name}", (CW - q) / 2,
-        yy - q - 0.5 * mm, q)
-    yy -= q + 3.5 * mm
-    c.setStrokeColor(colors.HexColor("#9aa3af"))
-    c.setLineWidth(0.4)
-    c.line(14 * mm, yy, CW - 14 * mm, yy)
-    c.setFillColor(colors.HexColor("#4a5361"))
-    c.setFont("Helvetica", 5.6)
-    c.drawCentredString(CW / 2, yy - 2.6 * mm, opt.get("signatory") or "Authorised signature")
+    if d["show_qr"]:        # QR (employee code) for quick lookup
+        q = 17 * mm
+        _qr(c, f"{opt['group']}|{e.company.code if e.company else ''}|{e.employee_code}|{e.full_name}", (CW - q) / 2,
+            yy - q - 0.5 * mm, q)
+        yy -= q + 3.5 * mm
+    if d["style"] == "CLASSIC":    # the LABELS front already has the signatures
+        yy -= 6 * mm
+        _sign_img(c, opt.get("auth_sign"), 14 * mm, yy + 0.4 * mm, CW - 28 * mm, 6 * mm)
+        c.setStrokeColor(colors.HexColor("#9aa3af"))
+        c.setLineWidth(0.4)
+        c.line(14 * mm, yy, CW - 14 * mm, yy)
+        c.setFillColor(colors.HexColor("#4a5361"))
+        c.setFont("Helvetica", 5.6)
+        c.drawCentredString(CW / 2, yy - 2.6 * mm, opt.get("signatory") or "Authorised signature")
     # return notice
     c.setFillColor(colors.HexColor("#f3f4f6"))
     c.rect(0, 0, CW, 13.5 * mm, stroke=0, fill=1)
     c.setFillColor(DARK)
     c.setFont("Helvetica", 5.2)
-    note = ["This card is the property of the company and must be", "shown on request. If found, please return to:"]
+    note = _wrap(d["back_note"], "Helvetica", 5.2, CW - 5 * mm, 2)
     for i, ln in enumerate(note):
         c.drawCentredString(CW / 2, 10.6 * mm - i * 2.3 * mm, ln)
     c.setFont("Helvetica-Bold", 5.4)
-    addr = _wrap(opt["address"] or opt["group"], "Helvetica-Bold", 5.4, CW - 5 * mm, 2)
+    addr = _wrap(opt["address"] or opt["group"], "Helvetica-Bold", 5.4, CW - 5 * mm, 2) if d["show_address"] else []
     for i, ln in enumerate(addr):
         c.drawCentredString(CW / 2, 5.6 * mm - i * 2.3 * mm, ln)
-    if opt.get("phone"):
+    if opt.get("phone") and d["show_address"]:
         c.setFont("Helvetica", 5.2)
         c.drawCentredString(CW / 2, 1.2 * mm, f"Phone: {opt['phone']}"[:60])
     c.restoreState()

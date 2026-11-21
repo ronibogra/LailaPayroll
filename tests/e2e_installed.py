@@ -655,6 +655,29 @@ def main():
         r = page(s, f"/idcards.pdf?{q}")
         ok(r.content[:4] == b"%PDF" and r.headers["content-type"] == "application/pdf", f"ID cards {q}")
     page(s, "/idcards.pdf?codes=NOBODY-1", must="No employees match")
+    sig = io.BytesIO()
+    im = Image.new("RGB", (600, 200), (240, 238, 230))
+    from PIL import ImageDraw
+    ImageDraw.Draw(im).line([(40, 150), (150, 50), (260, 160), (420, 60), (560, 140)], fill=(20, 30, 90), width=8)
+    im.save(sig, "JPEG")
+    post(s, "/employees/photos", files=[("files", ("12127_sign.jpg", sig.getvalue(), "image/jpeg"))], must="1 photos saved")
+    r = s.get(BASE + f"/employees/{kid}/signature", timeout=30)
+    ok(r.ok and r.headers["content-type"] == "image/png" and Image.open(io.BytesIO(r.content)).mode == "RGBA",
+       "signature must be a transparent PNG")
+    page(s, "/idcards/design", must="Card holder Signature")
+    post(s, "/idcards/design", {"style": "LABELS", "header_color": "#004080", "accent_color": "#00a651",
+                                "text_color": "#111111", "title": "STAFF ID CARD", "show_photo": "1",
+                                "show_holder_sign": "1", "show_auth_sign": "1", "show_qr": "1", "show_address": "1",
+                                "holder_sign_label": "Card holder Signature", "auth_sign_label": "Authorized Signature",
+                                "ff_full_name": "1", "ffo_full_name": "1", "ff_employee_code": "1", "ffo_employee_code": "2",
+                                "ff_designation": "1", "ffo_designation": "3", "ff_department": "1", "ffo_department": "4",
+                                "ff_joined_on": "1", "ffo_joined_on": "5", "ff_blood_group": "1", "ffo_blood_group": "6",
+                                "bf_phone": "1", "lab_joined_on": "DOJ"},
+         files={"auth_sign": ("hr.jpg", sig.getvalue(), "image/jpeg")}, must="ID card design saved")
+    page(s, "/idcards/auth-signature.png")
+    r = page(s, "/idcards.pdf?codes=12127&layout=card&sides=front&status=")
+    ok(r.content[:4] == b"%PDF", "designed card")
+    post(s, "/idcards/design", {"style": "LABELS"}, must="Tick at least one field", must_not=None)
     ok(c.get(BASE + "/payroll/components", timeout=30, headers={"accept": "text/html"}).status_code == 403,
        "pay components are Admin only")
     page(h, "/shifts", code=403)

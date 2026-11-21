@@ -72,6 +72,7 @@ class Employee(Base):
     food: Mapped[Decimal] = mapped_column(Money, default=0)
     # profile
     photo: Mapped[str | None] = mapped_column(String(120), nullable=True)   # file name in <data>/photos
+    signature: Mapped[str | None] = mapped_column(String(120), nullable=True)   # signature image in <data>/photos
     father_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
     mother_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
     spouse_name: Mapped[str | None] = mapped_column(String(150), nullable=True)

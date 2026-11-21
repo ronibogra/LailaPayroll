@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% block title %}ID card design{% endblock %}{% block heading %}ID card design{% endblock %}
+{% block content %}
+<form method="post" action="/idcards/design" enctype="multipart/form-data">
+<div class="grid2">
+<div class="panel"><h3>Look</h3><div class="form-grid">
+<div><label>Front layout</label><select name="style"><option value="LABELS">Labelled rows + 2 signatures (Name:, ID No.:, …)</option><option value="CLASSIC" {{ 'selected' if d.style == 'CLASSIC' }}>Classic (big ID box, signature on the back)</option></select></div>
+<div><label>Title on the bottom strip</label><input name="title" value="{{ d.title }}"></div>
+<div><label>Header colour</label><input type="color" name="header_color" value="{{ d.header_color }}"></div>
+<div><label>Accent / strip colour</label><input type="color" name="accent_color" value="{{ d.accent_color }}"></div>
+<div><label>Text colour</label><input type="color" name="text_color" value="{{ d.text_color }}"></div>
+<div><label style="color:inherit"><input type="checkbox" name="show_photo" value="1" {{ 'checked' if d.show_photo }}> Photo on the front</label></div>
+</div>
+<h3 style="margin-top:14px">Signatures (front, labelled layout)</h3><div class="form-grid">
+<div><label style="color:inherit"><input type="checkbox" name="show_holder_sign" value="1" {{ 'checked' if d.show_holder_sign }}> Card holder signature (from the employee profile)</label><input name="holder_sign_label" value="{{ d.holder_sign_label }}"></div>
+<div><label style="color:inherit"><input type="checkbox" name="show_auth_sign" value="1" {{ 'checked' if d.show_auth_sign }}> Authorized signature</label><input name="auth_sign_label" value="{{ d.auth_sign_label }}"></div>
+<div style="grid-column:1/-1"><label>Authorized signature image (photo or scan on white paper - background removed automatically)</label>
+{% if auth_sign %}<img src="/idcards/auth-signature.png?v={{ v }}" alt="" style="max-height:50px;display:block;margin:4px 0;border-bottom:1px solid #ccc"><label style="color:inherit"><input type="checkbox" name="remove_auth_sign" value="1"> remove</label>{% endif %}
+<input type="file" name="auth_sign" accept="image/*"></div>
+</div>
+<p class="hint">Card holder signatures: upload on each employee's Edit page, or many at once on Employees → Import photos &amp; signatures (name the files like <code>12127_sign.jpg</code>).</p>
+<h3 style="margin-top:14px">Back</h3><div class="form-grid">
+<div><label style="color:inherit"><input type="checkbox" name="show_qr" value="1" {{ 'checked' if d.show_qr }}> QR code with the employee ID</label></div>
+<div><label style="color:inherit"><input type="checkbox" name="show_address" value="1" {{ 'checked' if d.show_address }}> "Return to" Head Office address &amp; phone</label></div>
+<div style="grid-column:1/-1"><label>Note on the back</label><input name="back_note" value="{{ d.back_note }}" style="width:100%"></div>
+</div></div>
+<div class="panel"><h3>Preview{% if sample %} - {{ sample.employee_code }} {{ sample.full_name }}{% endif %}</h3>
+{% if sample %}<iframe src="/idcards.pdf?codes={{ sample.employee_code|urlencode }}&layout=card&sides=both&status=&preview=1#view=Fit" style="width:100%;height:560px;border:1px solid #e3e6eb;border-radius:8px"></iframe>
+<p class="hint">Save to update the preview. <a href="/idcards">Print ID cards →</a></p>{% else %}<p class="hint">Add an employee to see a preview.</p>{% endif %}</div>
+</div>
+<div class="panel"><h3>Fields</h3><p class="hint">Tick what to print, change the label, and number the order (1 = first).</p>
+<div class="table-wrap"><table><tr><th>Field</th><th>Label printed</th><th>Front</th><th>Order</th><th>Back</th><th>Order</th></tr>
+{% for k, default in fields.items() %}<tr><td>{{ default }}</td><td><input name="lab_{{ k }}" value="{{ d.labels[k] }}" style="width:140px"></td>
+<td><input type="checkbox" name="ff_{{ k }}" value="1" {{ 'checked' if k in d.front_fields }}></td><td><input name="ffo_{{ k }}" value="{{ d.front_fields.index(k) + 1 if k in d.front_fields else '' }}" style="width:50px"></td>
+<td><input type="checkbox" name="bf_{{ k }}" value="1" {{ 'checked' if k in d.back_fields }}></td><td><input name="bfo_{{ k }}" value="{{ d.back_fields.index(k) + 1 if k in d.back_fields else '' }}" style="width:50px"></td></tr>{% endfor %}</table></div>
+<p><button>Save design</button> <button class="sec" name="reset" value="1" onclick="return confirm('Go back to the standard design?')">Standard design</button></p></div>
+</form>
+{% endblock %}

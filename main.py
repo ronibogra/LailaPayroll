@@ -33,7 +33,7 @@ from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, 
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
 from services import leave as leave_svc, documents as docs, components as comp_svc, disbursement as disb
 from services.errors import log_error
-from services.photos import save_photo, photo_path, bulk_photos
+from services.photos import save_photo, save_signature, photo_path, bulk_photos
 from integration import generic_import
 from services.punch_reports import punch_query, first_last, employees_by_card
 from reports.defs import REPORTS, CENTRE, Problem as ReportProblem
@@ -745,6 +745,77 @@ def employee_new(request: Request, user=Depends(page_user), db: Session = Depend
                   departments=db.scalars(select(Department).order_by(Department.name)).all())
 
 
+def _idcard_design(db) -> dict:
+    from services.policy import get_setting
+    try:
+        return json.loads(get_setting(db, "idcard.design", default="") or "{}")
+    except ValueError:
+        return {}
+
+
+AUTH_SIGN_FILE = branding.BRAND_DIR / "auth_signature.png"
+
+
+@app.get("/idcards/design", response_class=HTMLResponse)
+def idcard_design_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "company.manage")
+    from services import idcard
+    d = idcard.design_of({"design": _idcard_design(db)})
+    sample = db.scalar(select(Employee).where(Employee.employment_status == "ACTIVE")
+                       .order_by(Employee.photo.is_(None), Employee.employee_code).limit(1))
+    return render(request, "idcard_design.html", user, d=d, fields=idcard.FIELDS, sample=sample,
+                  auth_sign=AUTH_SIGN_FILE.exists(), v=int(AUTH_SIGN_FILE.stat().st_mtime) if AUTH_SIGN_FILE.exists() else 0)
+
+
+@app.post("/idcards/design")
+async def idcard_design_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "company.manage")
+    from services import idcard
+    f = await request.form()
+    if f.get("reset"):
+        set_setting(db, "idcard.design", "{}")
+        return go("/idcards/design", msg="ID card design set back to the standard")
+    def order(prefix):      # ticked fields, sorted by their order number
+        keys = [k for k in idcard.FIELDS if f.get(f"{prefix}_{k}")]
+        return sorted(keys, key=lambda k: float(str(f.get(f"{prefix}o_{k}") or 99) or 99))
+    color = lambda k, dflt: (str(f.get(k) or dflt).strip() if re.fullmatch(r"#[0-9a-fA-F]{6}", str(f.get(k) or "").strip())  # noqa: E731
+                             else dflt)
+    d = {"style": "CLASSIC" if f.get("style") == "CLASSIC" else "LABELS",
+         "header_color": color("header_color", "#E8332F"), "accent_color": color("accent_color", "#00a651"),
+         "text_color": color("text_color", "#1f2733"), "title": str(f.get("title") or "").strip()[:40] or "EMPLOYEE IDENTITY CARD",
+         "front_fields": order("ff"), "back_fields": order("bf"),
+         "labels": {k: str(f.get(f"lab_{k}") or "").strip()[:20] or v for k, v in idcard.FIELDS.items()},
+         "show_photo": bool(f.get("show_photo")), "show_holder_sign": bool(f.get("show_holder_sign")),
+         "show_auth_sign": bool(f.get("show_auth_sign")), "show_qr": bool(f.get("show_qr")),
+         "show_address": bool(f.get("show_address")),
+         "holder_sign_label": str(f.get("holder_sign_label") or "").strip()[:30] or "Card holder Signature",
+         "auth_sign_label": str(f.get("auth_sign_label") or "").strip()[:30] or "Authorized Signature",
+         "back_note": str(f.get("back_note") or "").strip()[:160]}
+    if not d["front_fields"]:
+        return go("/idcards/design", err="Tick at least one field for the front")
+    up = f.get("auth_sign")
+    if up is not None and getattr(up, "filename", ""):
+        from services.photos import clean_signature
+        try:
+            branding.BRAND_DIR.mkdir(parents=True, exist_ok=True)
+            AUTH_SIGN_FILE.write_bytes(clean_signature(await up.read()))
+        except ValueError as exc:
+            return go("/idcards/design", err=f"Authorized signature: {exc}")
+    if f.get("remove_auth_sign") and AUTH_SIGN_FILE.exists():
+        AUTH_SIGN_FILE.unlink()
+    set_setting(db, "idcard.design", json.dumps(d))
+    audit(db, user, "IDCARD_DESIGN", f"style {d['style']}, front {','.join(d['front_fields'])}")
+    return go("/idcards/design", msg="ID card design saved")
+
+
+@app.get("/idcards/auth-signature.png")
+def idcard_auth_sign(user=Depends(page_user)):
+    need(user, "employees.view")
+    if not AUTH_SIGN_FILE.exists():
+        raise HTTPException(404, "No authorized signature")
+    return FileResponse(AUTH_SIGN_FILE, media_type="image/png")
+
+
 @app.get("/idcards", response_class=HTMLResponse)
 def idcards_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "employees.view")
@@ -758,7 +829,8 @@ def idcards_page(request: Request, user=Depends(page_user), db: Session = Depend
 @app.get("/idcards.pdf")
 def idcards_pdf(request: Request, company: str = "", department: str = "", codes: str = "", status: str = "ACTIVE",
                 layout: str = "a4", sides: str = "both", valid: str = "", issued: str = "", signatory: str = "",
-                missing_photo: str = "", show_nid: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+                missing_photo: str = "", show_nid: str = "", preview: str = "", user=Depends(page_user),
+                db: Session = Depends(get_db)):
     """Staff ID cards: whole company / department / chosen employee codes."""
     need(user, "employees.view")
     from services import idcard
@@ -800,8 +872,11 @@ def idcards_pdf(request: Request, company: str = "", department: str = "", codes
         "group": BRAND["name"], "logo": str(branding.logo_path()), "photo": lambda e: photo_path(e.photo),
         "address": BRAND.get("address") or "", "phone": BRAND.get("phone") or "", "issued": issued_d, "valid": valid_d,
         "signatory": signatory.strip() or get_setting(db, "idcard.signatory", default="Authorised signature"),
+        "signature": lambda e: photo_path(e.signature), "design": _idcard_design(db),
+        "auth_sign": str(AUTH_SIGN_FILE) if AUTH_SIGN_FILE.exists() else None,
         "show_nid": bool(show_nid), "credit": settings.developer_credit})
-    audit(db, user, "ID_CARDS", f"{len(emps)} cards ({layout}, {sides})")
+    if not preview:
+        audit(db, user, "ID_CARDS", f"{len(emps)} cards ({layout}, {sides})")
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="id-cards-{len(emps)}.pdf"'})
 
@@ -850,6 +925,16 @@ def employee_form(request: Request, emp_id: int, user=Depends(page_user), db: Se
     return render(request, "employee_form.html", user, e=emp, companies=visible_companies(db, user),
                   shifts=db.scalars(select(Shift).order_by(Shift.code)).all(),
                   departments=db.scalars(select(Department).order_by(Department.name)).all())
+
+
+@app.get("/employees/{emp_id}/signature")
+def employee_signature(emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.view")
+    emp = _emp_or_404(db, user, emp_id)
+    path = photo_path(emp.signature)
+    if not path:
+        raise HTTPException(404, "No signature")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=60"})
 
 
 @app.get("/employees/{emp_id}/photo")
@@ -1071,6 +1156,11 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
             e.photo = save_photo(e.id, await photo.read())
         if val("remove_photo"):
             e.photo = None
+        sig = f.get("signature")
+        if sig is not None and getattr(sig, "filename", ""):
+            e.signature = save_signature(e.id, await sig.read())
+        if val("remove_signature"):
+            e.signature = None
         audit(db, user, "EMPLOYEE_SAVE", f"{code} {e.full_name}" + (" (PIN changed)" if pin else ""), commit=False)
         db.commit()
     except (ValueError, TypeError) as exc:
