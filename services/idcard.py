@@ -74,7 +74,7 @@ def _qr(c, text, x, y, size):
 
 
 DEFAULT_DESIGN = {
-    "style": "LABELS",                 # LABELS = rows "Name: ..." + two signatures (Head Office sample); CLASSIC
+    "style": "LAILA",                  # LAILA = Laila Group card (swoosh corners); LABELS; CLASSIC
     "header_color": "#E8332F", "accent_color": "#00a651", "text_color": "#1f2733",
     "title": "EMPLOYEE IDENTITY CARD",
     "front_fields": ["full_name", "employee_code", "designation", "department", "joined_on", "blood_group"],
@@ -233,8 +233,125 @@ def front_labels(c, e, x, y, opt):
     _border(c, x, y)
 
 
+def _swoosh(c, RED, GREEN):
+    """Green and red curved bands in the top-left and bottom-right corners (Laila Group card)."""
+    def band(color, pts):
+        p = c.beginPath()
+        p.moveTo(*pts[0])
+        for a, b, d in zip(pts[1::3], pts[2::3], pts[3::3]):
+            p.curveTo(a[0], a[1], b[0], b[1], d[0], d[1])
+        p.close()
+        c.setFillColor(color)
+        c.drawPath(p, stroke=0, fill=1)
+    W, H = CW, CH
+    # top-left: wide green, thin red edge
+    band(GREEN, [(0, H), (0, H - 30 * mm), (6 * mm, H - 14 * mm), (22 * mm, H - 4 * mm),
+                 (30 * mm, H), (0, H), (0, H)])
+    band(colors.white, [(0, H - 22 * mm), (4 * mm, H - 12 * mm), (14 * mm, H - 5 * mm), (24 * mm, H),
+                        (0, H), (0, H), (0, H - 22 * mm)])
+    band(RED, [(0, H - 19 * mm), (3 * mm, H - 11 * mm), (11 * mm, H - 5 * mm), (20 * mm, H),
+               (0, H), (0, H), (0, H - 19 * mm)])
+    band(GREEN, [(0, H - 14 * mm), (2 * mm, H - 8 * mm), (7 * mm, H - 3 * mm), (13 * mm, H),
+                 (0, H), (0, H), (0, H - 14 * mm)])
+    # bottom-right: mirror, red outside, green inside (kept small so it stays clear of the signature)
+    band(RED, [(W, 0), (W, 17 * mm), (W - 3.5 * mm, 6 * mm), (W - 15 * mm, 0), (W, 0), (W, 0), (W, 0)])
+    band(colors.white, [(W, 12 * mm), (W - 2 * mm, 5 * mm), (W - 6.5 * mm, 2 * mm), (W - 12 * mm, 0),
+                        (W, 0), (W, 0), (W, 12 * mm)])
+    band(GREEN, [(W, 10 * mm), (W - 1.6 * mm, 4.2 * mm), (W - 5 * mm, 1.6 * mm), (W - 9.5 * mm, 0),
+                 (W, 0), (W, 0), (W, 10 * mm)])
+
+
+def front_laila(c, e, x, y, opt):
+    """Laila Group card: cream card, swoosh corners, logo + group name top-right, photo, bold rows,
+    card holder and authorised signatures at the bottom."""
+    RED, GREEN, DARK = _colors(opt)
+    d = design_of(opt)
+    c.saveState()
+    c.translate(x, y)
+    p = c.beginPath()
+    p.roundRect(0, 0, CW, CH, 3 * mm)
+    c.clipPath(p, stroke=0)
+    c.setFillColor(colors.HexColor("#fbfaf4"))
+    c.rect(0, 0, CW, CH, stroke=0, fill=1)
+    _swoosh(c, RED, GREEN)
+    # logo + names, top right
+    lx, ly, ls = CW - 17.5 * mm, CH - 15 * mm, 12 * mm
+    try:
+        c.drawImage(opt["logo"], lx, ly, ls, ls, mask="auto", preserveAspectRatio=True)
+    except Exception:  # noqa: BLE001
+        pass
+    c.setFillColor(DARK)
+    c.setFont("Times-Bold", 6.6)
+    gname = opt["group"].upper()
+    _fit(c, gname, "Times-Bold", 6.6, 26 * mm)
+    c.drawCentredString(lx + ls / 2, ly - 2.6 * mm, gname)
+    comp = e.company.name if e.company else ""
+    if comp and opt["group"].lower() not in comp.lower():
+        c.setFillColor(RED)
+        _fit(c, comp.upper(), "Helvetica-Bold", 5, 30 * mm)
+        c.drawRightString(CW - 3 * mm, ly - 5.4 * mm, comp.upper())
+    top = CH - 25 * mm
+    if d["show_photo"]:
+        pw, ph = 21 * mm, 24 * mm
+        px, py = (CW - pw) / 2, top - ph
+        img = _photo(opt["photo"](e))
+        c.setFillColor(colors.white)
+        c.rect(px - 0.8 * mm, py - 0.8 * mm, pw + 1.6 * mm, ph + 1.6 * mm, stroke=0, fill=1)
+        if img:
+            c.drawImage(img, px, py, pw, ph)
+        else:
+            c.setFillColor(colors.HexColor("#eef0f3"))
+            c.rect(px, py, pw, ph, stroke=0, fill=1)
+            c.setFillColor(colors.HexColor("#9aa3af"))
+            c.setFont("Helvetica", 6.5)
+            c.drawCentredString(CW / 2, py + ph / 2, "PHOTO")
+        c.setStrokeColor(colors.HexColor("#8a8f98"))
+        c.setLineWidth(0.6)
+        c.rect(px - 0.8 * mm, py - 0.8 * mm, pw + 1.6 * mm, ph + 1.6 * mm, stroke=1, fill=0)
+        top = py - 4.5 * mm
+    signs = d["show_holder_sign"] or d["show_auth_sign"]
+    bottom = (15 if signs else 6) * mm
+    fields = [f for f in d["front_fields"] if f in FIELDS]
+    lab_w = min(max([stringWidth(d["labels"][f], "Helvetica-Bold", 6.8) for f in fields] or [0]) + 1.5 * mm, 19 * mm)
+    lx0 = 5 * mm
+    val_x, val_w = lx0 + lab_w + 2.2 * mm, CW - (lx0 + lab_w + 2.2 * mm) - 3 * mm
+    rows = [(d["labels"][f], _wrap(value_of(e, f, opt) or "-", "Helvetica-Bold", 6.8, val_w, 2)) for f in fields]
+    n_lines = sum(len(r[1]) for r in rows) or 1
+    step = min(4.1 * mm, max(2.6 * mm, (top - bottom) / n_lines))
+    yy = top - step + 1 * mm
+    for label, vals in rows:
+        c.setFillColor(DARK)
+        c.setFont("Helvetica-Bold", 6.8)
+        c.drawString(lx0, yy, label)
+        c.drawString(lx0 + lab_w, yy, ":")
+        for i, v in enumerate(vals):
+            _fit(c, v, "Helvetica-Bold", 6.8, val_w, 5)
+            c.drawString(val_x, yy - i * step * 0.82, v)
+        yy -= step * (1 + 0.82 * (len(vals) - 1))
+    if signs:
+        half = 18 * mm
+        line_y = 9 * mm
+        c.setStrokeColor(DARK)
+        c.setLineWidth(0.4)
+        for show, label, path, sx in ((d["show_holder_sign"], d["holder_sign_label"], opt["signature"](e), 3.5 * mm),
+                                      (d["show_auth_sign"], d["auth_sign_label"], opt.get("auth_sign"),
+                                       CW - half - 8 * mm)):
+            if not show:
+                continue
+            _sign_img(c, path, sx, line_y + 0.4 * mm, half, 5.6 * mm)
+            c.line(sx, line_y, sx + half, line_y)
+            c.setFillColor(DARK)
+            _fit(c, label.upper(), "Helvetica-Bold", 3.9, half + 2 * mm, 3)
+            c.drawCentredString(sx + half / 2, line_y - 2 * mm, label.upper())
+    c.restoreState()
+    _border(c, x, y)
+
+
 def front(c, e, x, y, opt):
-    if design_of(opt)["style"] != "CLASSIC":
+    style = design_of(opt)["style"]
+    if style == "LAILA":
+        return front_laila(c, e, x, y, opt)
+    if style != "CLASSIC":
         return front_labels(c, e, x, y, opt)
     RED, GREEN, DARK = _colors(opt)
     c.saveState()

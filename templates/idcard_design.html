@@ -3,14 +3,14 @@
 <form method="post" action="/idcards/design" enctype="multipart/form-data">
 <div class="grid2">
 <div class="panel"><h3>Look</h3><div class="form-grid">
-<div><label>Front layout</label><select name="style"><option value="LABELS">Labelled rows + 2 signatures (Name:, ID No.:, …)</option><option value="CLASSIC" {{ 'selected' if d.style == 'CLASSIC' }}>Classic (big ID box, signature on the back)</option></select></div>
+<div><label>Front layout</label><select name="style"><option value="LAILA">Laila Group card - swoosh corners, logo top-right, 2 signatures</option><option value="LABELS" {{ 'selected' if d.style == 'LABELS' }}>Red header + labelled rows + 2 signatures</option><option value="CLASSIC" {{ 'selected' if d.style == 'CLASSIC' }}>Classic (big ID box, signature on the back)</option></select></div>
 <div><label>Title on the bottom strip</label><input name="title" value="{{ d.title }}"></div>
 <div><label>Header colour</label><input type="color" name="header_color" value="{{ d.header_color }}"></div>
 <div><label>Accent / strip colour</label><input type="color" name="accent_color" value="{{ d.accent_color }}"></div>
 <div><label>Text colour</label><input type="color" name="text_color" value="{{ d.text_color }}"></div>
 <div><label style="color:inherit"><input type="checkbox" name="show_photo" value="1" {{ 'checked' if d.show_photo }}> Photo on the front</label></div>
 </div>
-<h3 style="margin-top:14px">Signatures (front, labelled layout)</h3><div class="form-grid">
+<h3 style="margin-top:14px">Signatures (front)</h3><div class="form-grid">
 <div><label style="color:inherit"><input type="checkbox" name="show_holder_sign" value="1" {{ 'checked' if d.show_holder_sign }}> Card holder signature (from the employee profile)</label><input name="holder_sign_label" value="{{ d.holder_sign_label }}"></div>
 <div><label style="color:inherit"><input type="checkbox" name="show_auth_sign" value="1" {{ 'checked' if d.show_auth_sign }}> Authorized signature</label><input name="auth_sign_label" value="{{ d.auth_sign_label }}"></div>
 <div style="grid-column:1/-1"><label>Authorized signature image (photo or scan on white paper - background removed automatically)</label>

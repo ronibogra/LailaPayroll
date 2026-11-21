@@ -780,7 +780,7 @@ async def idcard_design_save(request: Request, user=Depends(page_user), db: Sess
         return sorted(keys, key=lambda k: float(str(f.get(f"{prefix}o_{k}") or 99) or 99))
     color = lambda k, dflt: (str(f.get(k) or dflt).strip() if re.fullmatch(r"#[0-9a-fA-F]{6}", str(f.get(k) or "").strip())  # noqa: E731
                              else dflt)
-    d = {"style": "CLASSIC" if f.get("style") == "CLASSIC" else "LABELS",
+    d = {"style": f.get("style") if f.get("style") in ("CLASSIC", "LABELS", "LAILA") else "LAILA",
          "header_color": color("header_color", "#E8332F"), "accent_color": color("accent_color", "#00a651"),
          "text_color": color("text_color", "#1f2733"), "title": str(f.get("title") or "").strip()[:40] or "EMPLOYEE IDENTITY CARD",
          "front_fields": order("ff"), "back_fields": order("bf"),
