@@ -2,8 +2,28 @@
 {% block content %}
 <form method="post" action="/idcards/design" enctype="multipart/form-data">
 <div class="grid2">
+<div>
+<div class="panel"><h3>My own template (PNG)</h3>
+<p class="hint">Upload your card design <b>without</b> the employee details - just the background, logo, curves and captions. Portrait card 54 × 85.6 mm: best <b>638 × 1011 px</b> (300 dpi) or 1276 × 2022 px. The program prints the photo, details and signatures on top, at the positions below. Uploading a front template switches the layout to "My own template".</p>
+<div class="form-grid">
+{% for side in ('front', 'back') %}<div><label>{{ side|title }} template (PNG / JPG)</label>
+{% if tpl[side] %}<img src="/idcards/template-{{ side }}.png?v={{ tpl[side] }}" alt="" style="height:150px;display:block;margin:4px 0;border:1px solid #e3e6eb;border-radius:6px"><label style="color:inherit"><input type="checkbox" name="remove_tpl_{{ side }}" value="1"> remove</label>{% endif %}
+<input type="file" name="tpl_{{ side }}" accept="image/png,image/jpeg"></div>{% endfor %}
+</div>
+<h3 style="margin-top:14px">Positions on the template <small class="hint" style="margin:0">(mm from the top-left corner)</small></h3><div class="form-grid">
+<div><label>Photo: left / top</label><div style="display:flex;gap:6px"><input name="photo_x" value="{{ d.photo_x }}" style="width:70px"><input name="photo_y" value="{{ d.photo_y }}" style="width:70px"></div></div>
+<div><label>Photo: width / height</label><div style="display:flex;gap:6px"><input name="photo_w" value="{{ d.photo_w }}" style="width:70px"><input name="photo_h" value="{{ d.photo_h }}" style="width:70px"></div></div>
+<div><label>Details: left / top of first row</label><div style="display:flex;gap:6px"><input name="rows_x" value="{{ d.rows_x }}" style="width:70px"><input name="rows_y" value="{{ d.rows_y }}" style="width:70px"></div></div>
+<div><label>Text size (pt) / row gap (mm) / label width (mm)</label><div style="display:flex;gap:6px"><input name="font_size" value="{{ d.font_size }}" style="width:60px"><input name="row_gap" value="{{ d.row_gap }}" style="width:60px"><input name="label_w" value="{{ d.label_w }}" style="width:60px"></div></div>
+<div><label>Signatures: line from top / holder left / authorised left / width</label><div style="display:flex;gap:6px"><input name="sign_y" value="{{ d.sign_y }}" style="width:55px"><input name="sign_x1" value="{{ d.sign_x1 }}" style="width:55px"><input name="sign_x2" value="{{ d.sign_x2 }}" style="width:55px"><input name="sign_w" value="{{ d.sign_w }}" style="width:55px"></div></div>
+<div><label>Back: QR from top / size; details from top</label><div style="display:flex;gap:6px"><input name="qr_y" value="{{ d.qr_y }}" style="width:60px"><input name="qr_size" value="{{ d.qr_size }}" style="width:60px"><input name="back_rows_y" value="{{ d.back_rows_y }}" style="width:60px"></div></div>
+<div><label style="color:inherit"><input type="checkbox" name="photo_border" value="1" {{ 'checked' if d.photo_border }}> Frame around the photo</label></div>
+<div><label style="color:inherit"><input type="checkbox" name="print_labels" value="1" {{ 'checked' if d.print_labels }}> Print the labels ("Name :") - untick if they are on the template</label></div>
+<div><label style="color:inherit"><input type="checkbox" name="sign_lines" value="1" {{ 'checked' if d.sign_lines }}> Print signature lines + captions - untick if on the template</label></div>
+<div><label style="color:inherit"><input type="checkbox" name="back_rows" value="1" {{ 'checked' if d.back_rows }}> Print the back fields on the back template</label></div>
+</div><p class="hint">Card is 54 mm wide, 85.6 mm tall. Save to see the change in the preview →</p></div>
 <div class="panel"><h3>Look</h3><div class="form-grid">
-<div><label>Front layout</label><select name="style"><option value="LAILA">Laila Group card - swoosh corners, logo top-right, 2 signatures</option><option value="LABELS" {{ 'selected' if d.style == 'LABELS' }}>Red header + labelled rows + 2 signatures</option><option value="CLASSIC" {{ 'selected' if d.style == 'CLASSIC' }}>Classic (big ID box, signature on the back)</option></select></div>
+<div><label>Front layout</label><select name="style"><option value="TEMPLATE" {{ 'selected' if d.style == 'TEMPLATE' }}>My own template (uploaded PNG)</option><option value="LAILA" {{ 'selected' if d.style == 'LAILA' }}>Laila Group card - swoosh corners, logo top-right, 2 signatures</option><option value="LABELS" {{ 'selected' if d.style == 'LABELS' }}>Red header + labelled rows + 2 signatures</option><option value="CLASSIC" {{ 'selected' if d.style == 'CLASSIC' }}>Classic (big ID box, signature on the back)</option></select></div>
 <div><label>Title on the bottom strip</label><input name="title" value="{{ d.title }}"></div>
 <div><label>Header colour</label><input type="color" name="header_color" value="{{ d.header_color }}"></div>
 <div><label>Accent / strip colour</label><input type="color" name="accent_color" value="{{ d.accent_color }}"></div>
@@ -23,9 +43,10 @@
 <div><label style="color:inherit"><input type="checkbox" name="show_address" value="1" {{ 'checked' if d.show_address }}> "Return to" Head Office address &amp; phone</label></div>
 <div style="grid-column:1/-1"><label>Note on the back</label><input name="back_note" value="{{ d.back_note }}" style="width:100%"></div>
 </div></div>
-<div class="panel"><h3>Preview{% if sample %} - {{ sample.employee_code }} {{ sample.full_name }}{% endif %}</h3>
+</div>
+<div><div class="panel" style="position:sticky;top:12px"><h3>Preview{% if sample %} - {{ sample.employee_code }} {{ sample.full_name }}{% endif %}</h3>
 {% if sample %}<iframe src="/idcards.pdf?codes={{ sample.employee_code|urlencode }}&layout=card&sides=both&status=&preview=1#view=Fit" style="width:100%;height:560px;border:1px solid #e3e6eb;border-radius:8px"></iframe>
-<p class="hint">Save to update the preview. <a href="/idcards">Print ID cards →</a></p>{% else %}<p class="hint">Add an employee to see a preview.</p>{% endif %}</div>
+<p class="hint">Save to update the preview. <a href="/idcards">Print ID cards →</a></p>{% else %}<p class="hint">Add an employee to see a preview.</p>{% endif %}</div></div>
 </div>
 <div class="panel"><h3>Fields</h3><p class="hint">Tick what to print, change the label, and number the order (1 = first).</p>
 <div class="table-wrap"><table><tr><th>Field</th><th>Label printed</th><th>Front</th><th>Order</th><th>Back</th><th>Order</th></tr>

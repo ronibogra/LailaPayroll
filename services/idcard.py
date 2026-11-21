@@ -84,6 +84,11 @@ DEFAULT_DESIGN = {
     "holder_sign_label": "Card holder Signature", "auth_sign_label": "Authorized Signature",
     "show_qr": True, "show_address": True,
     "back_note": "This card is the property of the company and must be shown on request. If found, please return to:",
+    # uploaded template (style TEMPLATE): positions in mm from the TOP-LEFT corner of the card (54 x 85.6 mm)
+    "photo_x": 16.5, "photo_y": 25, "photo_w": 21, "photo_h": 24, "photo_border": True,
+    "rows_x": 5, "rows_y": 55, "font_size": 7, "row_gap": 4, "label_w": 13, "print_labels": True,
+    "sign_y": 77, "sign_lines": True, "sign_x1": 3.5, "sign_x2": 28, "sign_w": 18,
+    "back_rows": False, "back_rows_y": 12, "qr_y": 55, "qr_size": 15,
 }
 FIELDS = {"full_name": "Name", "employee_code": "ID No.", "card_no": "Card No.", "designation": "Designation",
           "department": "Department", "section": "Section", "grade": "Grade", "company": "Company",
@@ -347,8 +352,115 @@ def front_laila(c, e, x, y, opt):
     _border(c, x, y)
 
 
+def _num(d, k):
+    try:
+        return float(d.get(k, DEFAULT_DESIGN[k]))
+    except (TypeError, ValueError):
+        return float(DEFAULT_DESIGN[k])
+
+
+def _rows(c, e, opt, d, fields, top_mm, DARK, bottom_mm=None):
+    """Label : value rows. Squeezes the row gap when needed so nothing runs below bottom_mm."""
+    fs = _num(d, "font_size")
+    gap, lx0, lab_w = _num(d, "row_gap") * mm, _num(d, "rows_x") * mm, _num(d, "label_w") * mm
+    labels = d.get("print_labels", True)
+    fields = [f for f in fields if f in FIELDS]
+    if labels:
+        lab_w = max(lab_w, max([stringWidth(d["labels"][f], "Helvetica-Bold", fs) for f in fields] or [0]) + 1 * mm)
+    val_x = lx0 + lab_w + 2.2 * mm if labels else lx0
+    val_w = CW - val_x - 2.5 * mm
+    yy = CH - top_mm * mm
+    wrapped = [_wrap(value_of(e, f, opt) or "-", "Helvetica-Bold", fs, val_w, 2) for f in fields]
+    if bottom_mm:
+        units = sum(1 + 0.82 * (len(v) - 1) for v in wrapped) - 0.6
+        room = (bottom_mm - top_mm) * mm
+        if units > 0 and gap * units > room:
+            gap = max(room / units, fs * 0.36 * mm)
+    for f, vals in zip(fields, wrapped):
+        c.setFillColor(DARK)
+        if labels:
+            c.setFont("Helvetica-Bold", fs)
+            c.drawString(lx0, yy, d["labels"][f])
+            c.drawString(lx0 + lab_w, yy, ":")
+        for i, v in enumerate(vals):
+            _fit(c, v, "Helvetica-Bold", fs, val_w, 4.5)
+            c.drawString(val_x, yy - i * gap * 0.82, v)
+        yy -= gap * (1 + 0.82 * (len(vals) - 1))
+
+
+def front_template(c, e, x, y, opt):
+    """Your own PNG template as the background; photo, details and signatures printed where you set them."""
+    _, _, DARK = _colors(opt)
+    d = design_of(opt)
+    c.saveState()
+    c.translate(x, y)
+    if opt.get("tpl_front"):
+        try:
+            c.drawImage(opt["tpl_front"], 0, 0, CW, CH, mask="auto")
+        except Exception:  # noqa: BLE001
+            pass
+    if d["show_photo"]:
+        pw, ph = _num(d, "photo_w") * mm, _num(d, "photo_h") * mm
+        px, py = _num(d, "photo_x") * mm, CH - _num(d, "photo_y") * mm - ph
+        img = _photo(opt["photo"](e))
+        if img:
+            c.drawImage(img, px, py, pw, ph)
+        else:
+            c.setFillColor(colors.HexColor("#eef0f3"))
+            c.rect(px, py, pw, ph, stroke=0, fill=1)
+            c.setFillColor(colors.HexColor("#9aa3af"))
+            c.setFont("Helvetica", 6.5)
+            c.drawCentredString(px + pw / 2, py + ph / 2, "PHOTO")
+        if d.get("photo_border"):
+            c.setStrokeColor(colors.HexColor("#8a8f98"))
+            c.setLineWidth(0.6)
+            c.rect(px - 0.8 * mm, py - 0.8 * mm, pw + 1.6 * mm, ph + 1.6 * mm, stroke=1, fill=0)
+    signs = d["show_holder_sign"] or d["show_auth_sign"]
+    _rows(c, e, opt, d, d["front_fields"], _num(d, "rows_y"), DARK,
+          bottom_mm=_num(d, "sign_y") - 7.5 if signs else 84)
+    line_y = CH - _num(d, "sign_y") * mm
+    half = _num(d, "sign_w") * mm
+    for show, label, path, sx in ((d["show_holder_sign"], d["holder_sign_label"], opt["signature"](e),
+                                   _num(d, "sign_x1") * mm),
+                                  (d["show_auth_sign"], d["auth_sign_label"], opt.get("auth_sign"), _num(d, "sign_x2") * mm)):
+        if not show:
+            continue
+        _sign_img(c, path, sx, line_y + 0.4 * mm, half, 5.6 * mm)
+        if d.get("sign_lines"):       # leave off when the template already has the lines and captions
+            c.setStrokeColor(DARK)
+            c.setLineWidth(0.4)
+            c.line(sx, line_y, sx + half, line_y)
+            c.setFillColor(DARK)
+            _fit(c, label.upper(), "Helvetica-Bold", 3.9, half + 2 * mm, 3)
+            c.drawCentredString(sx + half / 2, line_y - 2 * mm, label.upper())
+    c.restoreState()
+    _border(c, x, y)
+
+
+def back_template(c, e, x, y, opt):
+    _, _, DARK = _colors(opt)
+    d = design_of(opt)
+    c.saveState()
+    c.translate(x, y)
+    try:
+        c.drawImage(opt["tpl_back"], 0, 0, CW, CH, mask="auto")
+    except Exception:  # noqa: BLE001
+        pass
+    if d.get("back_rows"):
+        _rows(c, e, opt, d, d["back_fields"], _num(d, "back_rows_y"), DARK,
+              bottom_mm=(_num(d, "qr_y") - 2) if d["show_qr"] and _num(d, "qr_y") > _num(d, "back_rows_y") else 84)
+    if d["show_qr"]:
+        q = _num(d, "qr_size") * mm
+        _qr(c, f"{opt['group']}|{e.company.code if e.company else ''}|{e.employee_code}|{e.full_name}",
+            (CW - q) / 2, CH - _num(d, "qr_y") * mm - q, q)
+    c.restoreState()
+    _border(c, x, y)
+
+
 def front(c, e, x, y, opt):
     style = design_of(opt)["style"]
+    if style == "TEMPLATE":
+        return front_template(c, e, x, y, opt)
     if style == "LAILA":
         return front_laila(c, e, x, y, opt)
     if style != "CLASSIC":
@@ -444,6 +556,8 @@ def front(c, e, x, y, opt):
 def back(c, e, x, y, opt):
     RED, GREEN, DARK = _colors(opt)
     d = design_of(opt)
+    if d["style"] == "TEMPLATE" and opt.get("tpl_back"):
+        return back_template(c, e, x, y, opt)
     c.saveState()
     c.translate(x, y)
     p = c.beginPath()

@@ -754,6 +754,27 @@ def _idcard_design(db) -> dict:
 
 
 AUTH_SIGN_FILE = branding.BRAND_DIR / "auth_signature.png"
+TPL_FILES = {"front": branding.BRAND_DIR / "idcard_front.png", "back": branding.BRAND_DIR / "idcard_back.png"}
+
+
+def _save_template(content: bytes) -> bytes:
+    """Card template -> PNG at 300 dpi card size (638 x 1011 px), keeping transparency."""
+    from PIL import Image, ImageOps
+    if not content:
+        raise ValueError("empty file")
+    if len(content) > 25 * 1024 * 1024:
+        raise ValueError("larger than 25 MB")
+    try:
+        im = ImageOps.exif_transpose(Image.open(io.BytesIO(content)))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("not an image - upload a PNG (or JPG)") from exc
+    if im.width > im.height * 1.05:
+        raise ValueError(f"the template is landscape ({im.width} x {im.height} px) - cards are portrait "
+                         "54 x 85.6 mm, e.g. 638 x 1011 px")
+    im = im.convert("RGBA").resize((638, 1011), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "PNG", optimize=True)
+    return buf.getvalue()
 
 
 @app.get("/idcards/design", response_class=HTMLResponse)
@@ -764,6 +785,7 @@ def idcard_design_page(request: Request, user=Depends(page_user), db: Session = 
     sample = db.scalar(select(Employee).where(Employee.employment_status == "ACTIVE")
                        .order_by(Employee.photo.is_(None), Employee.employee_code).limit(1))
     return render(request, "idcard_design.html", user, d=d, fields=idcard.FIELDS, sample=sample,
+                  tpl={k: (int(p.stat().st_mtime) if p.exists() else 0) for k, p in TPL_FILES.items()},
                   auth_sign=AUTH_SIGN_FILE.exists(), v=int(AUTH_SIGN_FILE.stat().st_mtime) if AUTH_SIGN_FILE.exists() else 0)
 
 
@@ -780,7 +802,7 @@ async def idcard_design_save(request: Request, user=Depends(page_user), db: Sess
         return sorted(keys, key=lambda k: float(str(f.get(f"{prefix}o_{k}") or 99) or 99))
     color = lambda k, dflt: (str(f.get(k) or dflt).strip() if re.fullmatch(r"#[0-9a-fA-F]{6}", str(f.get(k) or "").strip())  # noqa: E731
                              else dflt)
-    d = {"style": f.get("style") if f.get("style") in ("CLASSIC", "LABELS", "LAILA") else "LAILA",
+    d = {"style": f.get("style") if f.get("style") in ("CLASSIC", "LABELS", "LAILA", "TEMPLATE") else "LAILA",
          "header_color": color("header_color", "#E8332F"), "accent_color": color("accent_color", "#00a651"),
          "text_color": color("text_color", "#1f2733"), "title": str(f.get("title") or "").strip()[:40] or "EMPLOYEE IDENTITY CARD",
          "front_fields": order("ff"), "back_fields": order("bf"),
@@ -803,9 +825,43 @@ async def idcard_design_save(request: Request, user=Depends(page_user), db: Sess
             return go("/idcards/design", err=f"Authorized signature: {exc}")
     if f.get("remove_auth_sign") and AUTH_SIGN_FILE.exists():
         AUTH_SIGN_FILE.unlink()
+    for side, path in TPL_FILES.items():
+        up = f.get(f"tpl_{side}")
+        if up is not None and getattr(up, "filename", ""):
+            try:
+                branding.BRAND_DIR.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(_save_template(await up.read()))
+            except ValueError as exc:
+                return go("/idcards/design", err=f"{side.title()} template: {exc}")
+            if side == "front":
+                d["style"] = "TEMPLATE"      # a new front template switches the layout to it
+        if f.get(f"remove_tpl_{side}") and path.exists():
+            path.unlink()
+    if d["style"] == "TEMPLATE" and not TPL_FILES["front"].exists():
+        return go("/idcards/design", err="Upload the front template (PNG) first, or choose another layout")
+    for k in ("photo_x", "photo_y", "photo_w", "photo_h", "rows_x", "rows_y", "font_size", "row_gap", "label_w",
+              "sign_y", "sign_x1", "sign_x2", "sign_w", "back_rows_y", "qr_y", "qr_size"):
+        try:
+            v = float(str(f.get(k) or idcard.DEFAULT_DESIGN[k]))
+        except ValueError:
+            return go("/idcards/design", err=f"{k.replace('_', ' ')}: give a number in mm")
+        if not 0 <= v <= 86:
+            return go("/idcards/design", err=f"{k.replace('_', ' ')} must be 0-86 mm")
+        d[k] = v
+    for k in ("photo_border", "print_labels", "sign_lines", "back_rows"):
+        d[k] = bool(f.get(k))
     set_setting(db, "idcard.design", json.dumps(d))
     audit(db, user, "IDCARD_DESIGN", f"style {d['style']}, front {','.join(d['front_fields'])}")
     return go("/idcards/design", msg="ID card design saved")
+
+
+@app.get("/idcards/template-{side}.png")
+def idcard_template_file(side: str, user=Depends(page_user)):
+    need(user, "employees.view")
+    path = TPL_FILES.get(side)
+    if not path or not path.exists():
+        raise HTTPException(404, "No template")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/idcards/auth-signature.png")
@@ -955,6 +1011,8 @@ def idcards_pdf(request: Request, company: str = "", department: str = "", codes
         "signatory": signatory.strip() or get_setting(db, "idcard.signatory", default="Authorised signature"),
         "signature": lambda e: photo_path(e.signature), "design": _idcard_design(db),
         "auth_sign": str(AUTH_SIGN_FILE) if AUTH_SIGN_FILE.exists() else None,
+        "tpl_front": str(TPL_FILES["front"]) if TPL_FILES["front"].exists() else None,
+        "tpl_back": str(TPL_FILES["back"]) if TPL_FILES["back"].exists() else None,
         "show_nid": bool(show_nid), "credit": settings.developer_credit})
     if not preview:
         audit(db, user, "ID_CARDS", f"{len(emps)} cards ({layout}, {sides})")

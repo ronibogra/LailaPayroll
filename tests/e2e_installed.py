@@ -675,6 +675,21 @@ def main():
                                 "bf_phone": "1", "lab_joined_on": "DOJ"},
          files={"auth_sign": ("hr.jpg", sig.getvalue(), "image/jpeg")}, must="ID card design saved")
     page(s, "/idcards/auth-signature.png")
+    tpl = io.BytesIO()
+    Image.new("RGBA", (638, 1011), (251, 250, 244, 255)).save(tpl, "PNG")
+    land = io.BytesIO()
+    Image.new("RGB", (1011, 638), (255, 255, 255)).save(land, "PNG")
+    post(s, "/idcards/design", {"style": "TEMPLATE", "ff_full_name": "1", "ff_employee_code": "1", "show_photo": "1"},
+         files={"tpl_front": ("wide.png", land.getvalue(), "image/png")}, must="landscape", must_not=None)
+    post(s, "/idcards/design", {"style": "TEMPLATE", "ff_full_name": "1", "ffo_full_name": "2", "ff_employee_code": "1",
+                                "ffo_employee_code": "1", "show_photo": "1", "show_holder_sign": "1", "show_auth_sign": "1",
+                                "show_qr": "1", "photo_x": "16.5", "photo_y": "25", "rows_y": "56", "sign_y": "77"},
+         files=[("tpl_front", ("front.png", tpl.getvalue(), "image/png")),
+                ("tpl_back", ("back.png", tpl.getvalue(), "image/png"))], must="ID card design saved")
+    r = page(s, "/idcards/design", must="My own template")
+    ok('value="TEMPLATE" selected' in r.text and "/idcards/template-front.png" in r.text, "template must be in use")
+    r = page(s, "/idcards.pdf?codes=12127&layout=card&sides=both&status=")
+    ok(r.content[:4] == b"%PDF", "card on own template")
     r = page(s, "/idcards.pdf?codes=12127&layout=card&sides=front&status=")
     ok(r.content[:4] == b"%PDF", "designed card")
     post(s, "/idcards/design", {"style": "LABELS"}, must="Tick at least one field", must_not=None)
