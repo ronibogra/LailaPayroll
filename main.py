@@ -2242,7 +2242,7 @@ def payroll_bonus(request: Request, company: str = "", month: str = "", name: st
     if not calc:      # show what is saved for this bonus name
         rows = [bonus_svc.BonusRow(e, bonus_svc.service_months(e.joined_on, as_of_d), saved.get(e.id, Decimal(0)),
                                    "saved" if e.id in saved else "") for e in emps]
-    return render(request, "payroll_bonus.html", user, rows=rows, calc=bool(calc), saved=saved, name=name,
+    return render(request, "payroll_bonus.html", user, rows=rows, calc=bool(calc), saved=saved, bonus_name=name,
                   names=bonus_svc.NAMES, basis=basis, percent=percent, min_months=min_months, prorate=prorate,
                   religion=religion, as_of=as_of_d, y=y, m=m, mval=f"{y:04d}-{m:02d}", cid=cid, companies=comps,
                   company=db.get(Company, cid), run=get_run(db, cid, y, m), tabs=INPUT_TABS,
