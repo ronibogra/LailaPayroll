@@ -2328,10 +2328,11 @@ def backup_delete(name: str = Form(...), user=Depends(page_user), db: Session = 
 
 # ---------------------------------------------------------------- users & audit
 @app.get("/users", response_class=HTMLResponse)
-def users_page(request: Request, role: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+def users_page(request: Request, role: str = "", edit: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "users.manage")
     roles = db.scalars(select(Role).order_by(Role.builtin.desc(), Role.name)).all()
     return render(request, "users.html", user, users=db.scalars(select(User).order_by(User.username)).all(),
+                  eu=db.scalar(select(User).where(User.username == edit)) if edit else None,
                   roles=roles, edit_role=db.scalar(select(Role).where(Role.name == role)) if role else None,
                   companies=db.scalars(select(Company).order_by(Company.code)).all(), perms=PERMS, groups=GROUPS,
                   role_perms={r.name: (set(PERMS) if r.name == "ADMIN" else parse_perms(r.permissions)) for r in roles},

@@ -425,6 +425,14 @@ def main():
         code = c.get(BASE + forbidden, timeout=30, headers={"accept": "text/html"}).status_code
         ok(code in (403, 405), f"{forbidden} must be forbidden for the clerk, got {code}")
     post(s, "/roles/PUNCH_CLERK/delete", must="Some users still have this role", must_not=None)
+    r = page(s, "/users?edit=clerk1", must="Edit user clerk1")
+    ok('value="Clerk One"' in r.text and 'value="PUNCH_CLERK" selected' in r.text, "edit form must be filled in")
+    post(s, "/users/save", {"username": "clerk1", "full_name": "Clerk One B", "role": "PUNCH_CLERK", "password": ""},
+         must="Clerk One B")     # not ticking Active = blocked
+    ok("Dashboard" not in post(requests.Session(), "/login", {"username": "clerk1", "password": "Clerk@12345"},
+                               must_not=None).text, "blocked user must not log in")
+    post(s, "/users/save", {"username": "clerk1", "full_name": "Clerk One", "role": "PUNCH_CLERK", "active": "1"},
+         must="saved")
 
     step("Head Office has no overtime by default (pay policy)")
     page(s, "/settings?policy_company=1", must='name="ot_enabled" value="False"')
