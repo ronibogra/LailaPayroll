@@ -57,8 +57,8 @@
 {% for n in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<label style="display:inline-block;margin-right:12px;color:inherit"><input type="checkbox" name="wd{{ loop.index0 }}" value="1" {{ 'checked' if loop.index0 in weekend }}> {{ n }}</label>{% endfor %}
 <div class="form-grid" style="margin-top:12px"><div><label>Office latitude</label><input name="geofence_lat" value="{{ lat }}"></div>
 <div><label>Office longitude</label><input name="geofence_lon" value="{{ lon }}"></div><div><label>Mobile punch radius (m)</label><input name="geofence_radius_m" value="{{ radius }}"></div>
-<div><label>Outside the radius</label><select name="geofence_mode"><option value="STRICT">Block the punch</option><option value="RECORD" {{ 'selected' if geo_mode == 'RECORD' }}>Allow, but mark it "outside office" with the distance</option></select></div></div>
-<p class="hint">Mobile punch always records the phone's GPS location automatically - staff cannot type or change it, and a punch without location is refused.</p>
+<div><label>Where staff may punch from the phone</label><select name="geofence_mode"><option value="ANYWHERE">Anywhere - location saved automatically (no setup)</option><option value="RECORD" {{ 'selected' if geo_mode == 'RECORD' }}>Anywhere, marked "outside office" with the distance</option><option value="STRICT" {{ 'selected' if geo_mode == 'STRICT' }}>Only inside the office radius</option></select></div></div>
+<p class="hint">Every mobile punch saves the phone's GPS location automatically - staff cannot type or change it, and a punch without location is refused. Office latitude / longitude / radius are only needed for the last two choices; leave them empty for "Anywhere". See where people punched: Punch records → Source MOBILE → "Location" column (opens the map).</p>
 <p><button>Save</button></p></form>
 <h3 style="margin-top:18px">Data &amp; backup</h3>
 <p class="hint">Database: {{ db_kind }} · Data folder: <b>{{ data_dir }}</b><br>A backup is made automatically every day (kept {{ settings.backup_keep_days }} days) in the backups folder.</p>

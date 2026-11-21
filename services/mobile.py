@@ -31,20 +31,34 @@ def distance_m(lat1, lon1, lat2, lon2) -> float:
     return 2 * r * math.asin(math.sqrt(a))
 
 
-def check_location(db: Session, lat: float, lon: float, accuracy: float) -> tuple[float, bool]:
-    """Location is mandatory and comes only from the phone's GPS (the page has no field to type it).
-    STRICT mode refuses punches outside the office radius; RECORD mode keeps them, marked with the distance."""
+MODES = ("ANYWHERE", "RECORD", "STRICT")
+
+
+def geo_mode(db: Session) -> str:
     from services.policy import get_setting
+    m = (get_setting(db, "geofence_mode", default="ANYWHERE") or "ANYWHERE").upper()
+    return m if m in MODES else "ANYWHERE"
+
+
+def check_location(db: Session, lat: float, lon: float, accuracy: float) -> tuple[float | None, bool]:
+    """Location is mandatory and comes only from the phone's GPS (the page has no field to type it).
+    ANYWHERE (default): punch from any place, the GPS location is saved - nothing to set up.
+    RECORD: anywhere, marked with the distance from the office. STRICT: only inside the office radius."""
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180) or (lat == 0 and lon == 0):
         raise MobileError("Location is required for mobile punch - allow location for this site and try again")
-    g_lat, g_lon, radius = geofence(db)
-    if not g_lat and not g_lon:
-        raise MobileError("Office location is not set up yet - contact HR/IT")
     if accuracy is None or accuracy <= 0 or accuracy > settings.max_gps_accuracy_m:
         raise MobileError(f"GPS signal too weak (±{int(accuracy or 0)} m). Move to open sky and try again")
+    mode = geo_mode(db)
+    g_lat, g_lon, radius = geofence(db)
+    if not g_lat and not g_lon:
+        if mode == "STRICT":
+            raise MobileError("Office location is not set up yet - contact HR/IT")
+        return None, True
     d = distance_m(lat, lon, g_lat, g_lon)
+    if mode == "ANYWHERE":
+        return d, True
     inside = d <= radius + min(accuracy, settings.max_gps_accuracy_m)
-    if not inside and (get_setting(db, "geofence_mode", default="STRICT") or "STRICT") != "RECORD":
+    if not inside and mode == "STRICT":
         raise MobileError(f"You are {int(d)} m from the office. Mobile punch only works inside the premises")
     return d, inside
 
@@ -84,7 +98,8 @@ def punch(db: Session, emp: Employee, lat: float, lon: float, accuracy: float,
         raise MobileError(f"Already punched at {last.punch_time:%H:%M}. Wait {MIN_GAP_MINUTES} minutes")
     log = AttendanceLog(card_no=emp.card_no, punch_time=now, device="MOBILE", source="MOBILE",
                         latitude=round(lat, 6), longitude=round(lon, 6), accuracy_m=int(accuracy),
-                        note=f"{int(dist)} m from office" + ("" if inside else " - OUTSIDE office area"),
+                        note=("Mobile GPS" if dist is None else f"{int(dist)} m from office")
+                        + ("" if inside else " - OUTSIDE office area"),
                         client_ip=(client_ip or "")[:45] or None, created_by=emp.employee_code)
     db.add(log)
     db.commit()

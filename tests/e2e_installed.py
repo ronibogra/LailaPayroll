@@ -293,6 +293,8 @@ def main():
             "gross": "12500", "auto_split": "1", "payment_mode": "BANK", "employment_status": "ACTIVE",
             "allow_mobile": "1", "mobile_pin": "4321"}
     post(s, "/employees/save", form, files={"_": ("", b"")}, must="Saved HO-0001")
+    post(s, "/settings/general", {"wd4": "1", "geofence_lat": "23.80", "geofence_lon": "90.40", "geofence_radius_m": "200",
+                                  "geofence_mode": "STRICT"}, must="Saved")
     mob = requests.Session()
     r = mob.get(HTTPS + "/m", verify=False, timeout=30)
     ok(r.ok and "Employee ID" in r.text, f"mobile page: {r.status_code}")
@@ -537,8 +539,16 @@ def main():
                  timeout=30)
     ok(r.json()["ok"] and "OUTSIDE" in r.json()["location"] or "Already punched" in r.json()["message"],
        f"RECORD mode must keep far punches: {r.text}")
-    post(s, "/settings/general", {"wd4": "1", "geofence_lat": "23.80", "geofence_lon": "90.40", "geofence_radius_m": "200",
-                                  "geofence_mode": "STRICT"}, must="Saved")
+    post(s, "/settings/general", {"wd4": "1", "geofence_lat": "", "geofence_lon": "", "geofence_radius_m": "200",
+                                  "geofence_mode": "STRICT"}, must="needs the office latitude", must_not=None)
+    # default: punch from anywhere, no office location needed - the GPS location is still saved
+    post(s, "/settings/general", {"wd4": "1", "geofence_lat": "", "geofence_lon": "", "geofence_radius_m": "200",
+                                  "geofence_mode": "ANYWHERE"}, must="Saved")
+    time.sleep(1)
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "22.3569", "longitude": "91.7832", "accuracy": "20"}, verify=False,
+                 timeout=30)
+    ok(r.json()["ok"] or "Already punched" in r.json()["message"], f"ANYWHERE mode must accept any place: {r.text}")
+    page(s, f"/punches?start={today}&end={today}&source=MOBILE", must="maps.google.com/?q=")
 
     step("holiday for some staff only + late counting from end of grace")
     post(s, "/settings/special-holidays", {"day": str(date(y, m, 3)), "name": "CI team day off", "scope": "EMPLOYEES",

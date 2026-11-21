@@ -21,7 +21,7 @@
   {% if emp.allow_mobile %}
   <button class="punch-btn" id="punch">PUNCH</button>
   <div class="m-msg" id="msg"></div>
-  <div class="readonly-box" id="loc">📍 Your location is taken automatically from the phone's GPS when you press PUNCH. It cannot be typed or changed.</div>
+  <div class="readonly-box" id="loc">📍 Your location is taken automatically from the phone's GPS when you press PUNCH - you can punch from anywhere. It cannot be typed or changed.</div>
   {% else %}<div class="alert info">Mobile punch is not enabled for you. You can still request leave.</div>{% endif %}
   <div class="panel"><h3>Today</h3><div id="list">
   {% for p in punches %}<div>{{ p.punch_time.strftime('%I:%M %p') }} <span class="tag">{{ p.source }}</span>{% if p.latitude %} <small class="hint">📍 {{ '%.5f'|format(p.latitude) }}, {{ '%.5f'|format(p.longitude) }}</small>{% endif %}</div>{% else %}<div class="hint" id="none">No punches yet today.</div>{% endfor %}
@@ -67,7 +67,8 @@ if ($("punch")) $("punch").onclick = () => {
       say(j.message, j.ok);
       if (r.status === 401) { setTimeout(() => location.href = "/m", 1500); }
       if (j.ok) { const none=$("none"); if (none) none.remove();
-        $("loc").textContent = "📍 Recorded location: " + j.location;
+        $("loc").textContent = "📍 Recorded location: " + j.location + " ";
+        const a=document.createElement("a"); a.href=j.map; a.target="_blank"; a.textContent="map"; $("loc").appendChild(a);
         const d=document.createElement("div"); d.textContent = j.time + " "; const t=document.createElement("span"); t.className="tag"; t.textContent="MOBILE"; d.appendChild(t); $("list").appendChild(d); }
     } catch (e) { say("No connection to the server. Are you on the office Wi-Fi?"); }
     btn.disabled = false;

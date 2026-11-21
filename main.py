@@ -96,6 +96,7 @@ def dec(value: str, field: str) -> Decimal:
         raise ValueError(f"{field}: not a number")
 
 
+GROUP_COMPANIES = [("BDL", "BANDO DESIGN"), ("LAUNDRY", "Laundry Factory"), ("LSL", "LAILA STYLES")]
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
@@ -240,6 +241,13 @@ def startup():
         set_setting(db, "roles_version", str(max([v for v, *_ in ROLE_MIGRATIONS] + [version])), commit=False)
         branding.refresh(db)
         leave_svc.seed_types(db)
+        if setup_done(db) and get_setting(db, "group_companies_v1", default="") != "1":
+            # LAILA GROUP Head Office also handles staff of these companies (all punch at the Head Office)
+            have = list(db.scalars(select(Company)))
+            for code, name in GROUP_COMPANIES:
+                if not any(c.code == code or c.name.strip().lower() == name.lower() for c in have):
+                    db.add(Company(code=code, name=name))
+            set_setting(db, "group_companies_v1", "1", commit=False)
         if get_setting(db, "ho_ot_default_done", default="") != "1":
             ho = db.scalar(select(Company).where(Company.code == "HO"))
             if ho and get_setting(db, "pay.ot_enabled", ho.id, default="") == "":
@@ -496,6 +504,7 @@ async def setup_save(request: Request, db: Session = Depends(get_db)):
     if ho:      # overtime does not apply to Head Office / Central Office staff (can be changed in the pay policy)
         set_setting(db, "pay.ot_enabled", "false", ho.id, commit=False)
     set_setting(db, "ho_ot_default_done", "1", commit=False)
+    set_setting(db, "group_companies_v1", "1", commit=False)    # the person chose the companies here
     set_setting(db, "setup_done", "1", commit=False)
     audit(db, username, "SETUP", f"fresh setup, companies: {', '.join(c for c, _ in companies)}", commit=False)
     db.commit()
@@ -2059,7 +2068,7 @@ def settings_page(request: Request, policy_company: str = "", user=Depends(page_
         sp = [h for h in sp if h.scope != "COMPANY" or h.scope_value == str(user["company_id"])]
     return render(request, "settings.html", user, policy=policy_rows(db, pc), policy_company=pc, special=sp,
                   depts=db.scalars(select(Department).order_by(Department.name)).all(),
-                  geo_mode=get_setting(db, "geofence_mode", default="STRICT") or "STRICT",
+                  geo_mode=mobile.geo_mode(db),
                   r=report_ctx(db, user, "holidays", {}), weekend=sorted(weekend_set(db)), lat=lat, lon=lon, radius=radius,
                   companies=visible_companies(db, user),
                   all_companies=db.scalars(select(Company).order_by(Company.code)).all(),
@@ -2097,7 +2106,10 @@ async def settings_general(request: Request, user=Depends(page_user), db: Sessio
     set_setting(db, "geofence_lat", str(lat), commit=False)
     set_setting(db, "geofence_lon", str(lon), commit=False)
     set_setting(db, "geofence_radius_m", str(radius), commit=False)
-    mode = "RECORD" if f.get("geofence_mode") == "RECORD" else "STRICT"
+    mode = str(f.get("geofence_mode") or "ANYWHERE").upper()
+    mode = mode if mode in mobile.MODES else "ANYWHERE"
+    if mode == "STRICT" and not (lat or lon):
+        return go("/settings", err="'Only inside the office' needs the office latitude and longitude")
     set_setting(db, "geofence_mode", mode, commit=False)
     audit(db, user, "SETTINGS_SAVE", f"weekend={weekend} office={lat},{lon} r={radius} outside={mode}", commit=False)
     db.commit()
@@ -2469,7 +2481,8 @@ def mobile_punch(request: Request, latitude: float = Form(...), longitude: float
     except mobile.MobileError as exc:
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
     return {"ok": True, "message": f"Punch recorded at {log.punch_time:%I:%M %p}", "time": f"{log.punch_time:%H:%M}",
-            "location": f"{log.latitude:.6f}, {log.longitude:.6f} (±{log.accuracy_m} m) · {log.note}"}
+            "location": f"{log.latitude:.6f}, {log.longitude:.6f} (±{log.accuracy_m} m) · {log.note}",
+            "map": f"https://maps.google.com/?q={log.latitude:.6f},{log.longitude:.6f}"}
 
 
 @app.post("/m/leave")

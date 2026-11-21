@@ -16,13 +16,14 @@
 <div class="panel"><h3>3. Companies under the Head Office</h3>
 <p class="hint">Staff of every company who are based at the Head Office. One per line as <b>CODE, Company name</b> - correct the names, add or remove lines. Each company gets its own payroll and salary sheet; you can add more later under Settings.</p>
 <textarea name="companies" rows="5" style="width:100%">HO, LAILA GROUP - Head Office
-LAILA, Laila
-BAND, Band
-LAUNDRY, Laundry Factory</textarea></div>
+BDL, BANDO DESIGN
+LAUNDRY, Laundry Factory
+LSL, LAILA STYLES</textarea>
+<p class="hint">Staff of all these companies punch on the same Head Office machines. Each person is matched by their card no. / machine user ID, so you only add the machines once.</p></div>
 <div class="panel"><h3>4. Weekly off day</h3>
 {% for n in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<label style="display:inline-block;margin-right:12px;color:inherit"><input type="checkbox" name="wd{{ loop.index0 }}" value="1" {{ 'checked' if loop.index0 == 4 }}> {{ n }}</label>{% endfor %}</div>
-<div class="panel"><h3>5. Office location for mobile punch (optional)</h3>
-<p class="hint">Google Maps: right-click the office gate and click the numbers to copy them. Leave blank to set later.</p>
+<div class="panel"><h3>5. Office location for mobile punch (optional - not needed)</h3>
+<p class="hint">Mobile punch works from anywhere: the phone's GPS location is saved with every punch automatically. Fill this only if you later want to see the distance from the office or allow punching only inside the office (Settings).</p>
 <div class="form-grid"><div><label>Latitude</label><input name="geofence_lat" placeholder="23.9999"></div>
 <div><label>Longitude</label><input name="geofence_lon" placeholder="90.3999"></div>
 <div><label>Allowed radius (m)</label><input name="geofence_radius_m" value="200"></div></div></div>

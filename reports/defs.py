@@ -133,7 +133,8 @@ PUNCH_COLS = [
     Col("direction", "In/Out", lambda r: r.p.direction),
     Col("source", "Source", lambda r: r.p.source),
     Col("note", "Note", lambda r: r.p.note, False),
-    Col("location", "GPS", lambda r: f"{r.p.latitude},{r.p.longitude}" if r.p.latitude else "", False),
+    Col("location", "Location", lambda r: f"{r.p.latitude:.5f}, {r.p.longitude:.5f}" if r.p.latitude else "",
+        link=lambda r: f"https://maps.google.com/?q={r.p.latitude},{r.p.longitude}" if r.p.latitude else ""),
 ]
 
 
