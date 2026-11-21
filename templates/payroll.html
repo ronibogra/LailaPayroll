@@ -21,8 +21,9 @@
 <div class="cards">
 <div class="metric"><span>Employees</span><strong>{{ lines|length }}</strong></div>
 <div class="metric"><span>Earned gross</span><strong>{{ '{:,.0f}'.format(totals.earned_gross or 0) }}</strong></div>
+<div class="metric"><span>Allowances (custom)</span><strong>{{ '{:,.0f}'.format(totals.custom_additions or 0) }}</strong></div>
 <div class="metric"><span>Overtime</span><strong>{{ '{:,.0f}'.format(totals.ot_amount or 0) }}</strong></div>
-<div class="metric r"><span>Absent + other deductions</span><strong>{{ '{:,.0f}'.format((totals.absent_deduction or 0) + (totals.total_deductions or 0)) }}</strong></div>
+<div class="metric r"><span>Absent + late + other deductions</span><strong>{{ '{:,.0f}'.format((totals.absent_deduction or 0) + (totals.late_deduction or 0) + (totals.total_deductions or 0)) }}</strong></div>
 <div class="metric g"><span>Net pay</span><strong>{{ '{:,.0f}'.format(totals.net_pay or 0) }}</strong></div>
 </div>
 <div class="panel"><p>{% for k, v in by_mode.items() %}<b>{{ k }}</b>: Tk {{ '{:,.0f}'.format(v) }} &nbsp; {% endfor %}</p>
@@ -34,6 +35,6 @@
 <input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><div><label>Type FINAL to lock {{ company.code }} for this month</label><input name="confirm" required></div><button class="red">Finalize</button></form>{% endif %}
 </div>
 {{ report_bar(r) }}
-{% call(l) report_table(r) %}<a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ l.employee_code }}" target="_blank">payslip</a>{% endcall %}
+{% call(l) report_table(r) %}<a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ l.employee_code }}" target="_blank">payslip</a>{% if 'payroll.edit' in user.perms and run.status != 'FINAL' %} · <a href="/payroll/line?company={{ cid }}&month={{ mval }}&emp={{ l.employee_id }}">edit</a>{% endif %}{% if l.edited %} <span class="tag DRAFT" title="edited by Admin">edited</span>{% endif %}{% endcall %}
 {% endif %}{% endif %}
 {% endblock %}

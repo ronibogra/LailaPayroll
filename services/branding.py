@@ -8,6 +8,7 @@ from config import DATA_DIR, settings
 BRAND_DIR = DATA_DIR / "branding"
 LOGO_FILE = BRAND_DIR / "logo.png"
 DEFAULT_LOGO = Path(__file__).resolve().parent.parent / "static" / "img" / "lg-logo.png"
+PRODUCT_LOGO = Path(__file__).resolve().parent.parent / "static" / "img" / "sphere-payroll-small.png"
 KEYS = ("ho_name", "ho_address", "ho_phone", "ho_email")
 
 # one shared dict, used as a template global and by the reports; refreshed after every change

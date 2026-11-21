@@ -1,0 +1,21 @@
+{% extends "base.html" %}{% block title %}Leave approvals{% endblock %}{% block heading %}Leave approvals{% endblock %}
+{% block content %}
+<p class="hint">Workflow: <b>{{ workflow }}</b>.{% if my_depts %} You are Department Head of: {{ my_depts|map(attribute='name')|join(', ') }}.{% elif 'leave.approve_dept' in user.perms and user.role != 'ADMIN' %} You are not set as Department Head of any department yet - an Admin sets this on the Leave policy page.{% endif %}</p>
+{% for lv in rows %}{% set e = lv.employee %}{% set t = types.get(lv.leave_type) %}
+<div class="req"><div class="row">
+<div><b><a href="/employees/{{ e.id }}">{{ e.full_name }}</a></b> · {{ e.employee_code }} · {{ e.company.code if e.company }}{{ ' · ' ~ e.department.name if e.department }}{{ ' · ' ~ e.designation if e.designation }}<br>
+<b>{{ t.name if t else lv.leave_type }}</b> {{ lv.start_date.strftime('%d/%m/%Y') }} → {{ lv.end_date.strftime('%d/%m/%Y') }} · <b>{{ lv.days or ((lv.end_date - lv.start_date).days + 1) }} day(s)</b> {{ '' if lv.paid else '(unpaid)' }}<br>
+<span class="tag {{ lv.status }}">{{ labels[lv.status] }}</span> <span class="tag {{ lv.source }}">{{ 'requested by employee' if lv.source == 'SELF' else 'by HR' }}</span>
+{% if lv.dept_approved_by %}<small>Dept. head approved: {{ lv.dept_approved_by }} {{ lv.dept_approved_at.strftime('%d/%m %H:%M') if lv.dept_approved_at }}</small>{% endif %}
+{% if lv.reason %}<p style="margin:6px 0">Reason: {{ lv.reason }}</p>{% endif %}
+{% if lv.document %}<a href="/leaves/{{ lv.id }}/document" target="_blank">📎 {{ t.doc_label if t else 'Document' }}</a>{% elif t and t.doc_rule != 'NEVER' %}<small>No document attached</small>{% endif %}
+<div class="bal" style="max-width:640px">{% for b in info[lv.id] if b.type.code == lv.leave_type or b.entitled %}<div><small>{{ b.type.name }}</small><b>{{ '∞' if b.left is none else b.left }}</b><small>left{% if b.pending %} (incl. {{ b.pending }} waiting){% endif %}</small></div>{% endfor %}</div>
+</div>
+<div style="min-width:260px">
+<form method="post" action="/leaves/{{ lv.id }}/decide"><input type="hidden" name="action" value="approve"><button style="width:100%">✓ Approve</button></form>
+<form method="post" action="/leaves/{{ lv.id }}/decide" style="margin-top:8px"><input type="hidden" name="action" value="reject"><input name="reason" placeholder="Reason for rejecting" required style="width:100%"><button class="btn sec" style="width:100%;margin-top:4px">✗ Reject</button></form>
+</div></div></div>
+{% else %}<div class="empty">No leave requests are waiting for you.</div>{% endfor %}
+{% if recent %}<div class="panel"><h3>Recently decided by you</h3><div class="table-wrap"><table><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Status</th><th>Note</th></tr>
+{% for lv in recent %}<tr><td>{{ lv.employee.employee_code }} {{ lv.employee.full_name }}</td><td>{{ lv.leave_type }}</td><td>{{ lv.start_date.strftime('%d/%m/%Y') }}</td><td>{{ lv.end_date.strftime('%d/%m/%Y') }}</td><td><span class="tag {{ lv.status }}">{{ labels[lv.status] }}</span></td><td>{{ lv.reject_reason or '' }}</td></tr>{% endfor %}</table></div></div>{% endif %}
+{% endblock %}

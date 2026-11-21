@@ -46,7 +46,9 @@ FILTERS: dict[str, Filter] = {f.key: f for f in [
         ("LEAVE_PAID", "Leave (paid)"), ("LEAVE_UNPAID", "Leave (unpaid)"), ("OFFDAY", "Off day"),
         ("OFFDAY_WORK", "Worked off day")]),
     Filter("late_only", "Only late", "check"), Filter("ot_only", "Only with overtime", "check"),
-    Filter("leave_type", "Leave type", choices=[(t, t.title()) for t in ("CASUAL", "SICK", "EARNED", "MATERNITY", "UNPAID")]),
+    Filter("leave_type", "Leave type", options="leave_types"),
+    Filter("leave_status", "Leave status", choices=[("APPROVED", "Approved"), ("PENDING", "Waiting for approval"),
+                                                    ("REJECTED", "Rejected")]),
     Filter("paid", "Paid / unpaid", choices=[("1", "Paid"), ("0", "Unpaid")]),
     Filter("run_status", "Payroll status", choices=[("FINAL", "Final"), ("DRAFT", "Draft")]),
     Filter("warnings", "Only with remarks / warnings", "check"),
@@ -71,6 +73,9 @@ def options(db, user: dict, source: str) -> list[tuple[str, str]]:
         return [("GENERAL", "GENERAL (default)")] + [(str(s.id), f"{s.code} - {s.name}")
                                                      for s in db.scalars(select(Shift).order_by(Shift.code))
                                                      if s.code != "GENERAL"]
+    if source == "leave_types":
+        from models import LeaveType
+        return [(t.code, t.name) for t in db.scalars(select(LeaveType).order_by(LeaveType.sort, LeaveType.code))]
     if source == "machines":
         return [(str(d.id), d.name) for d in db.scalars(select(Device).order_by(Device.name))]
     return []

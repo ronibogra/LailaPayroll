@@ -18,6 +18,7 @@ def _title(ws, title: str, ncols: int, company: str = "") -> None:
     ws.append([company or BRAND["name"]])
     ws.append([title])
     ws["A1"].font = Font(bold=True, size=14, color="E8332F")
+    ws.cell(1, ncols + 2, f"SPhere Payroll · {settings.developer_credit}").font = Font(size=8, color="888888")
     ws["A2"].font = Font(bold=True, size=11)
     for r in (1, 2):
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncols)

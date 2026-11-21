@@ -45,6 +45,8 @@ class ShiftRule:
     max_ot_minutes: int = 120         # compliance OT per day; the rest is "extra OT"
     duplicate_punch_minutes: int = 2  # punches closer than this are one punch
     offday_work_is_ot: bool = True    # all hours on weekend/holiday count as OT
+    late_count_from: str = "START"    # START: late minutes from shift start; GRACE_END: from start + grace
+    ot_allowed: bool = True           # False: no overtime at all (e.g. Head Office staff, officers)
 
     @property
     def overnight(self) -> bool:
@@ -94,6 +96,13 @@ def _minutes(delta: timedelta) -> int:
     return max(0, int(delta.total_seconds() // 60))
 
 
+def _late(in_time, work_date, shift) -> int:
+    late = _minutes(in_time - shift.start_dt(work_date))
+    if late <= shift.grace_minutes:
+        return 0
+    return late - shift.grace_minutes if shift.late_count_from == "GRACE_END" else late
+
+
 def _floor_block(minutes: int, block: int) -> int:
     return (minutes // block) * block if block > 0 else minutes
 
@@ -141,9 +150,7 @@ def evaluate_day(work_date: date, punches: list[datetime], shift: ShiftRule,
         # One punch: present but no out time, so no worked hours or OT until HR fixes it.
         res.status = MISSING_OUT if day_type == WORKDAY else OFFDAY_WORK
         if day_type == WORKDAY:
-            late = _minutes(res.in_time - shift.start_dt(work_date))
-            if late > shift.grace_minutes:
-                res.late_minutes = late
+            res.late_minutes = _late(res.in_time, work_date, shift)
         return res
 
     res.out_time = punches[-1]
@@ -152,8 +159,7 @@ def evaluate_day(work_date: date, punches: list[datetime], shift: ShiftRule,
     res.worked_minutes = max(0, worked)
 
     if day_type == WORKDAY:
-        late = _minutes(res.in_time - shift.start_dt(work_date))
-        res.late_minutes = late if late > shift.grace_minutes else 0
+        res.late_minutes = _late(res.in_time, work_date, shift)
         res.early_leave_minutes = _minutes(shift.end_dt(work_date) - res.out_time)
         raw_ot = _minutes(res.out_time - shift.end_dt(work_date))
         res.status = LATE if res.late_minutes else PRESENT
@@ -161,7 +167,7 @@ def evaluate_day(work_date: date, punches: list[datetime], shift: ShiftRule,
         raw_ot = res.worked_minutes if shift.offday_work_is_ot else 0
         res.status = OFFDAY_WORK
 
-    ot = _floor_block(raw_ot, shift.ot_round_minutes)
+    ot = _floor_block(raw_ot, shift.ot_round_minutes) if shift.ot_allowed else 0
     res.ot_minutes = min(ot, shift.max_ot_minutes)
     res.extra_ot_minutes = ot - res.ot_minutes
     return res

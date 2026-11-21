@@ -13,26 +13,49 @@
   <button style="width:100%">Log in</button></form>
   <p class="hint">Ask HR to enable mobile attendance and give you a PIN.</p></div>
 {% else %}
-  <div class="clock" id="clock">--:--</div><div class="date" id="date"></div>
+  {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
   <div class="panel" style="text-align:center"><b>{{ emp.full_name }}</b><div class="hint" style="margin:0">{{ emp.employee_code }} · {{ emp.company.name if emp.company }}{{ ' · ' ~ emp.department.name if emp.department }}</div></div>
+  <div class="m-tabs"><a href="/m" class="{{ 'on' if tab != 'leave' }}">Punch</a><a href="/m?tab=leave" class="{{ 'on' if tab == 'leave' }}">Leave</a></div>
+  {% if tab != 'leave' %}
+  <div class="clock" id="clock">--:--</div><div class="date" id="date"></div>
+  {% if emp.allow_mobile %}
   <button class="punch-btn" id="punch">PUNCH</button>
   <div class="m-msg" id="msg"></div>
+  <div class="readonly-box" id="loc">📍 Your location is taken automatically from the phone's GPS when you press PUNCH. It cannot be typed or changed.</div>
+  {% else %}<div class="alert info">Mobile punch is not enabled for you. You can still request leave.</div>{% endif %}
   <div class="panel"><h3>Today</h3><div id="list">
-  {% for p in punches %}<div>{{ p.punch_time.strftime('%I:%M %p') }} <span class="tag">{{ p.source }}</span></div>{% else %}<div class="hint" id="none">No punches yet today.</div>{% endfor %}
+  {% for p in punches %}<div>{{ p.punch_time.strftime('%I:%M %p') }} <span class="tag">{{ p.source }}</span>{% if p.latitude %} <small class="hint">📍 {{ '%.5f'|format(p.latitude) }}, {{ '%.5f'|format(p.longitude) }}</small>{% endif %}</div>{% else %}<div class="hint" id="none">No punches yet today.</div>{% endfor %}
   </div></div>
+  {% else %}
+  <div class="panel"><h3>My leave {{ today.year }}</h3>
+  <div class="bal">{% for b in bal %}<div><small>{{ b.type.name }}</small><b>{{ '∞' if b.left is none else b.left }}</b><small>{% if b.entitled %}of {{ b.entitled }} · {% endif %}used {{ b.used }}{% if b.pending %} · waiting {{ b.pending }}{% endif %}</small></div>{% endfor %}</div></div>
+  <div class="panel"><h3>Request leave</h3>
+  <form method="post" action="/m/leave" enctype="multipart/form-data">
+  <label>Type</label><select name="leave_type" id="lt" style="width:100%">{% for t in ltypes %}<option value="{{ t.code }}" data-rule="{{ t.doc_rule }}" data-after="{{ t.doc_after_days }}" data-label="{{ t.doc_label }}">{{ t.name }}</option>{% endfor %}</select>
+  <label style="margin-top:8px">From</label><input type="date" name="start_date" id="d1" required value="{{ today }}" style="width:100%">
+  <label style="margin-top:8px">To</label><input type="date" name="end_date" id="d2" required value="{{ today }}" style="width:100%">
+  <label style="margin-top:8px">Reason</label><input name="reason" required style="width:100%">
+  <label style="margin-top:8px" id="doclab">Document (photo or PDF)</label><input type="file" name="document" accept="image/*,.pdf" style="width:100%">
+  <p class="hint" id="dochint"></p>
+  <button style="width:100%">Send request</button></form></div>
+  <div class="panel"><h3>My requests</h3>
+  {% for lv in my_leave %}<div style="padding:6px 0;border-bottom:1px solid #eee">{{ lv.leave_type }} {{ lv.start_date.strftime('%d/%m') }}–{{ lv.end_date.strftime('%d/%m/%Y') }} <span class="tag {{ lv.status }}">{{ labels.get(lv.status, lv.status) }}</span>
+  {% if lv.reject_reason %}<div class="hint" style="margin:2px 0">{{ lv.reject_reason }}</div>{% endif %}
+  {% if lv.status in ('PENDING_DEPT', 'PENDING_FINAL') %}<form method="post" action="/m/leave/{{ lv.id }}/cancel" style="display:inline"><button class="link">cancel</button></form>{% endif %}</div>
+  {% else %}<p class="hint">No leave yet.</p>{% endfor %}</div>
+  {% endif %}
   <p style="text-align:center"><a href="/m/logout">Log out</a></p>
 {% endif %}
-<p class="hint" style="text-align:center">{{ settings.developer_credit }}</p>
+<div class="product-foot"><img src="/static/img/sphere-payroll-small.png" alt="SPhere Payroll"><p class="hint">{{ settings.developer_credit }}</p></div>
 </div>
 {% if emp %}
 <script>
 const $ = id => document.getElementById(id);
-function tick(){const n=new Date();$("clock").textContent=n.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-  $("date").textContent=n.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long',year:'numeric'});}
-tick(); setInterval(tick, 10000);
+if ($("clock")) { const tick=()=>{const n=new Date();$("clock").textContent=n.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  $("date").textContent=n.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long',year:'numeric'});}; tick(); setInterval(tick, 10000); }
 function say(text, ok){$("msg").textContent=text;$("msg").style.color=ok?"#0b5d31":"#8f1714";}
-$("punch").onclick = () => {
-  if (!navigator.geolocation) { say("This phone/browser cannot share location."); return; }
+if ($("punch")) $("punch").onclick = () => {
+  if (!navigator.geolocation) { say("This phone/browser cannot share location. Location is required for mobile punch."); return; }
   const btn = $("punch"); btn.disabled = true; say("Getting your location…", true);
   navigator.geolocation.getCurrentPosition(async pos => {
     const fd = new FormData();
@@ -44,15 +67,20 @@ $("punch").onclick = () => {
       say(j.message, j.ok);
       if (r.status === 401) { setTimeout(() => location.href = "/m", 1500); }
       if (j.ok) { const none=$("none"); if (none) none.remove();
-        const d=document.createElement("div"); d.innerHTML = j.time + ' <span class="tag">MOBILE</span>'; $("list").appendChild(d); }
+        $("loc").textContent = "📍 Recorded location: " + j.location;
+        const d=document.createElement("div"); d.textContent = j.time + " "; const t=document.createElement("span"); t.className="tag"; t.textContent="MOBILE"; d.appendChild(t); $("list").appendChild(d); }
     } catch (e) { say("No connection to the server. Are you on the office Wi-Fi?"); }
     btn.disabled = false;
   }, err => {
-    say(err.code === 1 ? "Location permission denied. Allow location for this site and try again."
+    say(err.code === 1 ? "Location permission denied. Location is required - allow location for this site and try again."
                        : "Could not get your location. Go outside / near a window and try again.");
     btn.disabled = false;
   }, {enableHighAccuracy: true, timeout: 20000, maximumAge: 0});
 };
+(function(){var lt=$("lt");if(!lt)return;var d1=$("d1"),d2=$("d2"),h=$("dochint");
+function upd(){var o=lt.options[lt.selectedIndex];if(!o)return;var r=o.dataset.rule,a=+o.dataset.after||0,n=Math.round((new Date(d2.value)-new Date(d1.value))/864e5)+1;
+var need=r==='ALWAYS'||(r==='OVER_DAYS'&&n>a);h.textContent=(n>0?n+' day(s). ':'')+(need?'Attach: '+o.dataset.label+' (required).':'');h.style.color=need?'#b3261e':'';}
+[lt,d1,d2].forEach(function(x){x.addEventListener('change',upd)});upd();})();
 </script>
 {% endif %}
 </body></html>

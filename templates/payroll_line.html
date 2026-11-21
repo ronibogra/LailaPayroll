@@ -1,0 +1,48 @@
+{% extends "base.html" %}{% block title %}Edit payroll · {{ e.employee_code }}{% endblock %}
+{% block heading %}Edit payroll · {{ e.full_name }} · {{ month_name[m] }} {{ y }}{% if run %} <span class="tag {{ run.status }}">{{ run.status }}</span>{% endif %}{% endblock %}
+{% block content %}
+<p><a href="/payroll?company={{ cid }}&month={{ mval }}">← Back to payroll</a> · <a href="/employees/{{ e.id }}">Profile</a>{% if run %} · <a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ e.employee_code }}" target="_blank">Payslip</a>{% endif %}</p>
+<div class="grid2">
+<div class="panel"><h3>Current calculation</h3>
+{% if line %}<div class="table-wrap"><table>
+<tr><td>Days in month / employed</td><td>{{ line.days_in_month }} / {{ line.employed_days }}</td></tr>
+<tr><td>Present / absent / paid leave / late</td><td>{{ line.present_days }} / {{ line.absent_days }} / {{ line.paid_leave_days }} / {{ line.late_days }}</td></tr>
+<tr><td>Gross</td><td>{{ '{:,.2f}'.format(line.gross) }}</td></tr>
+<tr><td>Earned gross</td><td>{{ '{:,.2f}'.format(line.earned_gross) }}</td></tr>
+<tr><td>Absent deduction</td><td>- {{ '{:,.2f}'.format(line.absent_deduction) }}</td></tr>
+<tr><td>Late deduction</td><td>- {{ '{:,.2f}'.format(line.late_deduction or 0) }}</td></tr>
+<tr><td>Overtime {{ line.ot_hours }} h × {{ line.ot_rate }}</td><td>{{ '{:,.2f}'.format(line.ot_amount) }}</td></tr>
+<tr><td>Attendance bonus</td><td>{{ '{:,.2f}'.format(line.attendance_bonus) }}</td></tr>
+{% for i in line_items %}<tr><td>{{ i.name }} <small>({{ 'one-off' if i.source == 'ONE-OFF' else i.source }})</small></td><td>{{ '+' if i.kind == 'ADD' else '-' }} {{ '{:,.2f}'.format(i.amount|float) }}</td></tr>{% endfor %}
+<tr><td>Other addition / advance / other ded. / tax / stamp</td><td>{{ line.other_addition }} / {{ line.advance }} / {{ line.other_deduction }} / {{ line.tax }} / {{ line.stamp }}</td></tr>
+<tr><td><b>Net pay</b></td><td><b>Tk {{ '{:,.2f}'.format(line.net_pay) }}</b></td></tr>
+</table></div>{% if line.warnings %}<p class="hint">{{ line.warnings }}</p>{% endif %}
+{% else %}<p class="hint">This employee has no line in the processed payroll yet. Save your changes and process the payroll.</p>{% endif %}
+<h4>Pay components that apply</h4>
+{% for c in comps %}<span class="tag {{ 'yes' if c.kind == 'ADD' else 'ABSENT' }}">{{ c.name }}: {{ c.value }} · {{ calcs[c.calc] }}</span> {% else %}<p class="hint">None. Add them on the <a href="/payroll/components">Pay components</a> page.</p>{% endfor %}
+</div>
+<div class="panel"><h3>Change this month</h3>
+{% if run and run.status == 'FINAL' %}<div class="alert err">This payroll is final (locked).</div>{% else %}
+<form method="post" action="/payroll/line"><input type="hidden" name="company_id" value="{{ cid }}"><input type="hidden" name="employee_id" value="{{ e.id }}"><input type="hidden" name="month" value="{{ mval }}">
+<p class="hint">Leave a box empty to keep the value from attendance. Saving re-calculates the company's payroll.</p>
+<div class="form-grid">
+<div><label>Present days</label><input name="present_days" value="{{ ov.present_days if ov.present_days is defined }}" placeholder="{{ line.present_days if line }}"></div>
+<div><label>Absent days (deducted)</label><input name="absent_days" value="{{ ov.absent_days if ov.absent_days is defined }}" placeholder="{{ line.absent_days if line }}"></div>
+<div><label>Late days</label><input name="late_days" value="{{ ov.late_days if ov.late_days is defined }}" placeholder="{{ line.late_days if line }}"></div>
+<div><label>OT hours</label><input name="ot_hours" value="{{ ov.ot_hours if ov.ot_hours is defined }}" placeholder="{{ line.ot_hours if line }}"></div>
+<div><label>Other addition (Tk)</label><input name="other_addition" value="{{ a.other_addition if a else 0 }}"></div>
+<div><label>Advance (Tk)</label><input name="advance" value="{{ a.advance if a else 0 }}"></div>
+<div><label>Other deduction (Tk)</label><input name="other_deduction" value="{{ a.other_deduction if a else 0 }}"></div>
+<div><label>Tax (Tk)</label><input name="tax" value="{{ a.tax if a else 0 }}"></div>
+</div>
+<h4 style="margin:12px 0 6px">One-off items this month</h4>
+<div class="table-wrap"><table><tr><th>Name (on payslip)</th><th>Type</th><th>Amount Tk</th></tr>
+{% for i in range(6) %}{% set it = items[i] if i < items|length else none %}<tr><td><input name="item_name" value="{{ it.name if it }}" placeholder="{{ 'e.g. Arrear salary' if i == 0 }}"></td>
+<td><select name="item_kind"><option value="ADD">Addition</option><option value="DED" {{ 'selected' if it and it.kind == 'DED' }}>Deduction</option></select></td>
+<td><input name="item_amount" value="{{ it.amount if it }}"></td></tr>{% endfor %}</table></div>
+<label style="margin-top:10px">Note</label><input name="note" value="{{ a.note if a and a.note }}" style="width:100%">
+<p><button>Save &amp; recalculate</button> <button class="sec" name="reset" value="1" onclick="return confirm('Remove all changes for this month?')">Remove all changes</button></p>
+{% if a and a.edited_by %}<p class="hint">Last changed by {{ a.edited_by }}.</p>{% endif %}
+</form>{% endif %}</div>
+</div>
+{% endblock %}

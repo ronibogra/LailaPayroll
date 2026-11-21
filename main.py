@@ -20,15 +20,17 @@ from integration.punch_import import read_punch_file, ImportProblem
 from integration.employee_import import import_employees, template_bytes
 from integration.zk_adms import options_response
 from models import (Company, Department, Employee, Shift, Device, AttendanceLog, DailyAttendance, Holiday, Leave,
-                    PayrollAdjustment, PayrollRun, PayrollLine, User, ErrorLog, Role)
+                    PayrollAdjustment, PayrollRun, PayrollLine, User, ErrorLog, Role, EmployeeDocument,
+                    LeaveType, SpecialHoliday, PayComponent, EmployeeComponent)
 from payroll.engine import split_gross
 from reports.excel import (salary_sheet, attendance_month, attendance_day, punches_sheet, first_last_sheet,
                            combined_salary)
 from reports.payslip import payslips_pdf
 from security import (hash_password, verify_password, create_token, decode_token, page_user,
                       LoginRequired, COOKIE)
-from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, parse as parse_perms
+from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, parse as parse_perms
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
+from services import leave as leave_svc, documents as docs, components as comp_svc
 from services.errors import log_error
 from services.photos import save_photo, photo_path, bulk_photos
 from integration import generic_import
@@ -75,6 +77,12 @@ def need(user: dict, *perms: str) -> None:
 def render(request: Request, name: str, user: dict | None, **ctx) -> HTMLResponse:
     ctx.update(request=request, user=user, msg=request.query_params.get("msg", ""),
                err=request.query_params.get("err", ""))
+    if user and {"leave.approve_dept", "leave.approve_final"} & user["perms"] and "pending_leave_count" not in ctx:
+        try:
+            with SessionLocal() as s:
+                ctx["pending_leave_count"] = len(leave_svc.pending_for(s, user, user.get("company_id")))
+        except Exception:  # noqa: BLE001 - the badge must never break a page
+            ctx["pending_leave_count"] = 0
     return templates.TemplateResponse(request, name, ctx)
 
 
@@ -177,7 +185,23 @@ def startup():
             r = db.scalar(select(Role).where(Role.name == rname))
             if r is None:
                 db.add(Role(name=rname, label=label, permissions=",".join(perms), builtin=True))
+        db.flush()
+        version = int(get_setting(db, "roles_version", default="1") or 1)
+        for ver, rname, add, remove in ROLE_MIGRATIONS:
+            if ver > version:
+                r = db.scalar(select(Role).where(Role.name == rname))
+                if r is not None:
+                    have = parse_perms(r.permissions)
+                    r.permissions = ",".join(p for p in PERMS if (p in have or p in add) and p not in remove)
+        set_setting(db, "roles_version", str(max([v for v, *_ in ROLE_MIGRATIONS] + [version])), commit=False)
         branding.refresh(db)
+        leave_svc.seed_types(db)
+        if get_setting(db, "ho_ot_default_done", default="") != "1":
+            ho = db.scalar(select(Company).where(Company.code == "HO"))
+            if ho and get_setting(db, "pay.ot_enabled", ho.id, default="") == "":
+                set_setting(db, "pay.ot_enabled", "false", ho.id, commit=False)
+            if ho:
+                set_setting(db, "ho_ot_default_done", "1", commit=False)
         if db.scalar(select(func.count(Shift.id))) == 0:
             db.add(Shift(code="GENERAL", name="General 09:00-18:00", start=time(9, 0), end=time(18, 0)))
             db.commit()
@@ -423,6 +447,11 @@ async def setup_save(request: Request, db: Session = Depends(get_db)):
         if str(f.get(k, "")).strip():
             float(str(f.get(k)))   # validate
             set_setting(db, k, str(f.get(k)).strip(), commit=False)
+    db.flush()
+    ho = db.scalar(select(Company).where(Company.code == "HO"))
+    if ho:      # overtime does not apply to Head Office / Central Office staff (can be changed in the pay policy)
+        set_setting(db, "pay.ot_enabled", "false", ho.id, commit=False)
+    set_setting(db, "ho_ot_default_done", "1", commit=False)
     set_setting(db, "setup_done", "1", commit=False)
     audit(db, username, "SETUP", f"fresh setup, companies: {', '.join(c for c, _ in companies)}", commit=False)
     db.commit()
@@ -629,7 +658,8 @@ def employee_template(user=Depends(page_user)):
 async def employees_import(file: UploadFile = File(...), user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "employees.edit")
     try:
-        result = import_employees(db, await file.read(), user.get("company_id"))
+        result = import_employees(db, await file.read(), user.get("company_id"),
+                                  allow_salary="salary.edit" in user["perms"])
     except Exception as exc:
         db.rollback()
         log_error("IMPORT", f"employee file {file.filename}: {str(exc)[:450]}", detail=str(exc),
@@ -640,8 +670,8 @@ async def employees_import(file: UploadFile = File(...), user=Depends(page_user)
 
 
 PROFILE_FIELDS = ("father_name", "mother_name", "spouse_name", "gender", "blood_group", "religion", "marital_status",
-                  "nid", "phone", "email", "emergency_contact", "present_address", "permanent_address", "education",
-                  "notes")
+                  "nid", "birth_certificate_no", "passport_no", "phone", "email", "emergency_contact", "present_address",
+                  "permanent_address", "education", "notes")
 
 
 def _emp_or_404(db: Session, user: dict, emp_id: int) -> Employee:
@@ -682,14 +712,19 @@ def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db:
     fl = first_last(db, today - timedelta(days=30), today, q=emp.card_no)
     fl = [r for r in fl if r["card_no"] == emp.card_no][::-1]
     leaves = db.scalars(select(Leave).where(Leave.employee_id == emp.id).order_by(Leave.start_date.desc()).limit(20)).all()
-    show_salary = user["role"] in ("ADMIN", "HR", "ACCOUNTS")
+    show_salary = "salary.view" in user["perms"]
+    documents = db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)
+                           .order_by(EmployeeDocument.doc_type, EmployeeDocument.uploaded_at)).all()
     pays = []
     if show_salary:
         pays = db.execute(select(PayrollLine, PayrollRun).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
                           .where(PayrollLine.employee_id == emp.id)
                           .order_by(PayrollRun.year.desc(), PayrollRun.month.desc()).limit(12)).all()
     return render(request, "employee_profile.html", user, e=emp, summary=summary, month_rows=month_rows, today=today,
-                  first_last=fl, leaves=leaves, pays=pays, show_salary=show_salary)
+                  first_last=fl, leaves=leaves, pays=pays, show_salary=show_salary, documents=documents,
+                  doc_types=docs.DOC_TYPES, bal=leave_svc.balances(db, emp), leave_labels=leave_svc.STATUS_LABEL,
+                  components=comp_svc.for_employee(emp, *comp_svc.load_all(db)) if show_salary else [],
+                  calcs=comp_svc.CALCS)
 
 
 @app.get("/employees/{emp_id}/edit", response_class=HTMLResponse)
@@ -709,6 +744,74 @@ def employee_photo(emp_id: int, user=Depends(page_user), db: Session = Depends(g
     if not path:
         return RedirectResponse("/static/img/no-photo.png", status_code=303)
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60"})
+
+
+@app.post("/employees/{emp_id}/documents")
+async def employee_docs_upload(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    f = await request.form()
+    doc_type = str(f.get("doc_type") or "OTHER")
+    title = str(f.get("title") or "").strip()
+    saved, errors = 0, []
+    for up in f.getlist("files"):
+        if not getattr(up, "filename", ""):
+            continue
+        try:
+            stored, size = docs.save_file(f"emp_{emp.id}", up.filename, await up.read())
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        db.add(EmployeeDocument(employee_id=emp.id, doc_type=doc_type if doc_type in docs.DOC_TYPES else "OTHER",
+                                title=title or up.filename, stored_name=stored, original_name=up.filename[:200],
+                                size=size, uploaded_by=user["username"]))
+        saved += 1
+    audit(db, user, "DOCUMENT_UPLOAD", f"{emp.employee_code}: {saved} file(s) {doc_type}", commit=False)
+    db.commit()
+    if errors:
+        log_error("IMPORT", f"documents for {emp.employee_code}: {'; '.join(errors)}", username=user["username"])
+    return go(f"/employees/{emp.id}#documents", msg=f"{saved} document(s) saved" if saved else "",
+              err="; ".join(errors) or ("" if saved else "Choose a file"))
+
+
+@app.get("/employees/{emp_id}/documents/{doc_id}")
+def employee_doc_get(emp_id: int, doc_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.view")
+    emp = _emp_or_404(db, user, emp_id)
+    d = db.get(EmployeeDocument, doc_id)
+    path = docs.path_of(d.stored_name) if d and d.employee_id == emp.id else None
+    if not path:
+        raise HTTPException(404, "Document not found")
+    return FileResponse(path, media_type=docs.media_type(d.stored_name), filename=d.original_name or path.name,
+                        content_disposition_type="inline")
+
+
+@app.post("/employees/{emp_id}/documents/{doc_id}/delete")
+def employee_doc_delete(emp_id: int, doc_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    d = db.get(EmployeeDocument, doc_id)
+    if d and d.employee_id == emp.id:
+        docs.delete_file(d.stored_name)
+        audit(db, user, "DOCUMENT_DELETE", f"{emp.employee_code}: {d.title}", commit=False)
+        db.delete(d)
+        db.commit()
+    return go(f"/employees/{emp.id}#documents", msg="Document removed")
+
+
+@app.get("/employees/{emp_id}/profile.pdf")
+def employee_profile_pdf(emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.view")
+    from reports.profile_pdf import profile_pdf
+    emp = _emp_or_404(db, user, emp_id)
+    documents = db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)
+                           .order_by(EmployeeDocument.uploaded_at)).all()
+    pdf = profile_pdf(emp, photo_path(emp.photo), leave_svc.balances(db, emp), documents,
+                      show_salary="salary.view" in user["perms"],
+                      components=comp_svc.for_employee(emp, *comp_svc.load_all(db)))
+    audit(db, user, "PROFILE_PDF", emp.employee_code)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="profile-{emp.employee_code}.pdf"'})
 
 
 @app.post("/employees/save")
@@ -735,15 +838,17 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
         if clash:
             raise ValueError(f"Employee code or card no. already used by {clash.employee_code} "
                              f"({clash.company.code if clash.company else ''})")
-        g = dec(val("gross"), "Gross")
-        if val("auto_split") and g > 0:
-            comp = split_gross(g, load_policy(db, company_id))
-            parts = [comp.basic, comp.house_rent, comp.medical, comp.transport, comp.food]
-        else:
-            parts = [dec(val("basic"), "Basic"), dec(val("house_rent"), "House rent"), dec(val("medical"), "Medical"),
-                     dec(val("transport"), "Transport"), dec(val("food"), "Food")]
-            if sum(parts) != g:
-                raise ValueError(f"Salary parts add up to {sum(parts)}, not gross {g}. Tick 'split automatically'.")
+        can_salary = "salary.edit" in user["perms"]
+        if can_salary:
+            g = dec(val("gross"), "Gross")
+            if val("auto_split") and g > 0:
+                comp = split_gross(g, load_policy(db, company_id))
+                parts = [comp.basic, comp.house_rent, comp.medical, comp.transport, comp.food]
+            else:
+                parts = [dec(val("basic"), "Basic"), dec(val("house_rent"), "House rent"), dec(val("medical"), "Medical"),
+                         dec(val("transport"), "Transport"), dec(val("food"), "Food")]
+                if sum(parts) != g:
+                    raise ValueError(f"Salary parts add up to {sum(parts)}, not gross {g}. Tick 'split automatically'.")
         pin = val("mobile_pin")
         if pin and (not pin.isdigit() or len(pin) < 4):
             raise ValueError("Mobile PIN must be at least 4 digits")
@@ -760,10 +865,18 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
         e.left_on = date.fromisoformat(val("left_on")) if val("left_on") else None
         e.date_of_birth = date.fromisoformat(val("date_of_birth")) if val("date_of_birth") else None
         e.employment_status = val("employment_status") or "ACTIVE"
-        e.gross = g
-        e.basic, e.house_rent, e.medical, e.transport, e.food = parts
-        e.payment_mode = val("payment_mode") or "CASH"
-        e.bank_name, e.account_no = val("bank_name") or None, val("account_no") or None
+        if can_salary:          # salary, pay mode and OT eligibility only for roles with "salary.edit"
+            e.gross = g
+            e.basic, e.house_rent, e.medical, e.transport, e.food = parts
+            e.payment_mode = val("payment_mode") or "CASH"
+            e.bank_name, e.account_no = val("bank_name") or None, val("account_no") or None
+            if f.get("ot_field"):       # the form has the OT tick box (other callers leave OT unchanged)
+                e.ot_eligible = bool(f.get("ot_eligible"))
+            elif not emp_id:
+                e.ot_eligible = True
+        elif not emp_id:
+            e.gross = e.basic = e.house_rent = e.medical = e.transport = e.food = Decimal(0)
+            e.payment_mode, e.ot_eligible = "CASH", True
         for k in PROFILE_FIELDS:
             setattr(e, k, val(k)[:300] or None if k != "notes" else val(k) or None)
         e.allow_mobile = bool(f.get("allow_mobile"))
@@ -1180,29 +1293,57 @@ def errors_server_log(user=Depends(page_user)):
 
 # ---------------------------------------------------------------- leave
 @app.get("/leaves", response_class=HTMLResponse)
-def leaves_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+def leaves_page(request: Request, emp: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "attendance.view")
     r = report_ctx(db, user, "leaves", dict(request.query_params))
-    return render(request, "leaves.html", user, r=r)
+    lookup, bal = None, []
+    if emp.strip():
+        lookup = db.scalar(select(Employee).where(or_(Employee.employee_code == emp.strip(), Employee.card_no == emp.strip())))
+        if lookup and (not user.get("company_id") or lookup.company_id == user["company_id"]):
+            bal = leave_svc.balances(db, lookup)
+        else:
+            lookup = None
+    waiting = len(leave_svc.pending_for(db, user, user.get("company_id")))
+    return render(request, "leaves.html", user, r=r, types=leave_svc.types(db), lookup=lookup, bal=bal, emp=emp,
+                  waiting=waiting, today=now_local().date())
+
+
+async def _leave_document(f, emp: Employee) -> str | None:
+    up = f.get("document")
+    if not getattr(up, "filename", ""):
+        return None
+    stored, _ = docs.save_file(f"emp_{emp.id}/leave", up.filename, await up.read())
+    return stored
 
 
 @app.post("/leaves")
-def leave_add(employee_code: str = Form(...), start_date: str = Form(...), end_date: str = Form(...),
-              leave_type: str = Form(...), note: str = Form(""), user=Depends(page_user),
-              db: Session = Depends(get_db)):
+async def leave_add(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    """HR grants leave (approved at once). Document rules of the leave type still apply."""
     need(user, "leave.manage")
-    emp = db.scalar(select(Employee).where(Employee.employee_code == employee_code.strip()))
+    f = await request.form()
+    code = str(f.get("employee_code") or "").strip()
+    emp = db.scalar(select(Employee).where(or_(Employee.employee_code == code, Employee.card_no == code)))
     if not emp:
-        return go("/leaves", err="Unknown employee code")
+        return go("/leaves", err=f"Unknown employee code {code}")
     check_company(user, emp.company_id)
-    s, e = date.fromisoformat(start_date), date.fromisoformat(end_date)
-    if e < s:
-        return go("/leaves", err="End date is before start date")
-    db.add(Leave(employee_id=emp.id, start_date=s, end_date=e, leave_type=leave_type,
-                 paid=leave_type != "UNPAID", note=note or None))
-    audit(db, user, "LEAVE_ADD", f"{emp.employee_code} {leave_type} {s}..{e}", commit=False)
+    lt = db.scalar(select(LeaveType).where(LeaveType.code == str(f.get("leave_type") or "")))
+    try:
+        s, e = date.fromisoformat(str(f.get("start_date"))), date.fromisoformat(str(f.get("end_date")))
+        has_doc = bool(getattr(f.get("document"), "filename", ""))
+        over = bool(f.get("over_balance")) and user["role"] == "ADMIN"
+        days = leave_svc.validate(db, emp, lt, s, e, has_doc, ignore_balance=over)
+        stored = await _leave_document(f, emp)
+    except ValueError as exc:
+        return go(f"/leaves?emp={emp.employee_code}", err=f"{emp.employee_code}: {exc}")
+    db.add(Leave(employee_id=emp.id, start_date=s, end_date=e, leave_type=lt.code, paid=lt.paid, days=days,
+                 status="APPROVED", source="HR", note=str(f.get("note") or "").strip()[:250] or None,
+                 reason=str(f.get("note") or "").strip()[:300] or None, document=stored,
+                 requested_by=user["username"], requested_at=now_local(), final_approved_by=user["username"],
+                 final_approved_at=now_local()))
+    audit(db, user, "LEAVE_ADD", f"{emp.employee_code} {lt.code} {s}..{e} ({days} days)", commit=False)
     db.commit()
-    return go("/leaves", msg="Leave saved - process the month again to apply it")
+    return go(f"/leaves?emp={emp.employee_code}", msg=f"Leave saved: {lt.name} for {emp.full_name} ({days} day(s)) - "
+                                                     "process the month again to apply it")
 
 
 @app.post("/leaves/{leave_id}/delete")
@@ -1214,9 +1355,134 @@ def leave_delete(leave_id: int, user=Depends(page_user), db: Session = Depends(g
         check_company(user, emp.company_id if emp else None)
         audit(db, user, "LEAVE_DELETE", f"emp {lv.employee_id} {lv.leave_type} {lv.start_date}..{lv.end_date}",
               commit=False)
+        if lv.document:
+            docs.delete_file(lv.document)
         db.delete(lv)
         db.commit()
     return go("/leaves", msg="Leave removed")
+
+
+@app.get("/leaves/{leave_id}/document")
+def leave_document(leave_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    lv = db.get(Leave, leave_id)
+    if not lv or not lv.document:
+        raise HTTPException(404, "No document")
+    emp = lv.employee
+    if not ({"attendance.view", "leave.approve_final"} & user["perms"] or leave_svc.can_act(user, lv, emp)):
+        raise HTTPException(403, "Not allowed")
+    check_company(user, emp.company_id)
+    path = docs.path_of(lv.document)
+    if not path:
+        raise HTTPException(404, "Document file is missing")
+    return FileResponse(path, media_type=docs.media_type(lv.document), filename=path.name,
+                        content_disposition_type="inline")
+
+
+@app.get("/leaves/approvals", response_class=HTMLResponse)
+def leave_approvals(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    if not {"leave.approve_dept", "leave.approve_final"} & user["perms"] and user["role"] != "ADMIN":
+        raise HTTPException(403, "Only Department Heads and final approvers see leave requests")
+    rows = leave_svc.pending_for(db, user, user.get("company_id"))
+    recent = db.scalars(select(Leave).where(Leave.source == "SELF", Leave.status.in_(("APPROVED", "REJECTED")),
+                                            or_(Leave.dept_approved_by == user["username"],
+                                                Leave.final_approved_by == user["username"],
+                                                Leave.rejected_by == user["username"]))
+                        .order_by(Leave.id.desc()).limit(30)).all()
+    info = {lv.id: leave_svc.balances(db, lv.employee) for lv in rows}
+    my_depts = db.scalars(select(Department).where(Department.head_username == user["username"])).all()
+    return render(request, "leave_approvals.html", user, rows=rows, info=info, recent=recent, my_depts=my_depts,
+                  labels=leave_svc.STATUS_LABEL, workflow=leave_svc.WORKFLOWS[leave_svc.workflow(db)],
+                  types={t.code: t for t in leave_svc.types(db, active_only=False)})
+
+
+@app.post("/leaves/{leave_id}/decide")
+def leave_decide(leave_id: int, action: str = Form(...), reason: str = Form(""), user=Depends(page_user),
+                 db: Session = Depends(get_db)):
+    lv = db.get(Leave, leave_id)
+    if not lv:
+        return go("/leaves/approvals", err="Leave request not found")
+    emp = lv.employee
+    if not leave_svc.can_act(user, lv, emp):
+        return go("/leaves/approvals", err="You cannot decide this request (already decided or not your department)")
+    if user.get("company_id"):
+        check_company(user, emp.company_id)
+    if action == "approve":
+        lt = db.scalar(select(LeaveType).where(LeaveType.code == lv.leave_type))
+        try:      # balance may have changed since the request was made
+            leave_svc.validate(db, emp, lt, lv.start_date, lv.end_date, True, exclude_id=lv.id,
+                               ignore_balance=user["role"] == "ADMIN")
+        except ValueError as exc:
+            return go("/leaves/approvals", err=f"{emp.employee_code}: {exc}")
+        st = leave_svc.approve(db, lv, user)
+        msg = f"{emp.full_name}: " + ("approved" if st == "APPROVED" else "approved - sent for final approval")
+    elif action == "reject":
+        if not reason.strip():
+            return go("/leaves/approvals", err="Write a reason for rejecting")
+        leave_svc.reject(lv, user, reason)
+        msg = f"{emp.full_name}: rejected"
+    else:
+        return go("/leaves/approvals", err="Unknown action")
+    audit(db, user, "LEAVE_" + action.upper(), f"{emp.employee_code} {lv.leave_type} {lv.start_date}..{lv.end_date} "
+                                                f"-> {lv.status}", commit=False)
+    db.commit()
+    return go("/leaves/approvals", msg=msg)
+
+
+# ---------------------------------------------------------------- leave policy (Admin)
+@app.get("/leave-policy", response_class=HTMLResponse)
+def leave_policy_page(request: Request, edit: int | None = None, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "leave.policy")
+    users = db.scalars(select(User).where(User.active == True).order_by(User.username)).all()  # noqa: E712
+    return render(request, "leave_policy.html", user, types=leave_svc.types(db, active_only=False),
+                  e=db.get(LeaveType, edit) if edit else None, workflows=leave_svc.WORKFLOWS,
+                  workflow=leave_svc.workflow(db), depts=db.scalars(select(Department).order_by(Department.name)).all(),
+                  users=users)
+
+
+@app.post("/leave-policy/type")
+def leave_type_save(type_id: str = Form(""), code: str = Form(...), name: str = Form(...), days_per_year: int = Form(0),
+                    paid: str = Form(""), doc_rule: str = Form("NEVER"), doc_after_days: int = Form(0),
+                    doc_label: str = Form(""), gender: str = Form(""), self_request: str = Form(""),
+                    active: str = Form(""), sort: int = Form(0), user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "leave.policy")
+    code = "".join(ch for ch in code.strip().upper() if ch.isalnum() or ch == "_")[:20]
+    if not code or not name.strip():
+        return go("/leave-policy", err="Code and name are needed")
+    if doc_rule not in ("NEVER", "ALWAYS", "OVER_DAYS") or days_per_year < 0 or doc_after_days < 0:
+        return go("/leave-policy", err="Check the values")
+    t = db.get(LeaveType, int(type_id)) if type_id else LeaveType()
+    if db.scalar(select(LeaveType).where(LeaveType.code == code, LeaveType.id != (t.id or 0))):
+        return go("/leave-policy", err=f"Leave type {code} already exists")
+    if t.id and t.code != code and db.scalar(select(Leave.id).where(Leave.leave_type == t.code).limit(1)):
+        return go("/leave-policy", err=f"{t.code} is already used by leave records - its code cannot change")
+    t.code, t.name, t.days_per_year, t.paid = code, name.strip()[:80], days_per_year, bool(paid)
+    t.doc_rule, t.doc_after_days = doc_rule, doc_after_days
+    t.doc_label = doc_label.strip()[:80] or "Document"
+    t.gender = gender if gender in ("Male", "Female") else None
+    t.self_request, t.active, t.sort = bool(self_request), bool(active), sort
+    if not type_id:
+        db.add(t)
+    audit(db, user, "LEAVE_TYPE_SAVE", f"{code}: {days_per_year} days/yr, doc {doc_rule} {doc_after_days}, "
+                                       f"paid={bool(paid)}", commit=False)
+    db.commit()
+    return go("/leave-policy", msg=f"Leave type {code} saved")
+
+
+@app.post("/leave-policy/workflow")
+async def leave_workflow_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "leave.policy")
+    f = await request.form()
+    w = str(f.get("workflow") or "")
+    if w not in leave_svc.WORKFLOWS:
+        return go("/leave-policy", err="Choose an approval workflow")
+    set_setting(db, "leave_approval", w, commit=False)
+    names = {u.username for u in db.scalars(select(User))}
+    for d in db.scalars(select(Department)):
+        v = str(f.get(f"head_{d.id}") or "").strip()
+        d.head_username = v if v in names else None
+    audit(db, user, "LEAVE_WORKFLOW", w, commit=False)
+    db.commit()
+    return go("/leave-policy", msg="Approval workflow and Department Heads saved")
 
 
 # ---------------------------------------------------------------- shifts
@@ -1233,7 +1499,7 @@ def shift_save(shift_id: str = Form(""), code: str = Form(...), name: str = Form
                end: str = Form(...), grace_minutes: int = Form(10), break_minutes: int = Form(60),
                break_after_minutes: int = Form(300), early_window_minutes: int = Form(180),
                ot_round_minutes: int = Form(30), max_ot_minutes: int = Form(120), offday_work_is_ot: str = Form(""),
-               user=Depends(page_user), db: Session = Depends(get_db)):
+               late_count_from: str = Form("START"), user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "shifts.manage")
     code = code.strip().upper()
     s = db.get(Shift, int(shift_id)) if shift_id else Shift()
@@ -1246,6 +1512,7 @@ def shift_save(shift_id: str = Form(""), code: str = Form(...), name: str = Form
     s.grace_minutes, s.break_minutes, s.break_after_minutes = grace_minutes, break_minutes, break_after_minutes
     s.early_window_minutes, s.ot_round_minutes, s.max_ot_minutes = early_window_minutes, ot_round_minutes, max_ot_minutes
     s.offday_work_is_ot = bool(offday_work_is_ot)
+    s.late_count_from = "GRACE_END" if late_count_from == "GRACE_END" else "START"
     if not shift_id:
         db.add(s)
     audit(db, user, "SHIFT_SAVE", f"{code} {start}-{end}", commit=False)
@@ -1299,8 +1566,9 @@ def payroll_page(request: Request, month: str = "", company: str = "", user=Depe
     runs = {r.company_id: r for r in db.scalars(select(PayrollRun).where(PayrollRun.year == y, PayrollRun.month == m))}
     run = runs.get(cid)
     lines = sorted(run.lines, key=lambda l: (l.department, l.employee_code)) if run else []
-    totals = {k: sum(getattr(l, k) for l in lines) for k in
-              ("earned_gross", "ot_amount", "absent_deduction", "total_deductions", "net_pay")} if lines else {}
+    totals = {k: sum((getattr(l, k) or 0) for l in lines) for k in
+              ("earned_gross", "ot_amount", "absent_deduction", "total_deductions", "net_pay", "custom_additions",
+               "late_deduction")} if lines else {}
     by_mode: dict[str, Decimal] = {}
     for l in lines:
         by_mode[l.payment_mode] = by_mode.get(l.payment_mode, 0) + l.net_pay
@@ -1385,6 +1653,174 @@ def payroll_combined(month: str = "", user=Depends(page_user), db: Session = Dep
                     headers={"Content-Disposition": f"attachment; filename=HO-salary-all-companies-{y}-{m:02d}.xlsx"})
 
 
+# ---------------------------------------------------------------- pay components (Admin)
+@app.get("/payroll/components", response_class=HTMLResponse)
+def components_page(request: Request, edit: int | None = None, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "payroll.edit")
+    comps = db.scalars(select(PayComponent).order_by(PayComponent.sort, PayComponent.id)).all()
+    assigned = db.execute(select(EmployeeComponent, Employee).join(Employee, Employee.id == EmployeeComponent.employee_id)
+                          .order_by(EmployeeComponent.component_id, Employee.employee_code)).all()
+    by_comp: dict[int, list] = {}
+    for ec, e in assigned:
+        by_comp.setdefault(ec.component_id, []).append((ec, e))
+    return render(request, "pay_components.html", user, comps=comps, by_comp=by_comp, calcs=comp_svc.CALCS,
+                  e=db.get(PayComponent, edit) if edit else None, companies=visible_companies(db, user),
+                  depts=db.scalars(select(Department).order_by(Department.name)).all(),
+                  company_names={c.id: c.code for c in db.scalars(select(Company))},
+                  dept_names={d.id: d.name for d in db.scalars(select(Department))})
+
+
+@app.post("/payroll/components/save")
+def component_save(comp_id: str = Form(""), code: str = Form(...), name: str = Form(...), kind: str = Form("ADD"),
+                   calc: str = Form("FIXED"), value: str = Form("0"), prorate: str = Form(""), company_id: int = Form(0),
+                   department_id: int = Form(0), assigned_only: str = Form(""), active: str = Form(""),
+                   sort: int = Form(0), user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "payroll.edit")
+    code = "".join(ch for ch in code.strip().upper() if ch.isalnum() or ch == "_")[:20]
+    if not code or not name.strip() or kind not in ("ADD", "DED") or calc not in comp_svc.CALCS:
+        return go("/payroll/components", err="Code, name, type and calculation are needed")
+    try:
+        v = dec(value, "Value")
+    except ValueError as exc:
+        return go("/payroll/components", err=str(exc))
+    c = db.get(PayComponent, int(comp_id)) if comp_id else PayComponent()
+    if db.scalar(select(PayComponent).where(PayComponent.code == code, PayComponent.id != (c.id or 0))):
+        return go("/payroll/components", err=f"Component {code} already exists")
+    c.code, c.name, c.kind, c.calc, c.value = code, name.strip()[:80], kind, calc, v
+    c.prorate, c.assigned_only, c.active, c.sort = bool(prorate), bool(assigned_only), bool(active), sort
+    c.company_id, c.department_id = company_id or 0, department_id or 0
+    if not comp_id:
+        db.add(c)
+    audit(db, user, "PAY_COMPONENT_SAVE", f"{code} {kind} {calc} {v} company={company_id} dept={department_id} "
+                                          f"assigned_only={bool(assigned_only)} active={bool(active)}", commit=False)
+    db.commit()
+    return go("/payroll/components", msg=f"{name} saved - process the payroll again to apply it")
+
+
+@app.post("/payroll/components/assign")
+def component_assign(component_id: int = Form(...), employee_codes: str = Form(""), value: str = Form(""),
+                     mode: str = Form("value"), user=Depends(page_user), db: Session = Depends(get_db)):
+    """Give listed employees their own value, include them (assigned-only components) or switch it off for them."""
+    need(user, "payroll.edit")
+    c = db.get(PayComponent, component_id)
+    codes = [x.strip() for x in employee_codes.replace(",", "\n").splitlines() if x.strip()]
+    if not c or not codes:
+        return go("/payroll/components", err="Choose a component and give employee codes")
+    try:
+        v = dec(value, "Value") if value.strip() else None
+    except ValueError as exc:
+        return go("/payroll/components", err=str(exc))
+    stmt = select(Employee).where(or_(Employee.employee_code.in_(codes), Employee.card_no.in_(codes)))
+    if user.get("company_id"):
+        stmt = stmt.where(Employee.company_id == user["company_id"])
+    emps = db.scalars(stmt).all()
+    found = {e.employee_code for e in emps} | {e.card_no for e in emps}
+    missing = [x for x in codes if x not in found]
+    for e in emps:
+        ec = db.scalar(select(EmployeeComponent).where(EmployeeComponent.employee_id == e.id,
+                                                       EmployeeComponent.component_id == c.id))
+        if mode == "remove":
+            if ec:
+                db.delete(ec)
+            continue
+        if not ec:
+            ec = EmployeeComponent(employee_id=e.id, component_id=c.id)
+            db.add(ec)
+        ec.excluded = mode == "exclude"
+        ec.value = None if mode == "exclude" else v
+    audit(db, user, "PAY_COMPONENT_ASSIGN", f"{c.code} {mode} {v} -> {len(emps)} employees", commit=False)
+    db.commit()
+    return go("/payroll/components", msg=f"{c.name}: {len(emps)} employee(s) updated",
+              err=("Not found: " + ", ".join(missing[:20])) if missing else "")
+
+
+# ---------------------------------------------------------------- edit one payroll line (Admin)
+def _ym(month: str) -> tuple[int, int]:
+    return parse_month(month)
+
+
+@app.get("/payroll/line", response_class=HTMLResponse)
+def payroll_line_page(request: Request, company: int, month: str, emp: int, user=Depends(page_user),
+                      db: Session = Depends(get_db)):
+    need(user, "payroll.edit")
+    check_company(user, company)
+    y, m = _ym(month)
+    e = _emp_or_404(db, user, emp)
+    run = get_run(db, company, y, m)
+    line = next((l for l in run.lines if l.employee_id == e.id), None) if run else None
+    a = db.scalar(select(PayrollAdjustment).where(PayrollAdjustment.employee_id == e.id, PayrollAdjustment.year == y,
+                                                  PayrollAdjustment.month == m))
+    items = json.loads(a.items_json or "[]") if a else []
+    ov = json.loads(a.overrides_json or "{}") if a else {}
+    line_items = json.loads(line.items_json or "[]") if line and line.items_json else []
+    return render(request, "payroll_line.html", user, e=e, run=run, line=line, a=a, items=items, ov=ov,
+                  line_items=line_items, y=y, m=m, mval=f"{y:04d}-{m:02d}", cid=company,
+                  comps=comp_svc.for_employee(e, *comp_svc.load_all(db)), calcs=comp_svc.CALCS)
+
+
+@app.post("/payroll/line")
+async def payroll_line_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "payroll.edit")
+    f = await request.form()
+    cid, emp_id = int(f.get("company_id")), int(f.get("employee_id"))
+    check_company(user, cid)
+    y, m = _ym(str(f.get("month")))
+    e = _emp_or_404(db, user, emp_id)
+    back = f"/payroll/line?company={cid}&month={y:04d}-{m:02d}&emp={e.id}"
+    run = get_run(db, cid, y, m)
+    if run and run.status == "FINAL":
+        return go(back, err="This payroll is final (locked) - it cannot be edited")
+    try:
+        a = db.scalar(select(PayrollAdjustment).where(PayrollAdjustment.employee_id == e.id,
+                                                      PayrollAdjustment.year == y, PayrollAdjustment.month == m))
+        if not a:
+            a = PayrollAdjustment(employee_id=e.id, year=y, month=m)
+            db.add(a)
+        if f.get("reset"):
+            a.overrides_json = a.items_json = None
+            a.other_addition = a.advance = a.other_deduction = a.tax = Decimal(0)
+            a.note = None
+        else:
+            for k in ("other_addition", "advance", "other_deduction", "tax"):
+                setattr(a, k, dec(str(f.get(k) or "0"), k.replace("_", " ")))
+            a.note = str(f.get("note") or "").strip()[:250] or None
+            ov = {}
+            for k in ("present_days", "absent_days", "late_days", "ot_hours"):
+                v = str(f.get(k) or "").strip()
+                if v:
+                    num = dec(v, k.replace("_", " "))
+                    if num < 0 or num > (31 if k != "ot_hours" else 400):
+                        raise ValueError(f"{k.replace('_', ' ')} {v} is out of range")
+                    ov[k] = str(num) if k == "ot_hours" else int(num)
+            if ov:
+                ov["by"] = user["username"]
+            a.overrides_json = json.dumps(ov) if ov else None
+            items = []
+            for name, kind, amt in zip(f.getlist("item_name"), f.getlist("item_kind"), f.getlist("item_amount")):
+                name, amt = str(name).strip(), str(amt).strip()
+                if not name and not amt:
+                    continue
+                if not name or not amt:
+                    raise ValueError("each one-off item needs a name and an amount")
+                items.append({"name": name[:60], "kind": "DED" if kind == "DED" else "ADD",
+                              "amount": str(dec(amt, name))})
+            a.items_json = json.dumps(items) if items else None
+        a.edited_by = user["username"]
+        audit(db, user, "PAYROLL_EDIT", f"{e.employee_code} {y}-{m:02d}: overrides={a.overrides_json} "
+                                        f"items={a.items_json} add={a.other_addition} adv={a.advance} "
+                                        f"ded={a.other_deduction} tax={a.tax}", commit=False)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return go(back, err=str(exc))
+    if run:      # recalculate this company's payroll so the change shows at once
+        try:
+            run_payroll(db, cid, y, m, user)
+        except (PayrollLocked, ValueError) as exc:
+            return go(back, err=f"Saved, but re-processing failed: {exc}")
+    return go(back, msg="Saved" + (" and payroll recalculated" if run else " - process the payroll to apply it"))
+
+
 @app.post("/payroll/adjustments")
 async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...), file: UploadFile = File(...),
                               user=Depends(page_user), db: Session = Depends(get_db)):
@@ -1452,7 +1888,13 @@ def settings_page(request: Request, policy_company: str = "", user=Depends(page_
     year = now_local().year
     del year
     lat, lon, radius = geofence(db)
-    return render(request, "settings.html", user, policy=policy_rows(db, pc), policy_company=pc,
+    sp = db.scalars(select(SpecialHoliday).where(SpecialHoliday.day >= date(now_local().year - 1, 1, 1))
+                    .order_by(SpecialHoliday.day.desc())).all()
+    if user.get("company_id"):
+        sp = [h for h in sp if h.scope != "COMPANY" or h.scope_value == str(user["company_id"])]
+    return render(request, "settings.html", user, policy=policy_rows(db, pc), policy_company=pc, special=sp,
+                  depts=db.scalars(select(Department).order_by(Department.name)).all(),
+                  geo_mode=get_setting(db, "geofence_mode", default="STRICT") or "STRICT",
                   r=report_ctx(db, user, "holidays", {}), weekend=sorted(weekend_set(db)), lat=lat, lon=lon, radius=radius,
                   companies=visible_companies(db, user),
                   all_companies=db.scalars(select(Company).order_by(Company.code)).all(),
@@ -1490,7 +1932,9 @@ async def settings_general(request: Request, user=Depends(page_user), db: Sessio
     set_setting(db, "geofence_lat", str(lat), commit=False)
     set_setting(db, "geofence_lon", str(lon), commit=False)
     set_setting(db, "geofence_radius_m", str(radius), commit=False)
-    audit(db, user, "SETTINGS_SAVE", f"weekend={weekend} office={lat},{lon} r={radius}", commit=False)
+    mode = "RECORD" if f.get("geofence_mode") == "RECORD" else "STRICT"
+    set_setting(db, "geofence_mode", mode, commit=False)
+    audit(db, user, "SETTINGS_SAVE", f"weekend={weekend} office={lat},{lon} r={radius} outside={mode}", commit=False)
     db.commit()
     return go("/settings", msg="Saved - process the month again if the weekly off day changed")
 
@@ -1521,6 +1965,63 @@ def holiday_add(day: str = Form(...), name: str = Form(...), user=Depends(page_u
     audit(db, user, "HOLIDAY_ADD", f"{d} {name}", commit=False)
     db.commit()
     return go("/settings", msg="Holiday added")
+
+
+@app.post("/settings/special-holidays")
+def special_holiday_add(day: str = Form(...), day_to: str = Form(""), name: str = Form(...), scope: str = Form(...),
+                        company_id: str = Form(""), department_id: str = Form(""), employee_codes: str = Form(""),
+                        user=Depends(page_user), db: Session = Depends(get_db)):
+    """Holiday for only some staff (one company, one department or listed employees), one day or a range."""
+    need(user, "holidays.manage")
+    try:
+        d1 = date.fromisoformat(day)
+        d2 = date.fromisoformat(day_to) if day_to else d1
+    except ValueError:
+        return go("/settings#special", err="Give a valid date")
+    if d2 < d1 or (d2 - d1).days > 60:
+        return go("/settings#special", err="Date range must be 1-61 days")
+    if scope == "COMPANY":
+        cid = company_filter(user, company_id)
+        if not cid:
+            return go("/settings#special", err="Choose a company")
+        value = str(cid)
+    elif scope == "DEPARTMENT":
+        if not department_id.isdigit():
+            return go("/settings#special", err="Choose a department")
+        value = department_id
+    elif scope == "EMPLOYEES":
+        codes = [c.strip() for c in employee_codes.replace("\n", ",").split(",") if c.strip()]
+        found = {e.employee_code for e in db.scalars(select(Employee).where(
+            or_(Employee.employee_code.in_(codes), Employee.card_no.in_(codes))))} if codes else set()
+        if not codes:
+            return go("/settings#special", err="Give employee codes")
+        cards = {e.card_no for e in db.scalars(select(Employee).where(Employee.card_no.in_(codes)))}
+        missing = [c for c in codes if c not in found and c not in cards]
+        if missing:
+            return go("/settings#special", err="Unknown employee codes: " + ", ".join(missing[:20]))
+        value = ",".join(codes)
+    else:
+        return go("/settings#special", err="Choose who the holiday is for")
+    d = d1
+    while d <= d2:
+        db.add(SpecialHoliday(day=d, name=name.strip()[:120], scope=scope, scope_value=value))
+        d += timedelta(days=1)
+    audit(db, user, "SPECIAL_HOLIDAY_ADD", f"{d1}..{d2} {name} {scope}={value[:200]}", commit=False)
+    db.commit()
+    return go("/settings#special", msg="Holiday saved - process the month again to apply it")
+
+
+@app.post("/settings/special-holidays/{hid}/delete")
+def special_holiday_delete(hid: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "holidays.manage")
+    h = db.get(SpecialHoliday, hid)
+    if h:
+        if user.get("company_id") and h.scope == "COMPANY" and h.scope_value != str(user["company_id"]):
+            raise HTTPException(403, "That belongs to another company")
+        audit(db, user, "SPECIAL_HOLIDAY_DELETE", f"{h.day} {h.name} {h.scope}", commit=False)
+        db.delete(h)
+        db.commit()
+    return go("/settings#special", msg="Holiday removed")
 
 
 @app.post("/settings/holidays/{hid}/delete")
@@ -1763,7 +2264,14 @@ def mobile_page(request: Request, db: Session = Depends(get_db)):
         host = request.url.hostname or maintenance.lan_ips()[0]
         return RedirectResponse(f"https://{host}:{settings.https_port}/m", status_code=303)
     emp = mobile_employee(request, db)
-    return render(request, "mobile.html", None, emp=emp, punches=mobile.today_punches(db, emp) if emp else [])
+    ctx = {}
+    if emp:
+        ctx = dict(bal=leave_svc.balances(db, emp), ltypes=[t for t in leave_svc.types(db) if t.self_request and
+                                                             (not t.gender or t.gender == emp.gender)],
+                   my_leave=db.scalars(select(Leave).where(Leave.employee_id == emp.id)
+                                       .order_by(Leave.start_date.desc()).limit(12)).all(),
+                   labels=leave_svc.STATUS_LABEL, today=now_local().date(), tab=request.query_params.get("tab", ""))
+    return render(request, "mobile.html", None, emp=emp, punches=mobile.today_punches(db, emp) if emp else [], **ctx)
 
 
 @app.post("/m/login")
@@ -1792,7 +2300,53 @@ def mobile_punch(request: Request, latitude: float = Form(...), longitude: float
     if not emp:
         return JSONResponse({"ok": False, "message": "Please log in again"}, status_code=401)
     try:
-        log = mobile.punch(db, emp, latitude, longitude, accuracy)
+        log = mobile.punch(db, emp, latitude, longitude, accuracy, client_ip=request.client.host if request.client else None)
     except mobile.MobileError as exc:
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-    return {"ok": True, "message": f"Punch recorded at {log.punch_time:%I:%M %p}", "time": f"{log.punch_time:%H:%M}"}
+    return {"ok": True, "message": f"Punch recorded at {log.punch_time:%I:%M %p}", "time": f"{log.punch_time:%H:%M}",
+            "location": f"{log.latitude:.6f}, {log.longitude:.6f} (±{log.accuracy_m} m) · {log.note}"}
+
+
+@app.post("/m/leave")
+async def mobile_leave(request: Request, db: Session = Depends(get_db)):
+    """Employee requests leave from the phone; it goes to the approval workflow."""
+    emp = mobile_employee(request, db)
+    if not emp or emp.employment_status != "ACTIVE":
+        return go("/m", err="Please log in again")
+    f = await request.form()
+    lt = db.scalar(select(LeaveType).where(LeaveType.code == str(f.get("leave_type") or "")))
+    try:
+        if not lt or not lt.self_request:
+            raise ValueError("this leave type cannot be requested here - ask HR")
+        s, e = date.fromisoformat(str(f.get("start_date"))), date.fromisoformat(str(f.get("end_date")))
+        if e < now_local().date() - timedelta(days=30):
+            raise ValueError("leave more than 30 days in the past must be entered by HR")
+        reason = str(f.get("reason") or "").strip()
+        if not reason:
+            raise ValueError("write a reason")
+        has_doc = bool(getattr(f.get("document"), "filename", ""))
+        days = leave_svc.validate(db, emp, lt, s, e, has_doc)
+        stored = await _leave_document(f, emp)
+    except ValueError as exc:
+        return go("/m?tab=leave", err=str(exc)[:300])
+    status = leave_svc.first_status(db, emp)
+    db.add(Leave(employee_id=emp.id, start_date=s, end_date=e, leave_type=lt.code, paid=lt.paid, days=days,
+                 status=status, source="SELF", reason=reason[:300], note=reason[:250], document=stored,
+                 requested_by=emp.employee_code, requested_at=now_local()))
+    audit(db, f"mobile:{emp.employee_code}", "LEAVE_REQUEST", f"{lt.code} {s}..{e} ({days} days) -> {status}",
+          commit=False)
+    db.commit()
+    return go("/m?tab=leave", msg=f"Leave request sent - {leave_svc.STATUS_LABEL[status].lower()}")
+
+
+@app.post("/m/leave/{leave_id}/cancel")
+def mobile_leave_cancel(request: Request, leave_id: int, db: Session = Depends(get_db)):
+    emp = mobile_employee(request, db)
+    lv = db.get(Leave, leave_id)
+    if not emp or not lv or lv.employee_id != emp.id or lv.status not in leave_svc.OPEN:
+        return go("/m?tab=leave", err="This request cannot be cancelled")
+    lv.status = "CANCELLED"
+    audit(db, f"mobile:{emp.employee_code}", "LEAVE_CANCEL", f"{lv.leave_type} {lv.start_date}..{lv.end_date}",
+          commit=False)
+    db.commit()
+    return go("/m?tab=leave", msg="Request cancelled")

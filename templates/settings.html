@@ -25,6 +25,22 @@
 <div style="margin-top:12px">{{ report_bar(r) }}</div>
 {% call(h) report_table(r, empty='No holidays entered.') %}{% if 'holidays.manage' in user.perms %}<form method="post" action="/settings/holidays/{{ h.id }}/delete"><button class="link">remove</button></form>{% endif %}{% endcall %}</div>
 </div>
+<div class="panel" id="special"><h3>Holidays for some staff only</h3>
+<p class="hint">A day off for one company, one department or chosen employees (e.g. factory holiday, a team's compensatory day off). Holiday work counts as overtime where OT applies.</p>
+{% if 'holidays.manage' in user.perms %}<form method="post" action="/settings/special-holidays"><div class="form-grid">
+<div><label>From</label><input type="date" name="day" required></div><div><label>To (optional)</label><input type="date" name="day_to"></div>
+<div><label>Name</label><input name="name" required placeholder="e.g. Factory holiday"></div>
+<div><label>For</label><select name="scope" id="spscope"><option value="COMPANY">One company</option><option value="DEPARTMENT">One department</option><option value="EMPLOYEES">Chosen employees</option></select></div>
+<div class="sp COMPANY"><label>Company</label><select name="company_id">{% for c in companies %}<option value="{{ c.id }}">{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div class="sp DEPARTMENT" style="display:none"><label>Department</label><select name="department_id">{% for d in depts %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
+<div class="sp EMPLOYEES" style="display:none"><label>Employee codes (comma separated)</label><input name="employee_codes" placeholder="12127, 12160"></div>
+</div><p><button>Add holiday</button></p></form>
+<script>(function(){var s=document.getElementById('spscope');function u(){document.querySelectorAll('.sp').forEach(function(x){x.style.display=x.classList.contains(s.value)?'':'none'})}s.addEventListener('change',u);u()})();</script>{% endif %}
+<div class="table-wrap"><table><tr><th>Date</th><th>Name</th><th>For</th><th></th></tr>
+{% for h in special %}<tr><td>{{ h.day.strftime('%d/%m/%Y %a') }}</td><td>{{ h.name }}</td>
+<td>{% if h.scope == 'COMPANY' %}Company {% for c in all_companies if c.id|string == h.scope_value %}{{ c.code }}{% endfor %}{% elif h.scope == 'DEPARTMENT' %}Department {% for d in depts if d.id|string == h.scope_value %}{{ d.name }}{% endfor %}{% else %}Employees {{ h.scope_value }}{% endif %}</td>
+<td>{% if 'holidays.manage' in user.perms %}<form method="post" action="/settings/special-holidays/{{ h.id }}/delete"><button class="link">remove</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="4" class="hint">None yet.</td></tr>{% endfor %}</table></div></div>
 {% if admin %}
 <div class="grid2">
 <div class="panel"><h3>Companies</h3>
@@ -40,7 +56,9 @@
 <form method="post" action="/settings/general">
 {% for n in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<label style="display:inline-block;margin-right:12px;color:inherit"><input type="checkbox" name="wd{{ loop.index0 }}" value="1" {{ 'checked' if loop.index0 in weekend }}> {{ n }}</label>{% endfor %}
 <div class="form-grid" style="margin-top:12px"><div><label>Office latitude</label><input name="geofence_lat" value="{{ lat }}"></div>
-<div><label>Office longitude</label><input name="geofence_lon" value="{{ lon }}"></div><div><label>Mobile punch radius (m)</label><input name="geofence_radius_m" value="{{ radius }}"></div></div>
+<div><label>Office longitude</label><input name="geofence_lon" value="{{ lon }}"></div><div><label>Mobile punch radius (m)</label><input name="geofence_radius_m" value="{{ radius }}"></div>
+<div><label>Outside the radius</label><select name="geofence_mode"><option value="STRICT">Block the punch</option><option value="RECORD" {{ 'selected' if geo_mode == 'RECORD' }}>Allow, but mark it "outside office" with the distance</option></select></div></div>
+<p class="hint">Mobile punch always records the phone's GPS location automatically - staff cannot type or change it, and a punch without location is refused.</p>
 <p><button>Save</button></p></form>
 <h3 style="margin-top:18px">Data &amp; backup</h3>
 <p class="hint">Database: {{ db_kind }} · Data folder: <b>{{ data_dir }}</b><br>A backup is made automatically every day (kept {{ settings.backup_keep_days }} days) in the backups folder.</p>

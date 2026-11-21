@@ -23,7 +23,7 @@ from config import DATA_DIR, settings
 DB_FILE = DATA_DIR / "laila_payroll.db"
 PENDING = DATA_DIR / "restore_pending.zip"
 EXTRA_FILES = ("secret.key", "settings.env", "https-cert.pem", "https-key.pem")
-EXTRA_DIRS = ("photos", "branding")
+EXTRA_DIRS = ("photos", "branding", "documents")
 PREFIX = "LailaPayroll_backup_"
 APP_VERSION = "3.2.0"
 
@@ -70,9 +70,9 @@ def create_backup(db, reason: str = "manual", username: str = "system") -> Path:
                 if (DATA_DIR / f).exists():
                     z.write(DATA_DIR / f, f)
             for d in EXTRA_DIRS:
-                for f in (DATA_DIR / d).glob("*") if (DATA_DIR / d).exists() else []:
+                for f in (DATA_DIR / d).rglob("*") if (DATA_DIR / d).exists() else []:
                     if f.is_file():
-                        z.write(f, f"{d}/{f.name}")
+                        z.write(f, f.relative_to(DATA_DIR).as_posix())
         part.replace(out_dir / name)
         return out_dir / name
     finally:

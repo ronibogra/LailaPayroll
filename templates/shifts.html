@@ -2,6 +2,8 @@
 {% block content %}
 {{ report_bar(r) }}
 {% call(sh) report_table(r) %}{% if 'shifts.manage' in user.perms %}<a href="/shifts?edit={{ sh.id }}">Edit</a>{% endif %}{% endcall %}<div style="margin-bottom:16px"></div>
+{% if 'shifts.manage' not in user.perms %}<p class="hint">Only an Admin can create or change shifts.</p>{% endif %}
+<p class="hint">Late <b>deduction</b> rules (e.g. 3 late days = 1 day's pay, very late = half day) are in Settings → Pay policy, per company.</p>
 {% if 'shifts.manage' in user.perms %}
 <div class="grid2">
 <div class="panel"><h3>{{ 'Edit shift ' ~ e.code if e else 'Add shift' }}</h3>
@@ -11,6 +13,7 @@
 <div><label>Start</label><input type="time" name="start" required value="{{ e.start.strftime('%H:%M') if e else '08:00' }}"></div>
 <div><label>End (earlier than start = night shift)</label><input type="time" name="end" required value="{{ e.end.strftime('%H:%M') if e else '17:00' }}"></div>
 <div><label>Grace minutes before late</label><input type="number" name="grace_minutes" value="{{ e.grace_minutes if e else 10 }}" min="0"></div>
+<div><label>When late, count late minutes from</label><select name="late_count_from"><option value="START">Shift start (09:15 in = 15 min late)</option><option value="GRACE_END" {{ 'selected' if e and e.late_count_from == 'GRACE_END' }}>End of grace (09:15 in, 10 min grace = 5 min late)</option></select></div>
 <div><label>Unpaid break minutes</label><input type="number" name="break_minutes" value="{{ e.break_minutes if e else 60 }}" min="0"></div>
 <div><label>Deduct break only if day longer than (min)</label><input type="number" name="break_after_minutes" value="{{ e.break_after_minutes if e else 300 }}" min="0"></div>
 <div><label>Accept punches this early (min before start)</label><input type="number" name="early_window_minutes" value="{{ e.early_window_minutes if e else 180 }}" min="0" max="360"></div>

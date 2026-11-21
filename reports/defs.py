@@ -88,6 +88,9 @@ EMP_COLS = [
     Col("religion", "Religion", lambda e: e.religion, False),
     Col("marital", "Marital status", lambda e: e.marital_status, False),
     Col("nid", "NID", lambda e: e.nid, False),
+    Col("birth_cert", "Birth certificate", lambda e: e.birth_certificate_no, False),
+    Col("passport", "Passport", lambda e: e.passport_no, False),
+    Col("ot_eligible", "OT eligible", lambda e: e.ot_eligible is not False, False),
     Col("email", "Email", lambda e: e.email, False),
     Col("emergency", "Emergency contact", lambda e: e.emergency_contact, False),
     Col("present_address", "Present address", lambda e: e.present_address, False),
@@ -295,8 +298,16 @@ LEAVE_COLS = [
     Col("to", "To", lambda r: r[0].end_date, kind="date"),
     Col("days", "Days", lambda r: (r[0].end_date - r[0].start_date).days + 1, kind="num"),
     Col("paid", "Paid", lambda r: r[0].paid),
+    Col("status", "Status", lambda r: _LEAVE_STATUS.get(r[0].status or "APPROVED", r[0].status)),
+    Col("source", "By", lambda r: "Employee request" if r[0].source == "SELF" else "HR"),
+    Col("approved_by", "Approved by", lambda r: " / ".join(x for x in (r[0].dept_approved_by, r[0].final_approved_by) if x)
+        or (r[0].rejected_by and f"rejected: {r[0].rejected_by}") or ""),
+    Col("document", "Document", lambda r: "yes" if r[0].document else "", default=False),
+    Col("reason", "Reason", lambda r: r[0].reason or r[0].reject_reason, default=False),
     Col("note", "Note", lambda r: r[0].note),
 ]
+_LEAVE_STATUS = {"APPROVED": "Approved", "PENDING_DEPT": "Waiting: Dept. Head", "PENDING_FINAL": "Waiting: final",
+                 "REJECTED": "Rejected", "CANCELLED": "Cancelled"}
 
 
 def fetch_leaves(db, user, p, export):
@@ -308,6 +319,11 @@ def fetch_leaves(db, user, p, export):
         stmt = stmt.where(Leave.leave_type == p["leave_type"])
     if p.get("paid") in ("0", "1"):
         stmt = stmt.where(Leave.paid == (p["paid"] == "1"))
+    st = p.get("leave_status")
+    if st == "PENDING":
+        stmt = stmt.where(Leave.status.in_(("PENDING_DEPT", "PENDING_FINAL")))
+    elif st in ("APPROVED", "REJECTED"):
+        stmt = stmt.where(Leave.status == st)
     rows = db.execute(stmt.order_by(Leave.start_date.desc())).all()
     return rows, f"{s:%d/%m/%Y} - {e:%d/%m/%Y}{_comp_name(db, _company(user, p))}", len(rows)
 
@@ -327,6 +343,7 @@ SHIFT_COLS = [
     Col("code", "Code", lambda s: s.code), Col("name", "Name", lambda s: s.name),
     Col("start", "Start", lambda s: s.start, kind="time"), Col("end", "End", lambda s: s.end, kind="time"),
     Col("grace", "Grace (min)", lambda s: s.grace_minutes, kind="num"),
+    Col("late_from", "Late counted from", lambda s: "end of grace" if s.late_count_from == "GRACE_END" else "shift start"),
     Col("break", "Break (min)", lambda s: s.break_minutes, kind="num"),
     Col("ot_block", "OT block (min)", lambda s: s.ot_round_minutes, kind="num"),
     Col("ot_cap", "Daily OT cap (min)", lambda s: s.max_ot_minutes, kind="num"),
@@ -366,6 +383,15 @@ def fetch_devices(db, user, p, export):
 
 
 # ------------------------------------------------------------ payroll lines (one company, one month)
+def _items_text(js) -> str:
+    import json
+    try:
+        return "; ".join(f"{i['name']} {'+' if i['kind'] == 'ADD' else '-'}{float(i['amount']):,.0f}"
+                         for i in json.loads(js or "[]"))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 PAY_COLS = [
     Col("month", "Month", lambda l: f"{l.run.year}-{l.run.month:02d}"),
     Col("company", "Company", lambda l: l.run.company.code if l.run.company else ""),
@@ -392,15 +418,20 @@ PAY_COLS = [
     Col("ot_rate", "OT rate", lambda l: l.ot_rate, False, kind="money"),
     Col("ot", "OT Tk", lambda l: l.ot_amount, kind="money"),
     Col("bonus", "Att. bonus", lambda l: l.attendance_bonus, kind="money"),
+    Col("late_ded", "Late ded.", lambda l: l.late_deduction or 0, kind="money"),
+    Col("custom_add", "Allowances", lambda l: l.custom_additions or 0, kind="money"),
     Col("addition", "Other add.", lambda l: l.other_addition, False, kind="money"),
     Col("advance", "Advance", lambda l: l.advance, False, kind="money"),
     Col("other_ded", "Other ded.", lambda l: l.other_deduction, False, kind="money"),
     Col("tax", "Tax", lambda l: l.tax, False, kind="money"),
+    Col("custom_ded", "Custom ded.", lambda l: l.custom_deductions or 0, False, kind="money"),
     Col("stamp", "Stamp", lambda l: l.stamp, False, kind="money"),
     Col("deductions", "Deductions", lambda l: l.total_deductions, kind="money"),
     Col("net", "Net pay", lambda l: l.net_pay, kind="money"),
     Col("mode", "Mode", lambda l: l.payment_mode),
     Col("bank", "Bank", lambda l: l.bank_name, False), Col("account", "Account no.", lambda l: l.account_no, False),
+    Col("items", "Pay items", lambda l: _items_text(l.items_json), False),
+    Col("edited", "Edited", lambda l: "edited" if l.edited else "", False),
     Col("remarks", "Remarks", lambda l: l.warnings),
     Col("signature", "Signature", lambda l: "", False),
 ]
@@ -477,7 +508,7 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
            filters=["start", "end"] + EMP_F + ["att_status", "late_only", "ot_only"],
            description="Processed attendance per day with shift rules: status, in/out, late, worked hours, overtime."),
     Report("leaves", "Leave", "attendance.view", LEAVE_COLS, fetch_leaves, landscape=False,
-           filters=["start", "end"] + EMP_F + ["leave_type", "paid"],
+           filters=["start", "end"] + EMP_F + ["leave_type", "leave_status", "paid"],
            description="Leave taken or planned in a period, by type, paid or unpaid."),
     Report("jobcard", "Job card", "attendance.view", JOB_COLS, fetch_jobcard, landscape=False,
            filters=["month", "start", "end"] + EMP_F + ["att_status", "late_only", "ot_only"],
@@ -493,7 +524,8 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
                     "warnings"],
            description="Salary lines for one or many months and companies: earnings, overtime, deductions, net pay.",
            totals=["gross", "basic", "house_rent", "medical", "transport", "food", "earned", "absent_ded", "ot",
-                   "bonus", "addition", "advance", "other_ded", "tax", "stamp", "deductions", "net"]),
+                   "bonus", "late_ded", "custom_add", "addition", "advance", "other_ded", "tax", "custom_ded", "stamp",
+                   "deductions", "net"]),
     Report("holidays", "Holidays", "attendance.view", HOLIDAY_COLS, fetch_holidays, landscape=False),
     Report("shifts", "Shifts", "attendance.view", SHIFT_COLS, fetch_shifts),
     Report("machines", "Machines", "machines.manage", DEVICE_COLS, fetch_devices),

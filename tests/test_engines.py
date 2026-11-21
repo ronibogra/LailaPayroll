@@ -195,3 +195,68 @@ def test_punch_import_formats():
         read_punch_file("x.csv", b"Name,Salary\nA,1\n")
     rows, err = read_punch_file("x.csv", b"card_no,punch_time\n1,not a date\n2,2026-11-20 08:00\n")
     assert len(rows) == 1 and err and "row 2" in err[0]
+
+
+# ---------- late rules, OT switch, custom components, admin overrides ----------
+def _month(out=time(17, 0), in_t=time(7, 55), late_days=()):
+    ps, d = [], date(2026, 11, 1)
+    while d.month == 11:
+        if d.weekday() not in FRIDAY:
+            ps += [datetime.combine(d, time(9, 0) if d.day in late_days else in_t), datetime.combine(d, out)]
+        d = date.fromordinal(d.toordinal() + 1)
+    return ps
+
+
+def test_late_count_from_grace_end():
+    sh = ShiftRule(grace_minutes=10, late_count_from="GRACE_END")
+    r = evaluate_day(date(2026, 11, 2), [dt(2026, 11, 2, 8, 25), dt(2026, 11, 2, 17, 0)], sh)
+    assert r.late_minutes == 15                       # 25 - 10 grace
+    r = evaluate_day(date(2026, 11, 2), [dt(2026, 11, 2, 8, 25), dt(2026, 11, 2, 17, 0)], DAY)
+    assert r.late_minutes == 25
+
+
+def test_ot_not_allowed_gives_no_ot():
+    sh = ShiftRule(ot_allowed=False)
+    r = evaluate_day(date(2026, 11, 2), [dt(2026, 11, 2, 8, 0), dt(2026, 11, 2, 21, 0)], sh)
+    assert r.ot_minutes == 0 and r.extra_ot_minutes == 0
+    m = evaluate_month(2026, 11, _month(out=time(19, 0)), DAY, FRIDAY, set())
+    pol = PayPolicy(ot_enabled=False)
+    assert compute_pay(split_gross(12500, pol), m, pol).ot_amount == 0
+
+
+def test_late_deduction_every_3_days_and_half_day():
+    from payroll.engine import late_penalty_days
+    pol = PayPolicy(late_days_per_deduction=3, late_deduction_days=D("1"), half_day_late_minutes=120)
+    days, normal, half = late_penalty_days([15, 20, 30, 40, 150], pol)
+    assert (days, normal, half) == (D("1.5"), 4, 1)   # 4 normal late -> 1 day, 1 very late -> 0.5 day
+    m = evaluate_month(2026, 11, _month(late_days=(2, 3, 4)), DAY, FRIDAY, set())
+    r = compute_pay(split_gross(12500, pol), m, pol)
+    assert r.late_days == 3 and r.late_deduction == D("223.33")   # 6700/30 * 1
+    assert r.net_pay == D("12277")
+
+
+def test_custom_components_and_one_off_items():
+    from payroll.engine import ComponentSpec
+    m = evaluate_month(2026, 11, _month(), DAY, FRIDAY, set(), joined_on=date(2026, 11, 16))
+    comps = [ComponentSpec("MOB", "Mobile allowance", "ADD", "FIXED", D("500")),
+             ComponentSpec("TIF", "Tiffin", "ADD", "PER_PRESENT_DAY", D("50")),
+             ComponentSpec("PF", "Provident fund", "DED", "PCT_BASIC", D("5"), prorate=False)]
+    adj = Adjustments(items=[{"name": "Eid gift", "kind": "ADD", "amount": "1000"},
+                             {"name": "Canteen", "kind": "DED", "amount": "200"}])
+    r = compute_pay(split_gross(12500, P), m, P, adj, comps)
+    names = {i["name"]: D(i["amount"]) for i in r.items}
+    assert names["Mobile allowance"] == D("250.00")          # half month -> prorated
+    assert names["Tiffin"] == D(50 * m.present_days)
+    assert names["Provident fund"] == D("335.00")            # 5% of basic, not prorated
+    assert r.custom_additions == D("250") + names["Tiffin"] + 1000
+    assert r.custom_deductions == D("335") + 200
+    assert r.net_pay == (r.earned_gross + r.custom_additions - r.custom_deductions).quantize(D("1"))
+
+
+def test_admin_overrides():
+    m = evaluate_month(2026, 11, _month(out=time(19, 0)), DAY, FRIDAY, set())
+    adj = Adjustments(overrides={"absent_days": 2, "ot_hours": "10", "by": "admin"})
+    r = compute_pay(split_gross(12500, P), m, P, adj)
+    assert r.absent_days == 2 and r.absent_deduction == D("446.67")
+    assert r.ot_hours == D("10.00") and r.ot_amount == D("644.20")
+    assert any("set to 2 by admin" in w for w in r.warnings)

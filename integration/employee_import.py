@@ -18,10 +18,10 @@ COLUMNS = ["company", "employee_code", "card_no", "full_name", "department", "de
            "shift_code", "joined_on", "left_on", "gross", "basic", "house_rent", "medical", "transport", "food",
            "payment_mode", "bank_name", "account_no", "status",
            "father_name", "mother_name", "spouse_name", "date_of_birth", "gender", "blood_group", "religion",
-           "marital_status", "nid", "phone", "email", "emergency_contact", "present_address", "permanent_address",
+           "marital_status", "nid", "birth_certificate_no", "passport_no", "phone", "email", "emergency_contact", "present_address", "permanent_address",
            "education", "notes"]
 TEXT_PROFILE = ("father_name", "mother_name", "spouse_name", "gender", "blood_group", "religion", "marital_status",
-                "nid", "phone", "email", "emergency_contact", "present_address", "permanent_address", "education",
+                "nid", "birth_certificate_no", "passport_no", "phone", "email", "emergency_contact", "present_address", "permanent_address", "education",
                 "notes", "designation", "section", "grade", "bank_name", "account_no")
 SALARY = ("basic", "house_rent", "medical", "transport", "food")
 ALIASES = {"code": "employee_code", "emp code": "employee_code", "employee id": "employee_code",
@@ -39,7 +39,7 @@ def template_bytes() -> bytes:
     ws.append(COLUMNS)
     ws.append(["HO", "12127", "12127", "Md. Example", "Accounts", "Officer", "", "", "GENERAL", "2024-01-15", None,
                25000, None, None, None, None, None, "BANK", "Dutch-Bangla Bank", "1234567890", "ACTIVE",
-               "Father Name", "Mother Name", "", "1990-05-01", "Male", "B+", "Islam", "Married", "", "01700000000",
+               "Father Name", "Mother Name", "", "1990-05-01", "Male", "B+", "Islam", "Married", "", "", "", "01700000000",
                "", "Wife: 01800000000", "Dhaka", "Bogura", "BBA", ""])
     help_ws = wb.create_sheet("Help")
     for line in [
@@ -99,7 +99,7 @@ def _header(h) -> str:
     return k.replace(" ", "_")
 
 
-def import_employees(db: Session, content: bytes, only_company_id: int | None = None) -> dict:
+def import_employees(db: Session, content: bytes, only_company_id: int | None = None, allow_salary: bool = True) -> dict:
     """only_company_id: set for users limited to one company - other companies' rows are refused."""
     try:
         ws = load_workbook(io.BytesIO(content), data_only=True).worksheets[0]
@@ -155,8 +155,8 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
                  "full_name": _text(get("full_name")) or (old.full_name if old else code)}
             if comp.id not in policies:
                 policies[comp.id] = load_policy(db, comp.id)
-            gross = _money(get("gross"))
-            parts = {c: _money(get(c)) for c in SALARY}
+            gross = _money(get("gross")) if allow_salary else None
+            parts = {c: _money(get(c)) for c in SALARY} if allow_salary else {c: None for c in SALARY}
             if gross is not None:
                 if parts["basic"] is None:
                     split = split_gross(gross, policies[comp.id]) if gross > 0 else None
@@ -174,7 +174,7 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
                 if shift_code not in shifts:
                     raise ValueError(f"unknown shift_code {shift_code}")
                 p["shift"] = shifts[shift_code]
-            mode = (_text(get("payment_mode")) or "").upper()
+            mode = (_text(get("payment_mode")) or "").upper() if allow_salary else ""
             if mode:
                 if mode not in ("CASH", "BANK", "MOBILE"):
                     raise ValueError("payment_mode must be CASH, BANK or MOBILE")
@@ -189,6 +189,8 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
                 if v:
                     p[f] = v
             for f in TEXT_PROFILE:
+                if not allow_salary and f in ("bank_name", "account_no"):
+                    continue
                 v = _text(get(f))
                 if v:
                     p[f] = v[:300]

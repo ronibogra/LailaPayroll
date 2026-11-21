@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}{% endblock %} · {{ brand.name }}</title>
+<title>{% block title %}{% endblock %} · {{ brand.name }} · SPhere Payroll</title>
 <link rel="icon" href="/brand/logo.png?v={{ brand.logo_version }}"><link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 {% set path = request.url.path %}
 {% set pm = user.perms %}
 <aside class="sidebar">
-  <div class="brand"><img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><div><b>{{ brand.name }}</b><small>Attendance &amp; Payroll</small></div></div>
+  <div class="brand"><img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><div><b>{{ brand.name }}</b><small>SPhere Payroll</small></div></div>
   {% if 'dashboard.view' in pm %}<a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>{% endif %}
   {% if 'punches.view' in pm or 'attendance.view' in pm or 'employees.view' in pm or 'payroll.view' in pm %}<a href="/reports" class="{{ 'active' if path.startswith('/reports') }}">📊 Reports</a>{% endif %}
   {% if 'punches.view' in pm or 'machines.manage' in pm %}<div class="nav-label">PUNCH</div>{% endif %}
@@ -18,18 +18,21 @@
   {% if 'machines.manage' in pm %}<a href="/devices" class="{{ 'active' if path.startswith('/devices') }}">Machines</a>{% endif %}
   {% if 'attendance.view' in pm %}<div class="nav-label">ATTENDANCE</div>
   <a href="/attendance" class="{{ 'active' if path == '/attendance' }}">Daily attendance</a>
-  <a href="/leaves" class="{{ 'active' if path.startswith('/leaves') }}">Leave</a>
+  <a href="/leaves" class="{{ 'active' if path == '/leaves' }}">Leave</a>
   <a href="/shifts" class="{{ 'active' if path.startswith('/shifts') }}">Shifts</a>{% endif %}
+  {% if 'leave.approve_dept' in pm or 'leave.approve_final' in pm %}<a href="/leaves/approvals" class="{{ 'active' if path.startswith('/leaves/approvals') }}">Leave approvals{% if pending_leave_count %} <span class="count">{{ pending_leave_count }}</span>{% endif %}</a>{% endif %}
+  {% if 'leave.policy' in pm %}<a href="/leave-policy" class="{{ 'active' if path.startswith('/leave-policy') }}">Leave policy</a>{% endif %}
   <div class="nav-label">PEOPLE &amp; PAY</div>
   {% if 'employees.view' in pm %}<a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>{% endif %}
-  {% if 'payroll.view' in pm %}<a href="/payroll" class="{{ 'active' if path.startswith('/payroll') }}">Payroll</a>{% endif %}
+  {% if 'payroll.view' in pm %}<a href="/payroll" class="{{ 'active' if path == '/payroll' or path.startswith('/payroll/line') }}">Payroll</a>{% endif %}
+  {% if 'payroll.edit' in pm %}<a href="/payroll/components" class="{{ 'active' if path.startswith('/payroll/components') }}">Pay components</a>{% endif %}
   <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
   {% if 'logs.view' in pm or 'users.manage' in pm or 'backup.manage' in pm %}<div class="nav-label">ADMIN</div>{% endif %}
   {% if 'users.manage' in pm %}<a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users &amp; roles</a>{% endif %}
   {% if 'backup.manage' in pm %}<a href="/backup" class="{{ 'active' if path.startswith('/backup') }}">Backup &amp; restore</a>{% endif %}
   {% if 'logs.view' in pm %}<a href="/errors" class="{{ 'active' if path.startswith('/errors') }}">Error log</a>
   <a href="/audit" class="{{ 'active' if path.startswith('/audit') }}">Activity log</a>{% endif %}
-  <div class="side-foot">{{ settings.developer_credit }}</div>
+  <div class="side-foot"><img src="/static/img/sphere-payroll-small.png" alt="SPhere Payroll" class="product-logo"><br>{{ settings.developer_credit }}</div>
 </aside>
 <main class="main">
   <div class="topbar"><h1>{% block heading %}{% endblock %}</h1>
@@ -37,6 +40,6 @@
   {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
   {% if err %}<div class="alert err">{{ err }}</div>{% endif %}
   {% block content %}{% endblock %}
-  <footer>{{ brand.name }} · {{ settings.developer_credit }}</footer>
+  <footer>{{ brand.name }} · SPhere Payroll · {{ settings.developer_credit }}</footer>
 </main>
 </body></html>

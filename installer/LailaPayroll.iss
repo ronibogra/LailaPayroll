@@ -8,8 +8,8 @@
 ;     (runs as SYSTEM, restarts itself if it stops), starts it.
 ;  4. Opens the first-time setup page in the browser.
 
-#define AppName "LAILA GROUP Attendance & Payroll"
-#define AppVersion "3.3.0"
+#define AppName "SPhere Payroll - LAILA GROUP Attendance & Payroll"
+#define AppVersion "4.0.0"
 #define AppGuid "6C1E2B7A-4F3D-4E1B-9A57-1A9D2B3C4E5F"
 #define HttpPort "8585"
 #define HttpsPort "8443"
@@ -18,13 +18,13 @@
 AppId={{{#AppGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=LAILA GROUP
+AppPublisher=SPHere - 01617144755
 AppComments=Developed by: SPHere - 01617144755
 DefaultDirName={commonpf64}\LailaPayroll
 UninstallDisplayIcon={app}\LailaPayroll.exe
 UninstallDisplayName={#AppName}
 OutputBaseFilename=LailaPayroll_Setup
-SetupIconFile=..\static\img\lg-logo.ico
+SetupIconFile=sphere.ico
 WizardSmallImageFile=..\static\img\lg-logo-small.bmp
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
@@ -45,21 +45,22 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "check.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "install-task.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\static\img\lg-logo.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "sphere.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{commondesktop}\LAILA Payroll - Check"; Filename: "{app}\check.bat"; IconFilename: "{app}\lg-logo.ico"
+Name: "{commondesktop}\SPhere Payroll - Check"; Filename: "{app}\check.bat"; IconFilename: "{app}\sphere.ico"
 
 [INI]
-Filename: "{commondesktop}\LAILA GROUP Payroll.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://127.0.0.1:{#HttpPort}/"
-Filename: "{commondesktop}\LAILA GROUP Payroll.url"; Section: "InternetShortcut"; Key: "IconFile"; String: "{app}\lg-logo.ico"
-Filename: "{commondesktop}\LAILA GROUP Payroll.url"; Section: "InternetShortcut"; Key: "IconIndex"; String: "0"
+Filename: "{commondesktop}\SPhere Payroll.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://127.0.0.1:{#HttpPort}/"
+Filename: "{commondesktop}\SPhere Payroll.url"; Section: "InternetShortcut"; Key: "IconFile"; String: "{app}\sphere.ico"
+Filename: "{commondesktop}\SPhere Payroll.url"; Section: "InternetShortcut"; Key: "IconIndex"; String: "0"
 
 [Run]
 ; firewall: office PCs + ZKTeco machines (HTTP) and phones (HTTPS)
 Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""LailaPayroll"""; Flags: runhidden waituntilterminated
 Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""LailaPayroll"" dir=in action=allow protocol=TCP localport={#HttpPort},{#HttpsPort} profile=any"; Flags: runhidden waituntilterminated
 ; start with Windows as SYSTEM, no time limit, restart if it stops - then start now and wait until it answers
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-task.ps1"" -App ""{app}"" -Port {#HttpPort}"; StatusMsg: "Starting LAILA GROUP Payroll..."; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-task.ps1"" -App ""{app}"" -Port {#HttpPort}"; StatusMsg: "Starting SPhere Payroll..."; Flags: runhidden waituntilterminated
 Filename: "http://127.0.0.1:{#HttpPort}/setup"; Flags: shellexec runasoriginaluser nowait skipifsilent
 
 [UninstallRun]
@@ -67,8 +68,12 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -Command ""Stop-ScheduledTas
 Filename: "taskkill.exe"; Parameters: "/F /IM LailaPayroll.exe"; Flags: runhidden waituntilterminated; RunOnceId: "KillApp"
 Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""LailaPayroll"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveFirewall"
 
-[UninstallDelete]
+[InstallDelete]
 Type: files; Name: "{commondesktop}\LAILA GROUP Payroll.url"
+Type: files; Name: "{commondesktop}\LAILA Payroll - Check.lnk"
+
+[UninstallDelete]
+Type: files; Name: "{commondesktop}\SPhere Payroll.url"
 
 [Code]
 procedure Run(const Exe, Params: String);
@@ -91,7 +96,7 @@ begin
   KeepData := WizardSilent and (ExpandConstant('{param:KEEPDATA|0}') = '1');   { silent update: /KEEPDATA=1 }
   if (DirExists(DataDir) or DirExists(OldApp)) and not WizardSilent then
   begin
-    Answer := MsgBox('LAILA GROUP Payroll is already installed on this PC.' + #13#10 + #13#10 +
+    Answer := MsgBox('SPhere Payroll is already installed on this PC.' + #13#10 + #13#10 +
               'YES  = FRESH START: delete the old program AND ALL DATA (employees, punches, payroll, settings).' + #13#10 + #13#10 +
               'NO   = UPDATE: install the new version and KEEP all data.' + #13#10 + #13#10 +
               'CANCEL = do nothing.', mbConfirmation, MB_YESNOCANCEL or MB_DEFBUTTON2);

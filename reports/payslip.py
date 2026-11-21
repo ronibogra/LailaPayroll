@@ -1,5 +1,7 @@
 """Payslips as PDF: two payslips per A4 page (cut along the dashed line)."""
 import io
+import json
+from decimal import Decimal
 from calendar import month_name
 
 from reportlab.lib.pagesizes import A4
@@ -50,11 +52,22 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     c.drawString(x0, y, f"Salary structure:  Basic {_tk(l.basic)} + House rent {_tk(l.house_rent)} + Medical {_tk(l.medical)}"
                         f" + Transport {_tk(l.transport)} + Food {_tk(l.food)} = Gross {_tk(l.gross)}")
     y -= 7 * mm
+    items = []
+    try:
+        items = json.loads(l.items_json or "[]")
+    except ValueError:
+        pass
+    late = l.late_deduction or 0
     earn = [(f"Earned gross ({l.employed_days}/{l.days_in_month} days)", l.earned_gross),
             (f"Overtime {l.ot_hours} h x {l.ot_rate}", l.ot_amount), ("Attendance bonus", l.attendance_bonus),
             ("Other additions", l.other_addition)]
-    ded = [(f"Absent / unpaid leave ({l.absent_days} days)", l.absent_deduction), ("Advance", l.advance),
-           ("Other deductions", l.other_deduction), ("Tax", l.tax), ("Revenue stamp", l.stamp)]
+    earn += [(i["name"][:38], Decimal(i["amount"])) for i in items if i["kind"] == "ADD"]
+    ded = [(f"Absent / unpaid leave ({l.absent_days} days)", l.absent_deduction), (f"Late ({l.late_days} days)", late),
+           ("Advance", l.advance), ("Other deductions", l.other_deduction), ("Tax", l.tax)]
+    ded += [(i["name"][:38], Decimal(i["amount"])) for i in items if i["kind"] == "DED"] + [("Revenue stamp", l.stamp)]
+    # keep the slip short: hide empty lines (the first earning line always shows)
+    earn = earn[:1] + [x for x in earn[1:] if x[1]]
+    ded = [x for x in ded if x[1]] or [("-", 0)]
     mid = x0 + 92 * mm
     c.setFont("Helvetica-Bold", 9)
     c.drawString(x0, y, "Earnings"); c.drawRightString(mid - 6 * mm, y, "Tk")
@@ -70,9 +83,9 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     y -= (max(len(earn), len(ded)) + 1) * 4.6 * mm
     c.line(x0, y + 2.5 * mm, x1, y + 2.5 * mm)
     c.setFont("Helvetica-Bold", 9)
-    gross_earn = l.earned_gross + l.ot_amount + l.attendance_bonus + l.other_addition
+    gross_earn = sum((v for _, v in earn), Decimal(0))
     c.drawString(x0, y - 1 * mm, "Total"); c.drawRightString(mid - 6 * mm, y - 1 * mm, _tk(gross_earn))
-    c.drawString(mid, y - 1 * mm, "Total"); c.drawRightString(x1, y - 1 * mm, _tk(l.absent_deduction + l.total_deductions))
+    c.drawString(mid, y - 1 * mm, "Total"); c.drawRightString(x1, y - 1 * mm, _tk(sum((v for _, v in ded), Decimal(0))))
     y -= 9 * mm
     c.setFont("Helvetica-Bold", 11)
     c.drawString(x0, y - 2 * mm, f"NET PAY:  Tk {_tk(l.net_pay)}")
@@ -81,7 +94,12 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     c.drawRightString(x1, y - 15 * mm, "Authorised signature: ____________________")
     c.setFillColorRGB(0.45, 0.45, 0.45)
     from config import settings
-    c.drawString(x0, y - 20 * mm, settings.developer_credit)
+    from services.branding import PRODUCT_LOGO
+    try:
+        c.drawImage(str(PRODUCT_LOGO), x0, y - 22.5 * mm, 12 * mm, 7 * mm, mask="auto", preserveAspectRatio=True)
+    except Exception:  # noqa: BLE001
+        pass
+    c.drawString(x0 + 13 * mm, y - 20 * mm, f"SPhere Payroll · {settings.developer_credit}")
     c.setFillColorRGB(0, 0, 0)
 
 

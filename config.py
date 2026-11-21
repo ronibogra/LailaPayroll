@@ -32,7 +32,7 @@ def _secret() -> str:
 
 
 class Settings(BaseSettings):
-    app_name: str = "LAILA GROUP Attendance & Payroll"
+    app_name: str = "SPhere Payroll"
     group_name: str = "LAILA GROUP"
     developer_credit: str = "Developed by: SPHere – 01617144755"
     host: str = "0.0.0.0"

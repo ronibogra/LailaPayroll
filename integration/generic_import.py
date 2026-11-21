@@ -14,7 +14,8 @@ from models import Company, Device, Employee, Holiday, Leave, Shift
 TEMPLATES = {
     "leaves": (["employee_code", "from", "to", "type", "note"],
                [["12127", "2026-11-05", "2026-11-06", "CASUAL", "family"], ["12160", "2026-11-10", "2026-11-10", "UNPAID", ""]],
-               "type: CASUAL, SICK, EARNED, MATERNITY or UNPAID (UNPAID is deducted like absence)."),
+               "type: a leave type code from the Leave policy page (CASUAL, SICK, EARNED, MATERNITY, UNPAID ...). "
+               "Leave without pay is deducted like absence. Imported leave is approved at once."),
     "holidays": (["date", "name"], [["2026-12-16", "Victory Day"], ["2026-12-25", "Christmas"]], "One row per holiday date."),
     "shifts": (["code", "name", "start", "end", "grace_minutes", "break_minutes", "ot_block_minutes", "ot_cap_minutes",
                 "offday_work_is_ot", "early_window_minutes"],
@@ -139,7 +140,9 @@ def import_kind(db, kind: str, filename: str, content: bytes, user: dict) -> dic
     scope = user.get("company_id")
 
     if kind == "leaves":
+        from services import leave as leave_svc
         emps = {e.employee_code: e for e in db.scalars(select(Employee))}
+        ltypes = {t.code: t for t in leave_svc.types(db)}
 
         def fn(r):
             code = _s(r.get("employee_code"))
@@ -149,12 +152,14 @@ def import_kind(db, kind: str, filename: str, content: bytes, user: dict) -> dic
             if scope and e.company_id != scope:
                 raise ValueError(f"{code} belongs to another company")
             s, t = _date(r.get("from")), _date(r.get("to") or r.get("from"))
-            if t < s:
-                raise ValueError("'to' is before 'from'")
             typ = (_s(r.get("type")) or "CASUAL").upper()
-            if typ not in ("CASUAL", "SICK", "EARNED", "MATERNITY", "UNPAID"):
-                raise ValueError(f"unknown leave type {typ}")
-            r["_obj"] = Leave(employee_id=e.id, start_date=s, end_date=t, leave_type=typ, paid=typ != "UNPAID",
+            lt = ltypes.get(typ)
+            if not lt:
+                raise ValueError(f"unknown leave type {typ} - use one of {', '.join(ltypes)}")
+            # imported leave is HR-granted history: documents are kept on paper, yearly balance not enforced
+            days = leave_svc.validate(db, e, lt, s, t, has_document=True, ignore_balance=True)
+            r["_obj"] = Leave(employee_id=e.id, start_date=s, end_date=t, leave_type=typ, paid=lt.paid, days=days,
+                              status="APPROVED", source="HR", requested_by=user["username"], requested_at=datetime.now(),
                               note=_s(r.get("note")) or None)
             return "added"
     elif kind == "holidays":

@@ -10,6 +10,7 @@ from payroll.engine import SalaryComponents, Adjustments, compute_pay, split_gro
 from services.audit import audit
 from services.policy import load_policy
 from services.processing import process_month
+from services import components as comp_svc
 from timeutil import now_local
 
 
@@ -48,6 +49,7 @@ def run_payroll(db: Session, company_id: int, year: int, month: int, user: dict)
     adjustments = {a.employee_id: a for a in db.scalars(
         select(PayrollAdjustment).where(PayrollAdjustment.year == year, PayrollAdjustment.month == month))}
 
+    comps, per_emp = comp_svc.load_all(db)
     pol = {k: str(v) for k, v in asdict(policy).items()}
     run = PayrollRun(company_id=company_id, year=year, month=month, status="DRAFT", created_by=user["username"],
                      policy_json=json.dumps(pol))
@@ -58,8 +60,11 @@ def run_payroll(db: Session, company_id: int, year: int, month: int, user: dict)
         try:
             sal = salary_of(e, policy)
             a = adjustments.get(emp_id)
-            adj = Adjustments(a.other_addition, a.advance, a.other_deduction, a.tax, a.note or "") if a else None
-            r = compute_pay(sal, att, policy, adj)
+            adj = None
+            if a:
+                adj = Adjustments(a.other_addition, a.advance, a.other_deduction, a.tax, a.note or "",
+                                  items=json.loads(a.items_json or "[]"), overrides=json.loads(a.overrides_json or "{}"))
+            r = compute_pay(sal, att, policy, adj, comp_svc.for_employee(e, comps, per_emp))
         except ValueError as exc:
             errors.append(str(exc))
             continue
@@ -68,13 +73,16 @@ def run_payroll(db: Session, company_id: int, year: int, month: int, user: dict)
             department=e.department.name if e.department else "", designation=e.designation or "",
             grade=e.grade or "", payment_mode=e.payment_mode or "CASH", bank_name=e.bank_name or "",
             account_no=e.account_no or "",
-            days_in_month=r.days_in_month, employed_days=r.employed_days, present_days=att.present_days,
+            days_in_month=r.days_in_month, employed_days=r.employed_days, present_days=r.present_days,
             payable_days=r.payable_days, absent_days=r.absent_days, paid_leave_days=att.paid_leave_days,
-            offdays=att.offdays, late_days=att.late_days,
+            offdays=att.offdays, late_days=r.late_days,
             gross=sal.gross, basic=sal.basic, house_rent=sal.house_rent, medical=sal.medical,
             transport=sal.transport, food=sal.food, earned_gross=r.earned_gross,
             absent_deduction=r.absent_deduction, ot_hours=r.ot_hours, ot_rate=r.ot_rate,
-            ot_amount=r.ot_amount, attendance_bonus=r.attendance_bonus, other_addition=r.other_addition,
+            ot_amount=r.ot_amount, late_deduction=r.late_deduction, custom_additions=r.custom_additions,
+            custom_deductions=r.custom_deductions, items_json=json.dumps(r.items) if r.items else None,
+            edited=bool(a and (a.overrides_json or a.items_json)),
+            attendance_bonus=r.attendance_bonus, other_addition=r.other_addition,
             advance=r.advance, other_deduction=r.other_deduction, tax=r.tax, stamp=r.stamp,
             total_earnings=r.total_earnings, total_deductions=r.total_deductions, net_pay=r.net_pay,
             warnings="; ".join(r.warnings)))

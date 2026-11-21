@@ -1,14 +1,34 @@
 {% extends "base.html" %}{% from "_report.html" import report_bar, report_table, import_box with context %}{% block title %}Leave{% endblock %}{% block heading %}Leave{% endblock %}
 {% block content %}
+{% if waiting %}<div class="alert info">{{ waiting }} leave request(s) are waiting for you. <a href="/leaves/approvals">Open leave approvals →</a></div>{% endif %}
+<div class="grid2">
 {% if 'leave.manage' in user.perms %}
-<div class="panel"><h3>Add leave</h3><form method="post" action="/leaves"><div class="form-grid">
-<div><label>Employee code</label><input name="employee_code" required></div>
-<div><label>From</label><input type="date" name="start_date" required></div><div><label>To</label><input type="date" name="end_date" required></div>
-<div><label>Type</label><select name="leave_type">{% for t in ('CASUAL','SICK','EARNED','MATERNITY','UNPAID') %}<option>{{ t }}</option>{% endfor %}</select></div>
-<div><label>Note</label><input name="note"></div></div><p><button>Save leave</button></p></form>
+<div class="panel"><h3>Grant leave (HR)</h3>
+<form method="post" action="/leaves" enctype="multipart/form-data"><div class="form-grid">
+<div><label>Employee code / card no.</label><input name="employee_code" required value="{{ lookup.employee_code if lookup else emp }}"></div>
+<div><label>Type</label><select name="leave_type" id="lt">{% for t in types %}<option value="{{ t.code }}" data-rule="{{ t.doc_rule }}" data-after="{{ t.doc_after_days }}" data-label="{{ t.doc_label }}">{{ t.name }}{% if t.days_per_year %} ({{ t.days_per_year }}/yr){% endif %}</option>{% endfor %}</select></div>
+<div><label>From</label><input type="date" name="start_date" id="d1" required value="{{ today }}"></div>
+<div><label>To</label><input type="date" name="end_date" id="d2" required value="{{ today }}"></div>
+<div><label id="doclab">Document (if the rule needs one)</label><input type="file" name="document" accept=".pdf,.jpg,.jpeg,.png,.webp"></div>
+<div><label>Note / reason</label><input name="note"></div>
+{% if user.role == 'ADMIN' %}<div><label><input type="checkbox" name="over_balance" value="1"> Allow more than the yearly balance (Admin)</label></div>{% endif %}
+</div><p class="hint" id="dochint"></p><p><button>Save leave</button></p></form>
 {{ import_box("leaves", "leave") }}
-<p class="hint">UNPAID leave is deducted like an absent day; the other types are paid. Leave on a day the person actually punched is ignored (they count as present).</p></div>
+<p class="hint">HR-granted leave is approved at once. Leave without pay is deducted like an absent day. Document rules and yearly days are set on the <b>Leave policy</b> page (Admin).</p></div>
 {% endif %}
+<div class="panel"><h3>Leave balance</h3>
+<form method="get" action="/leaves" class="hero-form"><input name="emp" value="{{ emp }}" placeholder="Employee code or card no."><button>Show</button></form>
+{% if lookup %}<p><a href="/employees/{{ lookup.id }}"><b>{{ lookup.full_name }}</b></a> · {{ lookup.employee_code }} · {{ lookup.company.code if lookup.company }}{{ ' · ' ~ lookup.department.name if lookup.department }}</p>
+<div class="bal">{% for b in bal %}<div><small>{{ b.type.name }}</small><b>{{ '∞' if b.left is none else b.left }}</b><small>{% if b.entitled %}of {{ b.entitled }} · {% endif %}used {{ b.used }}{% if b.pending %} · waiting {{ b.pending }}{% endif %}</small></div>{% endfor %}</div>
+{% elif emp %}<p class="hint">No employee with code {{ emp }}.</p>{% else %}<p class="hint">Days left this year per leave type, counting approved leave and requests still waiting.</p>{% endif %}
+</div>
+</div>
 {{ report_bar(r) }}
-{% call(row) report_table(r, empty='No leave in this period.') %}{% if 'leave.manage' in user.perms %}<form method="post" action="/leaves/{{ row[0].id }}/delete" onsubmit="return confirm('Remove this leave?')"><button class="link">remove</button></form>{% endif %}{% endcall %}
+{% call(row) report_table(r, empty='No leave in this period.') %}{% if row[0].document %}<a href="/leaves/{{ row[0].id }}/document" target="_blank">document</a> {% endif %}{% if 'leave.manage' in user.perms %}<form method="post" action="/leaves/{{ row[0].id }}/delete" onsubmit="return confirm('Remove this leave?')" style="display:inline"><button class="link">remove</button></form>{% endif %}{% endcall %}
+<script>
+(function(){var lt=document.getElementById('lt');if(!lt)return;var d1=document.getElementById('d1'),d2=document.getElementById('d2'),h=document.getElementById('dochint');
+function upd(){var o=lt.options[lt.selectedIndex],r=o.dataset.rule,a=+o.dataset.after||0,n=Math.round((new Date(d2.value)-new Date(d1.value))/864e5)+1;
+var need=r==='ALWAYS'||(r==='OVER_DAYS'&&n>a);h.textContent=(n>0?n+' day(s). ':'')+(need?'A document is required: '+o.dataset.label+'.':(r==='OVER_DAYS'?'Document needed above '+a+' days ('+o.dataset.label+').':''));h.style.color=need?'#b3261e':'';}
+[lt,d1,d2].forEach(function(x){x.addEventListener('change',upd)});upd();})();
+</script>
 {% endblock %}

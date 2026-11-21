@@ -4,20 +4,25 @@ Roles are edited on the Users page; users get one role (+ optional single-compan
 PERMS: dict[str, str] = {
     "dashboard.view": "Dashboard",
     "employees.view": "See employees & profiles",
-    "employees.edit": "Add / edit / import employees and photos",
+    "employees.edit": "Add / edit / import employees, photos and documents",
     "salary.view": "See salaries and salary details",
+    "salary.edit": "Change salaries, pay mode and OT eligibility of employees",
     "punches.view": "See punch records and first & last punch",
     "punches.edit": "Import punch files, manual punches, download from machines",
     "machines.manage": "Add / edit / remove machines",
     "attendance.view": "See daily attendance, leave and shifts",
     "attendance.process": "Process attendance month",
-    "leave.manage": "Add / remove / import leave",
-    "shifts.manage": "Create, import and assign shifts",
+    "leave.manage": "Grant / remove / import leave for employees (HR)",
+    "leave.approve_dept": "Approve leave requests as Department Head (own departments)",
+    "leave.approve_final": "Final approval of leave requests (e.g. CFO / HR head)",
+    "leave.policy": "Leave types, yearly days and document rules (Admin)",
+    "shifts.manage": "Create, edit, import and assign shifts (Admin)",
     "holidays.manage": "Add / remove / import holidays",
     "payroll.view": "See payroll, salary sheets and payslips",
     "payroll.process": "Process payroll, upload advances & deductions",
     "payroll.finalize": "Finalize (lock) payroll",
-    "policy.edit": "Change the pay policy",
+    "payroll.edit": "Edit payroll lines and custom pay components (Admin)",
+    "policy.edit": "Change the pay policy and late / OT rules",
     "company.manage": "Head Office, companies, logo, weekly off day, office location",
     "users.manage": "Users and roles",
     "backup.manage": "Backup and restore",
@@ -27,24 +32,35 @@ PERMS: dict[str, str] = {
 
 GROUPS = [
     ("General", ["dashboard.view", "reports.export"]),
-    ("Employees", ["employees.view", "employees.edit", "salary.view"]),
+    ("Employees", ["employees.view", "employees.edit", "salary.view", "salary.edit"]),
     ("Punch & machines", ["punches.view", "punches.edit", "machines.manage"]),
-    ("Attendance", ["attendance.view", "attendance.process", "leave.manage", "shifts.manage", "holidays.manage"]),
-    ("Payroll", ["payroll.view", "payroll.process", "payroll.finalize", "policy.edit"]),
+    ("Attendance", ["attendance.view", "attendance.process", "shifts.manage", "holidays.manage"]),
+    ("Leave", ["leave.manage", "leave.approve_dept", "leave.approve_final", "leave.policy"]),
+    ("Payroll", ["payroll.view", "payroll.process", "payroll.finalize", "payroll.edit", "policy.edit"]),
     ("Administration", ["company.manage", "users.manage", "backup.manage", "logs.view"]),
 ]
 
 BUILTIN_ROLES: dict[str, tuple[str, list[str]]] = {
     "ADMIN": ("Administrator - everything", list(PERMS)),
-    "HR": ("HR", ["dashboard.view", "reports.export", "employees.view", "employees.edit", "salary.view",
+    "HR": ("HR", ["dashboard.view", "reports.export", "employees.view", "employees.edit", "salary.view", "salary.edit",
                   "punches.view", "punches.edit", "machines.manage", "attendance.view", "attendance.process",
-                  "leave.manage", "shifts.manage", "holidays.manage", "payroll.view", "payroll.process", "logs.view"]),
+                  "leave.manage", "holidays.manage", "payroll.view", "payroll.process", "logs.view"]),
     "ACCOUNTS": ("Accounts", ["dashboard.view", "reports.export", "employees.view", "salary.view", "punches.view",
                               "attendance.view", "attendance.process", "payroll.view", "payroll.process",
                               "payroll.finalize", "policy.edit"]),
     "VIEWER": ("Viewer - attendance only, no salaries", ["dashboard.view", "reports.export", "employees.view",
                                                           "punches.view", "attendance.view"]),
+    "DEPT_HEAD": ("Department Head - approves leave of own departments", [
+        "dashboard.view", "reports.export", "employees.view", "punches.view", "attendance.view", "leave.approve_dept"]),
+    "CFO": ("CFO - final leave approval, payroll view & finalize", [
+        "dashboard.view", "reports.export", "employees.view", "salary.view", "punches.view", "attendance.view",
+        "payroll.view", "payroll.finalize", "leave.approve_final"]),
 }
+
+# changes to built-in roles of existing installations, applied once each (see main.startup)
+ROLE_MIGRATIONS = [
+    (2, "HR", ["salary.edit"], ["shifts.manage"]),
+]
 
 
 def parse(perms: str | None) -> set[str]:

@@ -26,6 +26,7 @@ class Department(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     code: Mapped[str | None] = mapped_column(String(30), nullable=True)  # not unique: SQL Server allows only one NULL in a unique column
+    head_username: Mapped[str | None] = mapped_column(String(80), nullable=True)   # Department Head (leave approval)
     employees = relationship("Employee", back_populates="department")
 
 
@@ -43,6 +44,7 @@ class Shift(Base):
     ot_round_minutes: Mapped[int] = mapped_column(Integer, default=30)
     max_ot_minutes: Mapped[int] = mapped_column(Integer, default=120)
     offday_work_is_ot: Mapped[bool] = mapped_column(Boolean, default=True)
+    late_count_from: Mapped[str] = mapped_column(String(10), default="START")   # START or GRACE_END
 
 
 class Employee(Base):
@@ -78,6 +80,9 @@ class Employee(Base):
     religion: Mapped[str | None] = mapped_column(String(30), nullable=True)
     marital_status: Mapped[str | None] = mapped_column(String(15), nullable=True)
     nid: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    birth_certificate_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    passport_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    ot_eligible: Mapped[bool] = mapped_column(Boolean, default=True)   # officers / management: False
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     email: Mapped[str | None] = mapped_column(String(120), nullable=True)
     emergency_contact: Mapped[str | None] = mapped_column(String(150), nullable=True)
@@ -94,6 +99,20 @@ class Employee(Base):
     department = relationship("Department", back_populates="employees")
     shift = relationship("Shift")
     company = relationship("Company")
+
+
+class EmployeeDocument(Base):
+    """Files kept for an employee: education certificates, NID / birth certificate copy, CV, etc."""
+    __tablename__ = "employee_documents"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    doc_type: Mapped[str] = mapped_column(String(30), default="OTHER")
+    title: Mapped[str] = mapped_column(String(150), default="")
+    stored_name: Mapped[str] = mapped_column(String(120))
+    original_name: Mapped[str] = mapped_column(String(200), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    uploaded_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
 class Device(Base):
@@ -135,6 +154,7 @@ class AttendanceLog(Base):
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
     accuracy_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     note: Mapped[str | None] = mapped_column(String(250), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
@@ -153,9 +173,78 @@ class Leave(Base):
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date] = mapped_column(Date)
-    leave_type: Mapped[str] = mapped_column(String(20))  # CASUAL / SICK / EARNED / MATERNITY / UNPAID
+    leave_type: Mapped[str] = mapped_column(String(20))  # code of a LeaveType (CASUAL / SICK / EARNED / MATERNITY / UNPAID ...)
     paid: Mapped[bool] = mapped_column(Boolean, default=True)
     note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    days: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(15), default="APPROVED")  # PENDING_DEPT / PENDING_FINAL / APPROVED / REJECTED / CANCELLED
+    source: Mapped[str] = mapped_column(String(10), default="HR")        # HR (granted) / SELF (requested by employee)
+    reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    document: Mapped[str | None] = mapped_column(String(200), nullable=True)   # stored file (prescription, maternity papers)
+    requested_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    dept_approved_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    dept_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    final_approved_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    final_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rejected_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reject_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    employee = relationship("Employee")
+
+
+class LeaveType(Base):
+    """Leave policy (Admin): yearly days and document rules per leave type."""
+    __tablename__ = "leave_types"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True)
+    name: Mapped[str] = mapped_column(String(80))
+    days_per_year: Mapped[int] = mapped_column(Integer, default=0)       # 0 = no yearly limit
+    paid: Mapped[bool] = mapped_column(Boolean, default=True)
+    doc_rule: Mapped[str] = mapped_column(String(10), default="NEVER")   # NEVER / ALWAYS / OVER_DAYS
+    doc_after_days: Mapped[int] = mapped_column(Integer, default=0)      # with OVER_DAYS: document needed above this
+    doc_label: Mapped[str] = mapped_column(String(80), default="Document")
+    gender: Mapped[str | None] = mapped_column(String(10), nullable=True)   # e.g. Female for maternity
+    self_request: Mapped[bool] = mapped_column(Boolean, default=True)      # employees may request it themselves
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SpecialHoliday(Base):
+    """Holiday for only some staff: one company, one department, or listed employees."""
+    __tablename__ = "special_holidays"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    scope: Mapped[str] = mapped_column(String(12))            # COMPANY / DEPARTMENT / EMPLOYEES
+    scope_value: Mapped[str] = mapped_column(Text, default="")  # company id / department id / employee codes (comma)
+
+
+class PayComponent(Base):
+    """Custom addition or deduction in payroll (Admin), e.g. Mobile allowance, Night allowance, Loan, PF."""
+    __tablename__ = "pay_components"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True)
+    name: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(3), default="ADD")       # ADD / DED
+    calc: Mapped[str] = mapped_column(String(15), default="FIXED")    # FIXED / PCT_BASIC / PCT_GROSS / PER_PRESENT_DAY / PER_OT_HOUR
+    value: Mapped[Decimal] = mapped_column(Money, default=0)
+    prorate: Mapped[bool] = mapped_column(Boolean, default=True)      # FIXED / % : reduce for joiners / leavers
+    company_id: Mapped[int] = mapped_column(Integer, default=0)       # 0 = all companies
+    department_id: Mapped[int] = mapped_column(Integer, default=0)    # 0 = all departments
+    assigned_only: Mapped[bool] = mapped_column(Boolean, default=False)  # only employees it is assigned to
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class EmployeeComponent(Base):
+    """Per-employee value for a pay component (overrides the default), or switches it off for that employee."""
+    __tablename__ = "employee_components"
+    __table_args__ = (UniqueConstraint("employee_id", "component_id", name="uq_emp_component"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    component_id: Mapped[int] = mapped_column(ForeignKey("pay_components.id"), index=True)
+    value: Mapped[Decimal | None] = mapped_column(Money, nullable=True)
+    excluded: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class DailyAttendance(Base):
@@ -201,6 +290,9 @@ class PayrollAdjustment(Base):
     other_deduction: Mapped[Decimal] = mapped_column(Money, default=0)
     tax: Mapped[Decimal] = mapped_column(Money, default=0)
     note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    items_json: Mapped[str | None] = mapped_column(Text, nullable=True)       # one-off items [{name, kind, amount}]
+    overrides_json: Mapped[str | None] = mapped_column(Text, nullable=True)   # admin edits {absent_days, ot_hours, ...}
+    edited_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class PayrollRun(Base):
@@ -259,6 +351,11 @@ class PayrollLine(Base):
     other_deduction: Mapped[Decimal] = mapped_column(Money)
     tax: Mapped[Decimal] = mapped_column(Money)
     stamp: Mapped[Decimal] = mapped_column(Money)
+    late_deduction: Mapped[Decimal | None] = mapped_column(Money, nullable=True, default=0)
+    custom_additions: Mapped[Decimal | None] = mapped_column(Money, nullable=True, default=0)
+    custom_deductions: Mapped[Decimal | None] = mapped_column(Money, nullable=True, default=0)
+    items_json: Mapped[str | None] = mapped_column(Text, nullable=True)    # [{name, kind, amount, source}]
+    edited: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     total_earnings: Mapped[Decimal] = mapped_column(Money)
     total_deductions: Mapped[Decimal] = mapped_column(Money)
     net_pay: Mapped[Decimal] = mapped_column(Money)

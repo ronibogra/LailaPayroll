@@ -25,6 +25,10 @@ LABELS = {
     "bonus_max_late_days": "Late days allowed for attendance bonus",
     "stamp_charge": "Revenue stamp deduction (Tk)",
     "round_net_to_taka": "Round net pay to whole taka (true/false)",
+    "ot_enabled": "Overtime applies (true/false) - false for Head Office",
+    "late_days_per_deduction": "Late days that cost a deduction (e.g. 3; 0 = off)",
+    "late_deduction_days": "Days deducted each time (e.g. 1)",
+    "half_day_late_minutes": "Late more than N minutes = half day deducted (0 = off)",
 }
 GROUP_DEFAULTS = {"weekend_days": "4", "geofence_lat": "0", "geofence_lon": "0", "geofence_radius_m": "200"}
 POLICY_PREFIX = "pay."

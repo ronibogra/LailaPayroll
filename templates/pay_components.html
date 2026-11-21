@@ -1,0 +1,34 @@
+{% extends "base.html" %}{% block title %}Pay components{% endblock %}{% block heading %}Pay components (custom additions &amp; deductions){% endblock %}
+{% block content %}
+<div class="panel"><p class="hint">Extra pay items added to every salary calculation, e.g. Mobile allowance, Night allowance, Tiffin per present day, Provident fund (% of basic), Loan instalment. Change them here, then process the payroll again. Locked (final) months are not changed.</p>
+<div class="table-wrap"><table><tr><th>Code</th><th>Name</th><th>Type</th><th>Calculation</th><th>Value</th><th>Applies to</th><th>Pro-rate</th><th>Active</th><th>Employees with own value / off</th><th></th></tr>
+{% for c in comps %}<tr><td><b>{{ c.code }}</b></td><td>{{ c.name }}</td><td><span class="tag {{ 'yes' if c.kind == 'ADD' else 'ABSENT' }}">{{ 'Addition' if c.kind == 'ADD' else 'Deduction' }}</span></td>
+<td>{{ calcs[c.calc] }}</td><td>{{ c.value }}</td>
+<td>{% if c.assigned_only %}Only assigned employees{% else %}{{ company_names.get(c.company_id, 'All companies') if c.company_id else 'All companies' }}{{ ' · ' ~ dept_names.get(c.department_id, '') if c.department_id }}{% endif %}</td>
+<td>{{ 'yes' if c.prorate else 'no' }}</td><td><span class="tag {{ 'yes' if c.active }}">{{ 'yes' if c.active else 'no' }}</span></td>
+<td>{% for ec, e in by_comp.get(c.id, [])[:12] %}<span class="tag {{ 'ABSENT' if ec.excluded }}" title="{{ e.full_name }}">{{ e.employee_code }}{{ ': off' if ec.excluded else (': ' ~ ec.value if ec.value is not none else '') }}</span> {% endfor %}{% if by_comp.get(c.id, [])|length > 12 %}+{{ by_comp[c.id]|length - 12 }} more{% endif %}</td>
+<td><a href="/payroll/components?edit={{ c.id }}">Edit</a></td></tr>
+{% else %}<tr><td colspan="10" class="empty">No custom pay components yet.</td></tr>{% endfor %}</table></div></div>
+<div class="grid2">
+<div class="panel"><h3>{{ 'Edit ' ~ e.code if e else 'Add pay component' }}</h3>
+<form method="post" action="/payroll/components/save"><input type="hidden" name="comp_id" value="{{ e.id if e else '' }}"><div class="form-grid">
+<div><label>Code</label><input name="code" required value="{{ e.code if e else '' }}" placeholder="e.g. MOBILE"></div>
+<div><label>Name (shown on payslip)</label><input name="name" required value="{{ e.name if e else '' }}" placeholder="e.g. Mobile allowance"></div>
+<div><label>Type</label><select name="kind"><option value="ADD">Addition (earning)</option><option value="DED" {{ 'selected' if e and e.kind == 'DED' }}>Deduction</option></select></div>
+<div><label>Calculation</label><select name="calc">{% for k, v in calcs.items() %}<option value="{{ k }}" {{ 'selected' if e and e.calc == k }}>{{ v }}</option>{% endfor %}</select></div>
+<div><label>Value (Tk or %)</label><input name="value" value="{{ e.value if e else '0' }}"></div>
+<div><label>Order</label><input type="number" name="sort" value="{{ e.sort if e else 10 }}"></div>
+<div><label>Company</label><select name="company_id"><option value="0">All companies</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if e and e.company_id == c.id }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div><label>Department</label><select name="department_id"><option value="0">All departments</option>{% for d in depts %}<option value="{{ d.id }}" {{ 'selected' if e and e.department_id == d.id }}>{{ d.name }}</option>{% endfor %}</select></div>
+<div><label><input type="checkbox" name="assigned_only" value="1" {{ 'checked' if e and e.assigned_only }}> Only employees assigned below</label></div>
+<div><label><input type="checkbox" name="prorate" value="1" {{ 'checked' if not e or e.prorate }}> Reduce for joiners / leavers (fixed and %)</label></div>
+<div><label><input type="checkbox" name="active" value="1" {{ 'checked' if not e or e.active }}> Active</label></div>
+</div><p><button>Save component</button>{% if e %} <a class="btn sec" href="/payroll/components">Cancel</a>{% endif %}</p></form></div>
+<div class="panel"><h3>Employees: own value, include or switch off</h3>
+<form method="post" action="/payroll/components/assign"><label>Component</label><select name="component_id" style="width:100%">{% for c in comps %}<option value="{{ c.id }}">{{ c.code }} - {{ c.name }}</option>{% endfor %}</select>
+<label style="margin-top:10px">Employee codes (one per line or comma separated)</label><textarea name="employee_codes" rows="4" style="width:100%"></textarea>
+<label style="margin-top:10px">What to do</label><select name="mode" style="width:100%"><option value="value">Give these employees (their own value, or the default if empty)</option><option value="exclude">Switch it OFF for these employees</option><option value="remove">Back to the normal rule</option></select>
+<label style="margin-top:10px">Own value (optional)</label><input name="value" style="width:100%">
+<p><button {{ 'disabled' if not comps }}>Apply</button></p></form></div>
+</div>
+{% endblock %}

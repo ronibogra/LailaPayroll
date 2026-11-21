@@ -33,7 +33,7 @@ jobs:
       - name: Build LailaPayroll program (PyInstaller)
         run: |
           python -m PyInstaller --noconfirm --clean --onedir --noconsole --name LailaPayroll `
-            --icon static\img\lg-logo.ico `
+            --icon installer\sphere.ico `
             --add-data "templates;templates" --add-data "static;static" `
             --collect-submodules uvicorn --collect-submodules sqlalchemy.dialects.sqlite `
             --hidden-import python_multipart --hidden-import multipart --hidden-import pyodbc `

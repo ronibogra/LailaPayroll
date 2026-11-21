@@ -101,7 +101,7 @@ def main():
     step("every page opens")
     for p in ("/", "/attendance", "/punches", "/punches/first-last", "/leaves", "/shifts", "/devices",
               "/devices?new=1", "/employees", "/payroll", "/settings", "/users", "/users?role=HR", "/audit", "/errors",
-              "/employees/new", "/backup"):
+              "/employees/new", "/backup", "/leave-policy", "/leaves/approvals", "/payroll/components"):
         page(s, p, must="LAILA GROUP")
 
     step("ZKTeco machine handshake -> appears as pending")
@@ -422,6 +422,167 @@ def main():
         code = c.get(BASE + forbidden, timeout=30, headers={"accept": "text/html"}).status_code
         ok(code in (403, 405), f"{forbidden} must be forbidden for the clerk, got {code}")
     post(s, "/roles/PUNCH_CLERK/delete", must="Some users still have this role", must_not=None)
+
+    step("Head Office has no overtime by default (pay policy)")
+    page(s, "/settings?policy_company=1", must='name="ot_enabled" value="False"')
+    page(s, "/settings?policy_company=2", must='name="ot_enabled" value="True"')
+
+    step("employee profile: NID / birth certificate / passport, certificates upload, one-click PDF")
+    kid = re.search(r'/employees/(\d+)/edit">Edit', page(s, "/employees?q=12127").text).group(1)
+    form = {"emp_id": kid, "company_id": "1", "employee_code": "12127", "card_no": "12127", "full_name": "Abdul Karim",
+            "designation": "Accountant", "department": "Accounts", "gender": "Male", "nid": "1990123456789",
+            "birth_certificate_no": "19902612345678901", "passport_no": "A01234567", "gross": "30000",
+            "auto_split": "1", "payment_mode": "BANK", "employment_status": "ACTIVE", "ot_field": "1", "ot_eligible": "1"}
+    r = post(s, "/employees/save", form, files={"_": ("", b"")}, must="19902612345678901")
+    ok("A01234567" in r.text and "Profile PDF" in r.text, "profile must show ID numbers and the PDF button")
+    pdf_doc = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+    r = post(s, f"/employees/{kid}/documents", {"doc_type": "EDUCATION", "title": "SSC certificate"},
+             files=[("files", ("ssc.pdf", pdf_doc, "application/pdf")), ("files", ("hsc.jpg", b"\xff\xd8\xff\xe0jpg", "image/jpeg"))],
+             must="2 document(s) saved")
+    ok("SSC certificate" in r.text and "Educational certificate" in r.text, "documents list")
+    doc_id = re.search(rf'/employees/{kid}/documents/(\d+)" target="_blank">ssc.pdf', r.text).group(1)
+    ok(s.get(BASE + f"/employees/{kid}/documents/{doc_id}", timeout=30).content == pdf_doc, "document download")
+    post(s, f"/employees/{kid}/documents", {"doc_type": "OTHER"}, files={"files": ("bad.exe", b"MZ", "application/x-msdownload")},
+         must="not allowed", must_not=None)
+    r = page(s, f"/employees/{kid}/profile.pdf")
+    ok(r.content[:4] == b"%PDF" and r.headers["content-type"] == "application/pdf", "profile PDF")
+    # role without "salary.edit" can edit the profile but not the salary
+    post(s, "/roles/save", {"name": "hr_nosal", "label": "HR without salary", "perm_dashboard.view": "1",
+                            "perm_employees.view": "1", "perm_employees.edit": "1"}, must="Role HR_NOSAL saved")
+    post(s, "/users/save", {"username": "hrnosal", "role": "HR_NOSAL", "password": "Hrnosal@12345", "active": "1"},
+         must="saved")
+    h = requests.Session()
+    post(h, "/login", {"username": "hrnosal", "password": "Hrnosal@12345"}, must="Dashboard")
+    r = page(h, f"/employees/{kid}/edit", must="cannot change salaries")
+    ok('name="gross"' not in r.text, "salary fields must be hidden without salary.edit")
+    post(h, "/employees/save", dict(form, gross="99999", designation="Senior Accountant"), files={"_": ("", b"")},
+         must="Saved 12127")
+    r = page(s, f"/employees/{kid}", must="Senior Accountant")
+    ok("Tk 30,000" in r.text and "99,999" not in r.text, "salary must not change without salary.edit")
+
+    step("leave policy, HR grant with document rule, mobile request, Department Head + CFO approval")
+    r = page(s, "/leave-policy", must="Medical / sick leave")
+    ok("Doctor" in r.text and "Maternity leave" in r.text, "default leave types")
+    post(s, "/leave-policy/type", {"code": "PATERNITY", "name": "Paternity leave", "days_per_year": "5", "paid": "1",
+                                   "doc_rule": "ALWAYS", "doc_label": "Child birth certificate", "gender": "Male",
+                                   "self_request": "1", "active": "1", "sort": "6"}, must="Leave type PATERNITY saved")
+    post(s, "/users/save", {"username": "depthead1", "full_name": "Accounts Head", "role": "DEPT_HEAD",
+                            "password": "Head@12345", "active": "1"}, must="saved")
+    post(s, "/users/save", {"username": "cfo1", "full_name": "The CFO", "role": "CFO", "password": "Cfo@123456",
+                            "active": "1"}, must="saved")
+    r = page(s, "/leave-policy")
+    acc = re.search(r'<td>Accounts</td><td><select name="head_(\d+)"', r.text).group(1)
+    post(s, "/leave-policy/workflow", {"workflow": "DEPT_FINAL", f"head_{acc}": "depthead1"}, must="Approval workflow")
+    ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+    nn = date(ny, nm, 1) + timedelta(days=40)       # well in the future, no attendance yet
+    sick = {"employee_code": "12127", "leave_type": "SICK", "start_date": str(nn), "end_date": str(nn + timedelta(days=4))}
+    post(s, "/leaves", sick, must="needs a document: Doctor", must_not=None)
+    post(s, "/leaves", sick, files={"document": ("rx.pdf", pdf_doc, "application/pdf")}, must="Leave saved")
+    r = page(s, "/leaves?emp=12127", must="Medical / sick leave")
+    post(s, "/leaves", {"employee_code": "12127", "leave_type": "MATERNITY", "start_date": str(nn + timedelta(days=10)),
+                        "end_date": str(nn + timedelta(days=11))}, must="only for female", must_not=None)
+    # HO-0001 (Md. Rahim, Accounts) requests leave from the phone
+    rid = re.search(r'/employees/(\d+)/edit">Edit', page(s, "/employees?q=HO-0001").text).group(1)
+    post(s, "/employees/save", {"emp_id": rid, "company_id": "1", "employee_code": "HO-0001", "card_no": "1001",
+                                "full_name": "Md. Rahim", "department": "Accounts", "gender": "Male", "gross": "12500",
+                                "auto_split": "1", "payment_mode": "BANK", "employment_status": "ACTIVE",
+                                "allow_mobile": "1"}, files={"_": ("", b"")}, must="Saved HO-0001")
+    mob = requests.Session()
+    r = mob.post(HTTPS + "/m/login", data={"employee_code": "HO-0001", "pin": "4321"}, verify=False, timeout=30)
+    ok("Leave" in r.text and "cannot be typed or changed" in r.text, "mobile page must say location is automatic")
+    r = mob.get(HTTPS + "/m?tab=leave", verify=False, timeout=30)
+    ok("Request leave" in r.text and "Casual leave" in r.text and "Paternity leave" in r.text, "mobile leave tab")
+    r = mob.post(HTTPS + "/m/leave", data={"leave_type": "SICK", "start_date": str(nn + timedelta(days=20)),
+                                           "end_date": str(nn + timedelta(days=24)), "reason": "fever"},
+                 verify=False, timeout=30)
+    ok("needs a document" in r.text, f"medical > 3 days without prescription must be refused: {r.text[:300]}")
+    r = mob.post(HTTPS + "/m/leave", data={"leave_type": "CASUAL", "start_date": str(nn + timedelta(days=20)),
+                                           "end_date": str(nn + timedelta(days=21)), "reason": "family programme"},
+                 verify=False, timeout=30)
+    ok("waiting for department head" in r.text, f"mobile leave request: {r.text[:400]}")
+    dh = requests.Session()
+    post(dh, "/login", {"username": "depthead1", "password": "Head@12345"}, must="Dashboard")
+    r = page(dh, "/leaves/approvals", must="Md. Rahim")
+    lid = re.search(r"/leaves/(\d+)/decide", r.text).group(1)
+    cfo = requests.Session()
+    post(cfo, "/login", {"username": "cfo1", "password": "Cfo@123456"}, must="Dashboard")
+    page(cfo, "/leaves/approvals", must="No leave requests are waiting")    # not yet: Department Head first
+    post(dh, f"/leaves/{lid}/decide", {"action": "approve"}, must="sent for final approval")
+    page(cfo, "/leaves/approvals", must="Md. Rahim")
+    post(cfo, f"/leaves/{lid}/decide", {"action": "reject"}, must="Write a reason", must_not=None)
+    post(cfo, f"/leaves/{lid}/decide", {"action": "approve"}, must="approved")
+    r = mob.get(HTTPS + "/m?tab=leave", verify=False, timeout=30)
+    ok("Approved" in r.text, "employee must see the approval")
+    r = mob.post(HTTPS + "/m/leave", data={"leave_type": "CASUAL", "start_date": str(nn + timedelta(days=30)),
+                                           "end_date": str(nn + timedelta(days=30)), "reason": "bank work"},
+                 verify=False, timeout=30)
+    lid2 = re.findall(r"/m/leave/(\d+)/cancel", r.text)
+    ok(lid2, "pending request must be cancellable")
+    post(dh, f"/leaves/{lid2[0]}/decide", {"action": "reject", "reason": "month end closing"}, must="rejected")
+    r = mob.get(HTTPS + "/m?tab=leave", verify=False, timeout=30)
+    ok("month end closing" in r.text, "employee must see the reject reason")
+    ws = load_workbook(io.BytesIO(page(s, f"/export/leaves.xlsx?start={nn}&end={nn + timedelta(days=40)}&leave_status=APPROVED").content)).active
+    head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
+    vals = {(ws.cell(i, head.index("Code") + 1).value, ws.cell(i, head.index("Status") + 1).value) for i in range(6, ws.max_row + 1)}
+    ok(("HO-0001", "Approved") in vals and ("12127", "Approved") in vals and len(vals) == 2, f"leave report: {vals}")
+
+    step("mobile punch: location is mandatory; outside the office is refused, or recorded with the distance")
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "0", "longitude": "0", "accuracy": "10"}, verify=False, timeout=30)
+    ok(not r.json()["ok"] and "Location is required" in r.json()["message"], f"no location: {r.text}")
+    post(s, "/settings/general", {"wd4": "1", "geofence_lat": "23.80", "geofence_lon": "90.40", "geofence_radius_m": "200",
+                                  "geofence_mode": "RECORD"}, must="Saved")
+    page(s, "/settings", must='value="RECORD" selected')
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.90", "longitude": "90.40", "accuracy": "15"}, verify=False,
+                 timeout=30)
+    ok(r.json()["ok"] and "OUTSIDE" in r.json()["location"] or "Already punched" in r.json()["message"],
+       f"RECORD mode must keep far punches: {r.text}")
+    post(s, "/settings/general", {"wd4": "1", "geofence_lat": "23.80", "geofence_lon": "90.40", "geofence_radius_m": "200",
+                                  "geofence_mode": "STRICT"}, must="Saved")
+
+    step("holiday for some staff only + late counting from end of grace")
+    post(s, "/settings/special-holidays", {"day": str(date(y, m, 3)), "name": "CI team day off", "scope": "EMPLOYEES",
+                                           "employee_codes": "12127"}, must="Holiday saved")
+    post(s, "/settings/special-holidays", {"day": str(date(y, m, 3)), "name": "x", "scope": "EMPLOYEES",
+                                           "employee_codes": "NOPE-1"}, must="Unknown employee codes", must_not=None)
+    page(s, "/settings", must="CI team day off")
+    post(s, "/shifts/save", {"code": "LATEG", "name": "Late from grace", "start": "09:00", "end": "18:00",
+                             "grace_minutes": "10", "break_minutes": "60", "break_after_minutes": "300",
+                             "early_window_minutes": "180", "ot_round_minutes": "30", "max_ot_minutes": "120",
+                             "late_count_from": "GRACE_END"}, must="saved")
+    page(s, "/shifts", must="end of grace")
+
+    step("pay components and Admin payroll editing (LTL draft)")
+    post(s, "/payroll/components/save", {"code": "MOBILE", "name": "Mobile allowance", "kind": "ADD", "calc": "FIXED",
+                                         "value": "500", "company_id": "2", "prorate": "1", "active": "1"},
+         must="Mobile allowance saved")
+    post(s, "/payroll/components/save", {"code": "PF", "name": "Provident fund", "kind": "DED", "calc": "PCT_BASIC",
+                                         "value": "5", "assigned_only": "1", "active": "1"}, must="Provident fund saved")
+    r = page(s, "/payroll/components", must="Provident fund")
+    pf = re.search(r'<option value="(\d+)">PF - Provident fund', r.text).group(1)
+    post(s, "/payroll/components/assign", {"component_id": pf, "employee_codes": "LTL-0001", "mode": "value"},
+         must="1 employee(s) updated")
+    post(s, "/payroll/process", {"month": month, "company_id": "2"}, must="Draft payroll ready")
+    kar = re.search(r'/employees/(\d+)/edit">Edit', page(s, "/employees?q=LTL-0001").text).group(1)
+    r = page(s, f"/payroll/line?company=2&month={month}&emp={kar}", must="Mobile allowance")
+    ok("Provident fund" in r.text, "assigned component must apply")
+    net_before = re.search(r"<b>Tk ([0-9,.]+)</b>", r.text).group(1)
+    r = post(s, "/payroll/line", {"company_id": "2", "employee_id": kar, "month": month, "absent_days": "1",
+                                  "ot_hours": "4", "other_addition": "0", "advance": "0", "other_deduction": "0", "tax": "0",
+                                  "item_name": ["Arrear salary", ""], "item_kind": ["ADD", "ADD"], "item_amount": ["750", ""]},
+             must="payroll recalculated")
+    ok("Arrear salary" in r.text and "absent days set to 1 by admin" in r.text, "edit must show in the line")
+    ok(re.search(r"<b>Tk ([0-9,.]+)</b>", r.text).group(1) != net_before, "net pay must change after the edit")
+    r = page(s, f"/payroll?company=2&month={month}", must="edited")
+    run2 = re.search(r"/payroll/run/(\d+)/salary.xlsx", r.text).group(1)
+    r = page(s, f"/payroll/run/{run2}/payslips.pdf?employee_code=LTL-0001")
+    ok(r.content[:4] == b"%PDF", "payslip with custom items")
+    ws = load_workbook(io.BytesIO(page(s, f"/export/payroll.xlsx?company=2&month={month}").content)).active
+    head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
+    ok("Allowances" in head and "Late ded." in head, f"payroll report columns: {head}")
+    page(s, f"/payroll/line?company=1&month={month}&emp={kid}", must="final (locked)")
+    ok(c.get(BASE + "/payroll/components", timeout=30, headers={"accept": "text/html"}).status_code == 403,
+       "pay components are Admin only")
+    page(h, "/shifts", code=403)
 
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")

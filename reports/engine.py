@@ -13,7 +13,7 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from services.branding import BRAND, logo_path
+from services.branding import BRAND, PRODUCT_LOGO, logo_path
 
 
 @dataclass
@@ -151,7 +151,8 @@ def to_excel(report: Report, cols: list[Col], rows: list, subtitle: str = "") ->
     ws["B1"].font = Font(bold=True, size=15, color="E8332F")
     ws["B2"] = report.title + (f" - {subtitle}" if subtitle else "")
     ws["B2"].font = Font(bold=True, size=11)
-    ws["B3"] = f"Printed {datetime.now():%d/%m/%Y %H:%M} · {len(rows)} rows"
+    from config import settings
+    ws["B3"] = f"Printed {datetime.now():%d/%m/%Y %H:%M} · {len(rows)} rows · SPhere Payroll · {settings.developer_credit}"
     ws["B3"].font = Font(size=9, color="777777")
     hr = 5
     for i, c in enumerate(cols, start=1):
@@ -291,7 +292,11 @@ def to_pdf(report: Report, cols: list[Col], rows: list, subtitle: str = "") -> b
         if BRAND.get("address"):
             canv.drawRightString(W - 10 * mm, H - 13 * mm, BRAND["address"][:90])
         canv.drawRightString(W - 10 * mm, H - 18.5 * mm, f"Printed {printed} · {len(rows)} rows")
-        canv.drawString(10 * mm, 7 * mm, settings.developer_credit)
+        try:
+            canv.drawImage(str(PRODUCT_LOGO), 10 * mm, 4.5 * mm, 13 * mm, 8 * mm, mask="auto", preserveAspectRatio=True)
+        except Exception:  # noqa: BLE001
+            pass
+        canv.drawString(24 * mm, 7 * mm, f"SPhere Payroll · {settings.developer_credit}")
         canv.drawRightString(W - 10 * mm, 7 * mm, f"Page {doc.page}")
         canv.restoreState()
 

@@ -1,7 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>First-time setup · {{ brand.name }}</title><link rel="icon" href="/brand/logo.png?v={{ brand.logo_version }}"><link rel="stylesheet" href="/static/css/style.css"></head>
 <body class="login-page"><div class="login-card" style="width:min(640px,94vw);text-align:left">
-<div style="text-align:center"><img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><h1>{{ brand.name }} Attendance &amp; Payroll</h1>
+<div style="text-align:center"><img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><h1>SPhere Payroll</h1><p class="hint" style="margin:0">Attendance &amp; Payroll for {{ brand.name }}</p>
 <p class="hint">Fresh installation - first-time setup (one time only)</p></div>
 {% if err %}<div class="alert err">{{ err }}</div>{% endif %}
 <form method="post" action="/setup" enctype="multipart/form-data">
@@ -28,4 +28,4 @@ LAUNDRY, Laundry Factory</textarea></div>
 <div><label>Allowed radius (m)</label><input name="geofence_radius_m" value="200"></div></div></div>
 <button style="width:100%">Finish setup</button></form>
 <p class="hint" style="margin-top:14px">Office PCs open: {% for ip in ips %}<b>http://{{ ip }}:{{ settings.port }}</b> {% endfor %}</p>
-<p class="hint" style="text-align:center">{{ settings.developer_credit }}</p></div></body></html>
+<div class="product-foot"><img src="/static/img/sphere-payroll.png" alt="SPhere Payroll"><p class="hint">{{ settings.developer_credit }}</p></div></div></body></html>

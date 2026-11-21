@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% block title %}Leave policy{% endblock %}{% block heading %}Leave policy{% endblock %}
+{% block content %}
+<div class="panel"><h3>Leave types</h3>
+<div class="table-wrap"><table><tr><th>Code</th><th>Name</th><th>Days / year</th><th>Paid</th><th>Document rule</th><th>Only for</th><th>Employees may request</th><th>Active</th><th></th></tr>
+{% for t in types %}<tr><td><b>{{ t.code }}</b></td><td>{{ t.name }}</td><td>{{ t.days_per_year or 'no limit' }}</td><td>{{ 'yes' if t.paid else 'no (deducted)' }}</td>
+<td>{% if t.doc_rule == 'ALWAYS' %}Always: {{ t.doc_label }}{% elif t.doc_rule == 'OVER_DAYS' %}More than {{ t.doc_after_days }} days: {{ t.doc_label }}{% else %}-{% endif %}</td>
+<td>{{ t.gender or 'everyone' }}</td><td>{{ 'yes' if t.self_request else 'no' }}</td><td><span class="tag {{ 'yes' if t.active }}">{{ 'yes' if t.active else 'no' }}</span></td><td><a href="/leave-policy?edit={{ t.id }}">Edit</a></td></tr>{% endfor %}</table></div></div>
+<div class="grid2">
+<div class="panel"><h3>{{ 'Edit ' ~ e.code if e else 'Add leave type' }}</h3>
+<form method="post" action="/leave-policy/type"><input type="hidden" name="type_id" value="{{ e.id if e else '' }}"><div class="form-grid">
+<div><label>Code</label><input name="code" required value="{{ e.code if e else '' }}" placeholder="e.g. PATERNITY"></div>
+<div><label>Name</label><input name="name" required value="{{ e.name if e else '' }}"></div>
+<div><label>Days per year (0 = no limit)</label><input type="number" name="days_per_year" min="0" value="{{ e.days_per_year if e else 0 }}"></div>
+<div><label>Order</label><input type="number" name="sort" value="{{ e.sort if e else 10 }}"></div>
+<div><label>Document needed</label><select name="doc_rule">{% for k, v in [('NEVER','Never'),('OVER_DAYS','When longer than N days'),('ALWAYS','Always')] %}<option value="{{ k }}" {{ 'selected' if e and e.doc_rule == k }}>{{ v }}</option>{% endfor %}</select></div>
+<div><label>N days (for "longer than")</label><input type="number" name="doc_after_days" min="0" value="{{ e.doc_after_days if e else 3 }}"></div>
+<div><label>Document name</label><input name="doc_label" value="{{ e.doc_label if e else '' }}" placeholder="e.g. Doctor's prescription"></div>
+<div><label>Only for</label><select name="gender"><option value="">Everyone</option>{% for g in ('Female','Male') %}<option {{ 'selected' if e and e.gender == g }}>{{ g }}</option>{% endfor %}</select></div>
+<div><label><input type="checkbox" name="paid" value="1" {{ 'checked' if not e or e.paid }}> Paid leave</label></div>
+<div><label><input type="checkbox" name="self_request" value="1" {{ 'checked' if not e or e.self_request }}> Employees may request it on mobile</label></div>
+<div><label><input type="checkbox" name="active" value="1" {{ 'checked' if not e or e.active }}> Active</label></div>
+</div><p><button>Save leave type</button>{% if e %} <a class="btn sec" href="/leave-policy">Cancel</a>{% endif %}</p></form>
+<p class="hint">Example: Medical leave of more than 3 days needs a doctor's prescription; maternity leave always needs papers. Changes apply to new leave; leave already saved is kept.</p></div>
+<div class="panel"><h3>Approval workflow</h3>
+<form method="post" action="/leave-policy/workflow">
+{% for k, v in workflows.items() %}<label style="display:block;margin:4px 0"><input type="radio" name="workflow" value="{{ k }}" {{ 'checked' if workflow == k }}> {{ v }}</label>{% endfor %}
+<h4 style="margin:14px 0 6px">Department Heads</h4><p class="hint">Requests from a department go to its head first (user with the <b>Department Head</b> role or the "approve as Department Head" permission). Departments without a head skip that step. Final approval: users with "final approval" (e.g. the <b>CFO</b> role).</p>
+<div class="table-wrap"><table>{% for d in depts %}<tr><td>{{ d.name }}</td><td><select name="head_{{ d.id }}"><option value="">- no head -</option>{% for u in users %}<option value="{{ u.username }}" {{ 'selected' if d.head_username == u.username }}>{{ u.username }}{{ ' - ' ~ u.full_name if u.full_name }} ({{ u.role }})</option>{% endfor %}</select></td></tr>{% else %}<tr><td class="hint">No departments yet - they are created when you add or import employees.</td></tr>{% endfor %}</table></div>
+<p><button>Save workflow</button></p></form></div>
+</div>
+{% endblock %}

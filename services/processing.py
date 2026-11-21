@@ -6,8 +6,10 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
 
 from attendance.rules import ShiftRule, evaluate_month, MonthSummary
-from models import Employee, Shift, AttendanceLog, Holiday, Leave, DailyAttendance, PayrollRun
-from services.policy import weekend_set
+from dataclasses import replace
+
+from models import Employee, Shift, AttendanceLog, Holiday, Leave, DailyAttendance, PayrollRun, SpecialHoliday
+from services.policy import weekend_set, load_policy
 
 DEFAULT_SHIFT = ShiftRule()
 
@@ -24,7 +26,20 @@ def shift_rule(s: Shift | None) -> ShiftRule:
     return ShiftRule(code=s.code, start=s.start, end=s.end, grace_minutes=s.grace_minutes,
                      break_minutes=s.break_minutes, break_after_minutes=s.break_after_minutes,
                      early_window_minutes=s.early_window_minutes, ot_round_minutes=s.ot_round_minutes,
-                     max_ot_minutes=s.max_ot_minutes, offday_work_is_ot=s.offday_work_is_ot)
+                     max_ot_minutes=s.max_ot_minutes, offday_work_is_ot=s.offday_work_is_ot,
+                     late_count_from=s.late_count_from or "START")
+
+
+def holiday_applies(h: SpecialHoliday, e: Employee) -> bool:
+    v = (h.scope_value or "").strip()
+    if h.scope == "COMPANY":
+        return v.isdigit() and e.company_id == int(v)
+    if h.scope == "DEPARTMENT":
+        return v.isdigit() and e.department_id == int(v)
+    if h.scope == "EMPLOYEES":
+        codes = {c.strip().lower() for c in v.replace("\n", ",").split(",") if c.strip()}
+        return e.employee_code.lower() in codes or e.card_no.lower() in codes
+    return False
 
 
 def final_company_ids(db: Session, year: int, month: int) -> set[int]:
@@ -62,8 +77,11 @@ def process_month(db: Session, year: int, month: int, company_ids=None, save: bo
         punches[card].append(t)
 
     holidays = {h.day for h in db.scalars(select(Holiday).where(Holiday.day >= first, Holiday.day <= last))}
+    specials = list(db.scalars(select(SpecialHoliday).where(SpecialHoliday.day >= first, SpecialHoliday.day <= last)))
+    ot_on = {}
     leave_map: dict[int, dict[date, str]] = defaultdict(dict)
-    for lv in db.scalars(select(Leave).where(Leave.start_date <= last, Leave.end_date >= first)):
+    for lv in db.scalars(select(Leave).where(Leave.start_date <= last, Leave.end_date >= first,
+                                             Leave.status == "APPROVED")):
         d = max(lv.start_date, first)
         while d <= min(lv.end_date, last):
             leave_map[lv.employee_id][d] = "PAID" if lv.paid else "UNPAID"
@@ -72,8 +90,13 @@ def process_month(db: Session, year: int, month: int, company_ids=None, save: bo
     results: dict[int, MonthSummary] = {}
     for e in employees:
         rule = shifts.get(e.shift_id, default)
+        if e.company_id not in ot_on:
+            ot_on[e.company_id] = load_policy(db, e.company_id).ot_enabled
+        if not ot_on[e.company_id] or e.ot_eligible is False:
+            rule = replace(rule, ot_allowed=False)
+        own = holidays | {h.day for h in specials if holiday_applies(h, e)}
         results[e.id] = evaluate_month(year, month, punches.get(e.card_no, []), rule,
-                                       weekend, holidays, leave_map.get(e.id),
+                                       weekend, own, leave_map.get(e.id),
                                        e.joined_on, e.left_on)
 
     if save:

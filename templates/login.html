@@ -1,9 +1,9 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Login · {{ brand.name }}</title><link rel="icon" href="/brand/logo.png?v={{ brand.logo_version }}"><link rel="stylesheet" href="/static/css/style.css"></head>
+<title>Login · {{ brand.name }} · SPhere Payroll</title><link rel="icon" href="/brand/logo.png?v={{ brand.logo_version }}"><link rel="stylesheet" href="/static/css/style.css"></head>
 <body class="login-page"><div class="login-card">
 <img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><h1>{{ brand.name }}</h1><p class="hint">Attendance &amp; Payroll</p>
 {% if err %}<div class="alert err">{{ err }}</div>{% endif %}
 <form method="post" action="/login"><label>Username</label><input name="username" required autofocus>
 <label>Password</label><input name="password" type="password" required><button type="submit">Sign in</button></form>
 <p class="hint" style="margin-top:16px">Employees: use <a href="/m">mobile attendance</a></p>
-<p class="hint">{{ settings.developer_credit }}</p></div></body></html>
+<div class="product-foot"><img src="/static/img/sphere-payroll.png" alt="SPhere Payroll"><p class="hint">{{ settings.developer_credit }}</p></div></div></body></html>

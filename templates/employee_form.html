@@ -27,13 +27,14 @@
 {{ sel('blood_group', 'Blood group', ['A+','A-','B+','B-','AB+','AB-','O+','O-']) }}
 {{ sel('religion', 'Religion', ['Islam','Hinduism','Christianity','Buddhism','Other']) }}
 {{ sel('marital_status', 'Marital status', ['Single','Married','Widowed','Divorced']) }}
-{{ f('nid', 'NID / birth certificate no.') }}{{ f('phone', 'Mobile') }}{{ f('email', 'Email', 'email') }}
+{{ f('nid', 'NID no.') }}{{ f('birth_certificate_no', 'Birth certificate no.') }}{{ f('passport_no', 'Passport no.') }}{{ f('phone', 'Mobile') }}{{ f('email', 'Email', 'email') }}
 {{ f('emergency_contact', 'Emergency contact (name & phone)') }}{{ f('education', 'Education') }}
 </div><div class="form-grid" style="margin-top:12px">
 <div><label>Present address</label><textarea name="present_address" rows="2" style="width:100%">{{ e.present_address or '' if e else '' }}</textarea></div>
 <div><label>Permanent address</label><textarea name="permanent_address" rows="2" style="width:100%">{{ e.permanent_address or '' if e else '' }}</textarea></div>
 <div><label>Notes</label><textarea name="notes" rows="2" style="width:100%">{{ e.notes or '' if e else '' }}</textarea></div>
 </div></div>
+{% if 'salary.edit' in user.perms %}
 <div class="panel"><h3>Salary &amp; payment</h3><div class="form-grid">
 <div><label>Gross (Tk)</label><input name="gross" value="{{ e.gross if e else '' }}"></div>
 <div><label><input type="checkbox" name="auto_split" value="1" {{ 'checked' if not e or not e.basic }}> Split gross automatically (pay policy)</label></div>
@@ -41,7 +42,9 @@
 <div><label>{{ lbl }}</label><input name="{{ fld }}" value="{{ e[fld] if e else '' }}"></div>{% endfor %}
 <div><label>Payment mode</label><select name="payment_mode">{% for m in ('CASH','BANK','MOBILE') %}<option {{ 'selected' if e and e.payment_mode == m }}>{{ m }}</option>{% endfor %}</select></div>
 {{ f('bank_name', 'Bank / wallet (bKash, Nagad...)') }}{{ f('account_no', 'Account / wallet number') }}
-</div></div>
+<div><input type="hidden" name="ot_field" value="1"><label><input type="checkbox" name="ot_eligible" value="1" {{ 'checked' if not e or e.ot_eligible is not false }}> Overtime applies to this employee</label></div>
+</div><p class="hint">Overtime is also switched off for a whole company in its pay policy (e.g. Head Office).</p></div>
+{% else %}<div class="panel"><h3>Salary &amp; payment</h3><p class="hint">Your role cannot change salaries, pay mode or overtime. Ask an Admin / HR with salary rights.</p></div>{% endif %}
 <div class="panel"><h3>Mobile attendance</h3><div class="form-grid">
 <div><label><input type="checkbox" name="allow_mobile" value="1" {{ 'checked' if e and e.allow_mobile }}> Allow punching from phone</label></div>
 <div><label>Set new PIN (4+ digits, blank = keep)</label><input name="mobile_pin" inputmode="numeric" autocomplete="off"></div>

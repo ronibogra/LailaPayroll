@@ -63,7 +63,7 @@ set VPY=.venv-build\Scripts\python.exe
 echo === 4/5 Testing and building LailaPayroll.exe ===
 %VPY% -m pytest -q || (echo Tests failed - not building & goto :err)
 %VPY% -m PyInstaller --noconfirm --clean --onedir --noconsole --name LailaPayroll ^
-  --icon static\img\lg-logo.ico ^
+  --icon installer\sphere.ico ^
   --add-data "templates;templates" --add-data "static;static" ^
   --collect-submodules uvicorn --collect-submodules sqlalchemy.dialects.sqlite ^
   --hidden-import python_multipart --hidden-import multipart --hidden-import pyodbc ^
