@@ -623,6 +623,38 @@ def main():
     ok(row[0] == "LTL-0001" and float(row[1]) == 275 and float(row[2]) == 1200, f"tax / other addition not applied: {row}")
     post(s, "/report-columns/payroll", {"reset": "1", "back": "/reports/payroll"})
     page(s, f"/payroll/inputs?company=1&month={month}&tab=tax", must="final (locked)")
+
+    step("festival bonus, bank advice letter, bank / mobile upload file, payslip")
+    r = page(s, f"/payroll/bonus?company=2&month={month}&name=Eid-ul-Fitr+bonus&percent=100&basis=basic&min_months=6&calc=1",
+             must="calculated, not saved yet")
+    amt = re.search(rf'name="amt_{kar}" value="([0-9.]+)"', r.text)
+    ok(amt and float(amt.group(1)) > 0, "Karima must get the Eid bonus (joined 2024, basic set)")
+    post(s, "/payroll/bonus", {"company_id": "2", "month": month, "name": "Eid-ul-Fitr bonus", "emp": kar,
+                               f"amt_{kar}": amt.group(1), "process": "1"}, must="Eid-ul-Fitr bonus saved for 1")
+    r = page(s, f"/payroll/line?company=2&month={month}&emp={kar}", must="Eid-ul-Fitr bonus")
+    r = page(s, f"/payroll/bonus?company=2&month={month}&name=Eid-ul-Fitr+bonus&percent=50&min_months=99&calc=1")
+    ok("service" in r.text, "minimum service rule must explain why there is no bonus")
+    post(s, "/payroll/bank-settings", {"company_id": "2", "month": month, "bank_name": "Dutch-Bangla Bank PLC",
+                                       "branch": "Motijheel", "account_no": "1011100000001", "signatory1": "MD"},
+         must="salary account saved")
+    r = page(s, f"/payroll?company=2&month={month}", must="Salary payment (disbursement)")
+    run2 = re.search(r"/payroll/run/(\d+)/payment.pdf", r.text).group(1)
+    r = page(s, f"/payroll/run/{run2}/payment.pdf")
+    ok(r.content[:4] == b"%PDF", "payment advice PDF")
+    wb = load_workbook(io.BytesIO(page(s, f"/payroll/run/{run2}/transfer.xlsx").content))
+    ok(wb.sheetnames, "transfer workbook")
+    ws = load_workbook(io.BytesIO(page(s, f"/payroll/run/{run2}/salary.xlsx").content))["Salary Sheet"]
+    head = [ws.cell(r, i).value for r in range(1, 7) for i in range(1, ws.max_column + 1)]
+    ok("Allowances / Bonus" in head and "Late Ded." in head, f"salary sheet columns: {head}")
+    r = page(s, f"/payroll/run/{run2}/payslips.pdf?employee_code=LTL-0001")
+    ok(r.content[:4] == b"%PDF", "payslip")
+
+    step("staff ID cards: A4 sheet and card printer")
+    page(s, "/idcards", must="Print staff ID cards")
+    for q in ("company=2&layout=a4&sides=both", "codes=12127,LTL-0001&layout=card&sides=front", "department=&status="):
+        r = page(s, f"/idcards.pdf?{q}")
+        ok(r.content[:4] == b"%PDF" and r.headers["content-type"] == "application/pdf", f"ID cards {q}")
+    page(s, "/idcards.pdf?codes=NOBODY-1", must="No employees match")
     ok(c.get(BASE + "/payroll/components", timeout=30, headers={"accept": "text/html"}).status_code == 403,
        "pay components are Admin only")
     page(h, "/shifts", code=403)

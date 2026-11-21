@@ -68,7 +68,10 @@ def _three(n: int) -> str:
 
 def taka_words(amount) -> str:
     """Bangladeshi system: 1,25,500 -> 'Taka One Lakh Twenty Five Thousand Five Hundred only'."""
-    n = int(Decimal(str(amount or 0)).quantize(Decimal(1)))
+    v = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
+    n, paisa = int(v), int((v - int(v)) * 100)
+    if paisa:
+        return taka_words(n)[:-5] + f" and {_two(paisa)} Paisa only"
     if n == 0:
         return "Taka Zero only"
     parts = []

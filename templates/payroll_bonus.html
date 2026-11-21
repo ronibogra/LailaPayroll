@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% block title %}Festival bonus{% endblock %}
+{% block heading %}Festival bonus · {{ company.code }} · paid with {{ month_name[m] }} {{ y }} salary{% if run %} <span class="tag {{ run.status }}">{{ run.status }}</span>{% endif %}{% endblock %}
+{% block content %}
+<div class="steps">{% for k, t in tabs.items() %}<a href="/payroll/inputs?company={{ cid }}&month={{ mval }}&tab={{ k }}"><b>{{ loop.index }}</b> {{ t.title }}</a>{% endfor %}<a class="on" href="#"><b>★</b> Festival bonus</a><a href="/payroll?company={{ cid }}&month={{ mval }}"><b>5</b> Process payroll</a></div>
+<div class="panel"><h3>1. Bonus rule</h3>
+<form method="get" action="/payroll/bonus"><input type="hidden" name="calc" value="1"><div class="form-grid">
+<div><label>Company</label><select name="company">{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div><label>Paid with salary of</label><input type="month" name="month" value="{{ mval }}"></div>
+<div><label>Bonus name (on payslip)</label><input name="name" value="{{ name }}" list="bnames"><datalist id="bnames">{% for n in names %}<option value="{{ n }}">{% endfor %}</datalist></div>
+<div><label>Amount</label><div style="display:flex;gap:6px"><input name="percent" value="{{ percent }}" style="width:80px"> <select name="basis"><option value="basic">% of basic</option><option value="gross" {{ 'selected' if basis == 'gross' }}>% of gross</option></select></div></div>
+<div><label>No bonus if service is less than (months)</label><input name="min_months" value="{{ min_months }}"></div>
+<div><label>Service counted up to (festival date)</label><input type="date" name="as_of" value="{{ as_of }}"></div>
+<div><label>Only staff of religion</label><select name="religion"><option value="">Everyone</option>{% for r in ('Islam','Hinduism','Christianity','Buddhism','Other') %}<option {{ 'selected' if religion == r }}>{{ r }}</option>{% endfor %}</select></div>
+<div><label style="color:inherit"><input type="checkbox" name="prorate" value="1" {{ 'checked' if prorate }}> Less than 12 months: pro-rata (months / 12)</label></div>
+</div><p><button>Calculate</button></p></form>
+<p class="hint">Example: Eid bonus = 100% of basic, at least 6 months of service, Muslim staff. Durga Puja bonus = same rule for Hindu staff. Check the list, change any amount, then save - the bonus is added to that month's salary and shows on the payslip and salary sheet.</p>
+{% if existing_names %}<p class="hint">Already in {{ month_name[m] }} {{ y }}: {% for n, (cnt, tot) in existing_names.items() %}<a href="/payroll/bonus?company={{ cid }}&month={{ mval }}&name={{ n|urlencode }}">{{ n }}</a> ({{ cnt }} people, Tk {{ '{:,.0f}'.format(tot) }}) &nbsp; {% endfor %}</p>{% endif %}
+</div>
+<form method="post" action="/payroll/bonus"><input type="hidden" name="company_id" value="{{ cid }}"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="name" value="{{ name }}">
+<div class="panel"><h3>2. {{ name }} - {{ 'calculated, not saved yet' if calc else ('saved amounts' if saved else 'nothing saved yet') }} · Total Tk {{ '{:,.0f}'.format(total) }} · {{ rows|selectattr('amount')|list|length }} of {{ rows|length }} staff</h3>
+<div class="table-wrap" style="max-height:60vh"><table class="input-grid"><tr><th>Code</th><th>Name</th><th>Department</th><th>Religion</th><th>Joined</th><th class="num">Service (months)</th><th class="num">Basic</th><th class="num">Gross</th><th>Bonus (Tk)</th><th>How</th></tr>
+{% for r in rows %}{% set e = r.employee %}<tr><td><input type="hidden" name="emp" value="{{ e.id }}">{{ e.employee_code }}</td><td>{{ e.full_name }}</td><td>{{ e.department.name if e.department }}</td><td>{{ e.religion or '' }}</td>
+<td>{{ e.joined_on.strftime('%d/%m/%Y') if e.joined_on else '-' }}</td><td class="num">{{ r.months }}</td><td class="num">{{ '{:,.0f}'.format(e.basic or 0) }}</td><td class="num">{{ '{:,.0f}'.format(e.gross or 0) }}</td>
+<td><input name="amt_{{ e.id }}" value="{{ '%g'|format(r.amount) if r.amount else '' }}" style="width:100px;text-align:right" placeholder="0"></td><td class="hint" style="margin:0">{{ r.reason }}</td></tr>
+{% else %}<tr><td colspan="10" class="empty">No employees.</td></tr>{% endfor %}</table></div>
+{% if rows and (not run or run.status != 'FINAL') %}<p style="margin-top:12px"><button>💾 Save bonus</button> <button class="sec" name="process" value="1">Save &amp; process payroll →</button>
+{% if saved %} <button class="sec" name="remove" value="1" onclick="return confirm('Remove {{ name }} from everyone this month?')">Remove this bonus</button>{% endif %}</p>{% endif %}
+</div></form>
+{% endblock %}

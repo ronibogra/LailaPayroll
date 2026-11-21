@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block title %}Payroll · {{ tabs[tab].title }}{% endblock %}
 {% block heading %}Payroll · {{ tabs[tab].title }} · {{ company.code }} · {{ month_name[m] }} {{ y }}{% if run %} <span class="tag {{ run.status }}">{{ run.status }}</span>{% endif %}{% endblock %}
 {% block content %}
-<div class="steps">{% for k, t in tabs.items() %}<a class="{{ 'on' if k == tab }}" href="/payroll/inputs?company={{ cid }}&month={{ mval }}&tab={{ k }}"><b>{{ loop.index }}</b> {{ t.title }}</a>{% endfor %}<a href="/payroll?company={{ cid }}&month={{ mval }}"><b>5</b> Process payroll</a></div>
+<div class="steps">{% for k, t in tabs.items() %}<a class="{{ 'on' if k == tab }}" href="/payroll/inputs?company={{ cid }}&month={{ mval }}&tab={{ k }}"><b>{{ loop.index }}</b> {{ t.title }}</a>{% endfor %}<a href="/payroll/bonus?company={{ cid }}&month={{ mval }}"><b>★</b> Festival bonus</a><a href="/payroll?company={{ cid }}&month={{ mval }}"><b>5</b> Process payroll</a></div>
 <div class="panel"><form class="inline" method="get"><input type="hidden" name="tab" value="{{ tab }}">
 <div><label>Company</label><select name="company">{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
 <div><label>Month</label><input type="month" name="month" value="{{ mval }}"></div>

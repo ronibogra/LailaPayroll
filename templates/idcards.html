@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% block title %}ID cards{% endblock %}{% block heading %}Print staff ID cards{% endblock %}
+{% block content %}
+<div class="grid2">
+<div class="panel"><h3>Which staff</h3>
+<form method="get" action="/idcards.pdf" target="_blank"><div class="form-grid">
+<div><label>Company</label><select name="company">{% if not user.company_id %}<option value="">All companies</option>{% endif %}{% for c in companies %}<option value="{{ c.id }}">{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div><label>Department</label><select name="department"><option value="">All</option>{% for d in depts %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
+<div style="grid-column:1/-1"><label>Or only these employee codes (comma or one per line; blank = everyone above)</label><textarea name="codes" rows="3" style="width:100%"></textarea></div>
+<div><label>Status</label><select name="status"><option value="ACTIVE">Active staff</option><option value="">Everyone</option></select></div>
+<div><label>Staff without a photo</label><select name="missing_photo"><option value="">Print with an empty photo box</option><option value="skip">Leave them out</option></select></div>
+</div>
+<h3 style="margin-top:14px">Card</h3><div class="form-grid">
+<div><label>Print on</label><select name="layout"><option value="a4">A4 paper - 9 cards per sheet, cut &amp; laminate</option><option value="card">PVC card printer - 1 card per page (CR80)</option></select></div>
+<div><label>Sides</label><select name="sides"><option value="both">Front + back</option><option value="front">Front only</option><option value="back">Back only</option></select></div>
+<div><label>Issue date</label><input type="date" name="issued" value="{{ today }}"></div>
+<div><label>Valid until (blank = while in service)</label><input type="date" name="valid"></div>
+<div><label>Signature title on the back</label><input name="signatory" value="{{ signatory }}"></div>
+<div><label style="color:inherit"><input type="checkbox" name="show_nid" value="1"> Print NID number on the back</label></div>
+</div><p><button>🪪 Make ID cards (PDF)</button></p></form></div>
+<div class="panel"><h3>What is printed</h3>
+<p><b>Front:</b> Head Office logo, company name (HO, BDL, LAUNDRY, LSL…), photo, name, designation, department, ID number, blood group.</p>
+<p><b>Back:</b> joining date, blood group, mobile, emergency contact, issue / valid-until date, a QR code with the employee ID, authorised signature line and the "if found, return to" Head Office address and phone (from Settings → Head Office).</p>
+<h3>Before printing</h3><ul class="hint" style="margin:0;padding-left:18px;line-height:1.7">
+<li>Photos: upload one per employee, or many at once on Employees → photo import (file name = employee code).</li>
+<li>Check name, designation, department and blood group in the profiles (or the Employees Excel import).</li>
+<li>Set the Head Office address and phone in Settings - they go on the back.</li>
+<li>Card printer: CR80 (54 × 85.6 mm), portrait, scale 100% / "actual size", double-sided if the printer can.</li>
+<li>A4: print at 100% (not "fit to page"). For both sides, print page 1, put the sheet back and print page 2 on the back (flip on long edge) - the backs are mirrored to match. Cut on the marks, laminate, punch a slot for the lanyard.</li>
+</ul></div>
+</div>
+{% endblock %}

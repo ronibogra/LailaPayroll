@@ -89,6 +89,13 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     y -= 9 * mm
     c.setFont("Helvetica-Bold", 11)
     c.drawString(x0, y - 2 * mm, f"NET PAY:  Tk {_tk(l.net_pay)}")
+    from services.appointment import taka_words
+    c.setFont("Helvetica-Oblique", 8.5)
+    c.drawString(x0 + 62 * mm, y - 2 * mm, f"({taka_words(l.net_pay)})"[:95])
+    c.setFont("Helvetica", 8.5)
+    c.drawRightString(x1, y - 7 * mm, {"BANK": f"Paid to bank: {l.bank_name or ''} {l.account_no or ''}",
+                                       "MOBILE": f"Paid to {l.bank_name or 'mobile wallet'}: {l.account_no or ''}",
+                                       "CASH": "Paid in cash"}.get(l.payment_mode, "")[:70])
     c.setFont("Helvetica", 8)
     c.drawString(x0, y - 15 * mm, "Employee signature: ____________________")
     c.drawRightString(x1, y - 15 * mm, "Authorised signature: ____________________")
@@ -96,10 +103,10 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     from config import settings
     from services.branding import PRODUCT_LOGO
     try:
-        c.drawImage(str(PRODUCT_LOGO), x0, y - 22.5 * mm, 12 * mm, 7 * mm, mask="auto", preserveAspectRatio=True)
+        c.drawImage(str(PRODUCT_LOGO), x0, y - 26.5 * mm, 12 * mm, 7 * mm, mask="auto", preserveAspectRatio=True)
     except Exception:  # noqa: BLE001
         pass
-    c.drawString(x0 + 13 * mm, y - 20 * mm, f"SPhere Payroll · {settings.developer_credit}")
+    c.drawString(x0 + 13 * mm, y - 24 * mm, f"SPhere Payroll · {settings.developer_credit}")
     c.setFillColorRGB(0, 0, 0)
 
 

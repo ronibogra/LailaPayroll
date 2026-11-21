@@ -63,11 +63,11 @@ def _save(wb) -> bytes:
 
 SALARY_HEAD = ["Emp Code", "Name", "Department", "Designation", "Grade", "Days", "Present", "Absent",
                "Paid Leave", "Off Days", "Late Days", "Gross", "Basic", "House Rent", "Medical",
-               "Transport", "Food", "Earned Gross", "Absent Ded.", "OT Hrs", "OT Rate", "OT Amount",
-               "Att. Bonus", "Other Add.", "Advance", "Other Ded.", "Tax", "Stamp", "Net Pay",
-               "Pay Mode", "Bank", "Account No", "Remarks", "Signature"]
-SALARY_MONEY = set(range(12, 30))
-SALARY_TOTAL = (12, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29)
+               "Transport", "Food", "Earned Gross", "Absent Ded.", "Late Ded.", "OT Hrs", "OT Rate", "OT Amount",
+               "Att. Bonus", "Allowances / Bonus", "Other Add.", "Advance", "Other Ded.", "Custom Ded.", "Tax", "Stamp",
+               "Net Pay", "Pay Mode", "Bank", "Account No", "Remarks", "Signature"]
+SALARY_MONEY = set(range(12, 33))
+SALARY_TOTAL = (12, 18, 19, 20, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32)
 
 
 def _salary_row(l) -> list:
@@ -75,8 +75,9 @@ def _salary_row(l) -> list:
     return [l.employee_code, l.full_name, l.department, l.designation, l.grade, l.employed_days,
             l.present_days, l.absent_days, l.paid_leave_days, l.offdays, l.late_days, f(l.gross),
             f(l.basic), f(l.house_rent), f(l.medical), f(l.transport), f(l.food), f(l.earned_gross),
-            f(l.absent_deduction), f(l.ot_hours), f(l.ot_rate), f(l.ot_amount), f(l.attendance_bonus),
-            f(l.other_addition), f(l.advance), f(l.other_deduction), f(l.tax), f(l.stamp), f(l.net_pay),
+            f(l.absent_deduction), f(l.late_deduction or 0), f(l.ot_hours), f(l.ot_rate), f(l.ot_amount),
+            f(l.attendance_bonus), f(l.custom_additions or 0), f(l.other_addition), f(l.advance),
+            f(l.other_deduction), f(l.custom_deductions or 0), f(l.tax), f(l.stamp), f(l.net_pay),
             l.payment_mode, l.bank_name, l.account_no, l.warnings, ""]
 
 
@@ -110,7 +111,7 @@ def salary_sheet(run) -> bytes:
         a = agg.setdefault(l.department or "-", [0, 0.0, 0.0, 0.0, 0.0])
         a[0] += 1
         a[1] += float(l.earned_gross); a[2] += float(l.ot_amount)
-        a[3] += float(l.total_deductions + l.absent_deduction); a[4] += float(l.net_pay)
+        a[3] += float(l.total_deductions + l.absent_deduction + (l.late_deduction or 0)); a[4] += float(l.net_pay)
     _table(ws3, head, [[k] + v for k, v in sorted(agg.items())], {3, 4, 5, 6}, (2, 3, 4, 5, 6))
     return _save(wb)
 

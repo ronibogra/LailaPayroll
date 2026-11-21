@@ -31,7 +31,7 @@ from security import (hash_password, verify_password, create_token, decode_token
                       LoginRequired, COOKIE)
 from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, parse as parse_perms
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
-from services import leave as leave_svc, documents as docs, components as comp_svc
+from services import leave as leave_svc, documents as docs, components as comp_svc, disbursement as disb
 from services.errors import log_error
 from services.photos import save_photo, photo_path, bulk_photos
 from integration import generic_import
@@ -743,6 +743,67 @@ def employee_new(request: Request, user=Depends(page_user), db: Session = Depend
     return render(request, "employee_form.html", user, e=None, companies=visible_companies(db, user),
                   shifts=db.scalars(select(Shift).order_by(Shift.code)).all(),
                   departments=db.scalars(select(Department).order_by(Department.name)).all())
+
+
+@app.get("/idcards", response_class=HTMLResponse)
+def idcards_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.view")
+    from services.policy import get_setting
+    return render(request, "idcards.html", user, companies=visible_companies(db, user),
+                  depts=db.scalars(select(Department).order_by(Department.name)).all(),
+                  signatory=get_setting(db, "idcard.signatory", default="Head of HR & Admin") or "",
+                  today=now_local().date())
+
+
+@app.get("/idcards.pdf")
+def idcards_pdf(request: Request, company: str = "", department: str = "", codes: str = "", status: str = "ACTIVE",
+                layout: str = "a4", sides: str = "both", valid: str = "", issued: str = "", signatory: str = "",
+                missing_photo: str = "", show_nid: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    """Staff ID cards: whole company / department / chosen employee codes."""
+    need(user, "employees.view")
+    from services import idcard
+    from services.policy import get_setting
+    stmt = select(Employee)
+    cid = company_filter(user, company)
+    if cid:
+        stmt = stmt.where(Employee.company_id == cid)
+    if department.isdigit():
+        stmt = stmt.where(Employee.department_id == int(department))
+    code_list = [c.strip() for c in codes.replace(",", "\n").replace(" ", "\n").splitlines() if c.strip()]
+    if code_list:
+        stmt = stmt.where(or_(Employee.employee_code.in_(code_list), Employee.card_no.in_(code_list)))
+    if status in ("ACTIVE", "INACTIVE"):
+        stmt = stmt.where(Employee.employment_status == status)
+    emps = list(db.scalars(stmt))
+    if missing_photo == "skip":
+        emps = [e for e in emps if photo_path(e.photo)]
+    if code_list:      # keep the typed order
+        order = {c: i for i, c in enumerate(code_list)}
+        emps.sort(key=lambda e: order.get(e.employee_code, order.get(e.card_no, 1e9)))
+    else:
+        emps.sort(key=lambda e: ((e.company.code if e.company else ""), (e.department.name if e.department else ""),
+                                 e.employee_code))
+    if not emps:
+        return go("/idcards", err="No employees match - check the company, department or codes")
+    if len(emps) > 1500:
+        return go("/idcards", err=f"{len(emps)} cards at once is too many - print by company or department")
+    try:
+        valid_d = date.fromisoformat(valid) if valid else None
+        issued_d = date.fromisoformat(issued) if issued else now_local().date()
+    except ValueError:
+        return go("/idcards", err="Give valid dates")
+    if signatory.strip():
+        set_setting(db, "idcard.signatory", signatory.strip()[:60])
+    from services.branding import BRAND
+    pdf = idcard.cards_pdf(emps, {
+        "layout": "card" if layout == "card" else "a4", "sides": sides if sides in ("both", "front", "back") else "both",
+        "group": BRAND["name"], "logo": str(branding.logo_path()), "photo": lambda e: photo_path(e.photo),
+        "address": BRAND.get("address") or "", "phone": BRAND.get("phone") or "", "issued": issued_d, "valid": valid_d,
+        "signatory": signatory.strip() or get_setting(db, "idcard.signatory", default="Authorised signature"),
+        "show_nid": bool(show_nid), "credit": settings.developer_credit})
+    audit(db, user, "ID_CARDS", f"{len(emps)} cards ({layout}, {sides})")
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="id-cards-{len(emps)}.pdf"'})
 
 
 @app.get("/employees/{emp_id}", response_class=HTMLResponse)
@@ -1751,7 +1812,10 @@ def payroll_page(request: Request, month: str = "", company: str = "", user=Depe
     r = report_ctx(db, user, "payroll", {"company": str(cid or ""), "month": f"{y}-{m:02d}"})
     return render(request, "payroll.html", user, y=y, m=m, run=run, lines=lines, totals=totals, by_mode=by_mode,
                   companies=comps, cid=cid, company=db.get(Company, cid) if cid else None, runs=runs,
-                  warn_count=sum(1 for l in lines if l.warnings), r=r)
+                  warn_count=sum(1 for l in lines if l.warnings), r=r,
+                  bank=disb.company_bank(db, cid) if cid else {}, pay_problems=disb.problems(lines),
+                  count_mode={k: sum(1 for l in lines if l.payment_mode == k and l.net_pay > 0) for k in disb.MODES},
+                  modes=disb.MODES)
 
 
 @app.post("/payroll/process")
@@ -1792,6 +1856,39 @@ def _run_for(db, user, run_id: int) -> PayrollRun:
         raise HTTPException(404, "No such payroll")
     check_company(user, run.company_id)
     return run
+
+
+@app.get("/payroll/run/{run_id}/payment.pdf")
+def payroll_payment_pdf(run_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Bank advice letter(s), mobile banking list and cash payment sheet."""
+    need(user, "payroll.view", "reports.export")
+    run = _run_for(db, user, run_id)
+    audit(db, user, "PAYMENT_ADVICE", f"{run.company.code} {run.year}-{run.month:02d}")
+    return Response(disb.payment_pdf(run, disb.company_bank(db, run.company_id), now_local().date()),
+                    media_type="application/pdf", headers={
+                        "Content-Disposition": f'inline; filename="payment-{run.company.code}-{run.year}-{run.month:02d}.pdf"'})
+
+
+@app.get("/payroll/run/{run_id}/transfer.xlsx")
+def payroll_transfer_xlsx(run_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "payroll.view", "reports.export")
+    run = _run_for(db, user, run_id)
+    audit(db, user, "PAYMENT_FILE", f"{run.company.code} {run.year}-{run.month:02d}")
+    return Response(disb.transfer_xlsx(run), media_type=XLSX, headers={
+        "Content-Disposition": f"attachment; filename=bank-transfer-{run.company.code}-{run.year}-{run.month:02d}.xlsx"})
+
+
+@app.post("/payroll/bank-settings")
+async def payroll_bank_settings(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "payroll.finalize")
+    f = await request.form()
+    cid = int(f.get("company_id"))
+    check_company(user, cid)
+    for k in disb.BANK_KEYS:
+        set_setting(db, f"salary_bank.{k}", str(f.get(k) or "").strip()[:120], cid, commit=False)
+    audit(db, user, "SALARY_BANK", f"company {cid}: {f.get('bank_name')} {f.get('account_no')}", commit=False)
+    db.commit()
+    return go(f"/payroll?company={cid}&month={f.get('month')}#payment", msg="Company salary account saved")
 
 
 @app.get("/payroll/run/{run_id}/salary.xlsx")
@@ -2115,6 +2212,97 @@ def _input_rows(db: Session, cid: int, y: int, m: int, q: str, dept: str):
                                                             PayrollAdjustment.employee_id.in_(ids[i:i + 500]))):
             adj[a.employee_id] = a
     return emps, adj
+
+
+@app.get("/payroll/bonus", response_class=HTMLResponse)
+def payroll_bonus(request: Request, company: str = "", month: str = "", name: str = "", basis: str = "basic",
+                  percent: str = "100", min_months: str = "6", prorate: str = "", religion: str = "", as_of: str = "",
+                  calc: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    """Festival bonus: calculate by rule, check / change amounts, save into this month's salary."""
+    need(user, "payroll.process")
+    from services import bonus as bonus_svc
+    y, m = parse_month(month)
+    comps = visible_companies(db, user)
+    cid = company_filter(user, company) or (comps[0].id if comps else None)
+    if not cid:
+        return go("/settings", err="Add a company first")
+    check_company(user, cid)
+    first, last = month_bounds(y, m)
+    try:
+        as_of_d = date.fromisoformat(as_of) if as_of else last
+        pct = dec(percent, "Percent")
+        minm = int(min_months or 0)
+    except ValueError as exc:
+        return go(f"/payroll/bonus?company={cid}&month={y:04d}-{m:02d}", err=str(exc))
+    emps, adj = _input_rows(db, cid, y, m, "", "")
+    name = name.strip()[:60] or bonus_svc.NAMES[0]
+    rows = bonus_svc.compute(emps, as_of_d, "gross" if basis == "gross" else "basic", pct, minm, bool(prorate),
+                             religion) if calc else []
+    saved = bonus_svc.existing(adj.values(), name)
+    if not calc:      # show what is saved for this bonus name
+        rows = [bonus_svc.BonusRow(e, bonus_svc.service_months(e.joined_on, as_of_d), saved.get(e.id, Decimal(0)),
+                                   "saved" if e.id in saved else "") for e in emps]
+    return render(request, "payroll_bonus.html", user, rows=rows, calc=bool(calc), saved=saved, name=name,
+                  names=bonus_svc.NAMES, basis=basis, percent=percent, min_months=min_months, prorate=prorate,
+                  religion=religion, as_of=as_of_d, y=y, m=m, mval=f"{y:04d}-{m:02d}", cid=cid, companies=comps,
+                  company=db.get(Company, cid), run=get_run(db, cid, y, m), tabs=INPUT_TABS,
+                  existing_names=bonus_svc.names_in(adj.values()),
+                  total=sum((r.amount for r in rows), Decimal(0)))
+
+
+@app.post("/payroll/bonus")
+async def payroll_bonus_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "payroll.process")
+    from services import bonus as bonus_svc
+    f = await request.form(max_fields=50000)
+    cid = int(f.get("company_id"))
+    check_company(user, cid)
+    y, m = parse_month(str(f.get("month")))
+    name = str(f.get("name") or "").strip()[:60]
+    back = f"/payroll/bonus?company={cid}&month={y:04d}-{m:02d}&name={quote(name)}"
+    if not name:
+        return go(back, err="Give the bonus a name")
+    run = get_run(db, cid, y, m)
+    if run and run.status == "FINAL":
+        return go(back, err="This month's payroll is final (locked)")
+    remove = bool(f.get("remove"))
+    ids = [int(x) for x in f.getlist("emp") if str(x).isdigit()]
+    valid = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(ids or [0]), Employee.company_id == cid))}
+    adjs = {a.employee_id: a for a in db.scalars(select(PayrollAdjustment).where(
+        PayrollAdjustment.year == y, PayrollAdjustment.month == m, PayrollAdjustment.employee_id.in_(list(valid) or [0])))}
+    n, total = 0, Decimal(0)
+    try:
+        for eid, e in valid.items():
+            amt = Decimal(0) if remove else dec(str(f.get(f"amt_{eid}") or "0"), f"{e.employee_code} bonus")
+            if amt < 0:
+                raise ValueError(f"{e.employee_code}: bonus cannot be negative")
+            a = adjs.get(eid)
+            if a is None:
+                if not amt:
+                    continue
+                a = PayrollAdjustment(employee_id=eid, year=y, month=m)
+                db.add(a)
+            bonus_svc.set_item(a, name, amt)
+            a.edited_by = user["username"]
+            if amt:
+                n += 1
+                total += amt
+    except ValueError as exc:
+        db.rollback()
+        return go(back, err=str(exc))
+    audit(db, user, "BONUS_REMOVE" if remove else "BONUS_SAVE",
+          f"company {cid} {y}-{m:02d} {name}: {n} employees, Tk {total}", commit=False)
+    db.commit()
+    if remove:
+        return go(back, msg=f"{name} removed from {month_name[m]} {y}")
+    if f.get("process"):
+        try:
+            run = run_payroll(db, cid, y, m, user)
+        except (PayrollLocked, ValueError) as exc:
+            return go(back, err=f"Bonus saved, but payroll was not processed: {exc}")
+        return go(_payroll_url(cid, y, m), msg=f"{name} saved for {n} employees (Tk {total:,.0f}). Draft payroll ready "
+                                                f"for {len(run.lines)} employees")
+    return go(back, msg=f"{name} saved for {n} employees, total Tk {total:,.0f} - process the payroll to apply it")
 
 
 @app.get("/payroll/inputs", response_class=HTMLResponse)
