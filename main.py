@@ -2110,38 +2110,133 @@ def _payroll_url(cid, y, m) -> str:
     return f"/payroll?company={cid}&month={y}-{m:02d}"
 
 
+def _all_mode(user, company: str, comps) -> bool:
+    """One payroll for all companies (they all sit at the Head Office): default for Head Office users."""
+    if user.get("company_id") or len(comps) < 2:
+        return False
+    return company in ("all", "") or company is None
+
+
+def _all_runs(db, user, y, m):
+    comps = visible_companies(db, user)
+    runs = [r for r in db.scalars(select(PayrollRun).where(PayrollRun.year == y, PayrollRun.month == m,
+                                                         PayrollRun.company_id.in_([c.id for c in comps] or [0])))]
+    return comps, sorted(runs, key=lambda r: r.company.code)
+
+
+def _all_status(comps, runs) -> str | None:
+    if not runs:
+        return None
+    st = {r.status for r in runs}
+    if st == {"FINAL"}:
+        return "FINAL" if len(runs) == len(comps) else "PARTLY FINAL"
+    return "PARTLY FINAL" if "FINAL" in st else "DRAFT"
+
+
 @app.get("/payroll", response_class=HTMLResponse)
 def payroll_page(request: Request, month: str = "", company: str = "", user=Depends(page_user),
                  db: Session = Depends(get_db)):
     need(user, "payroll.view")
+    from types import SimpleNamespace as NS
     y, m = parse_month(month)
     comps = visible_companies(db, user)
-    cid = company_filter(user, company) or (comps[0].id if comps else None)
-    check_company(user, cid)
     runs = {r.company_id: r for r in db.scalars(select(PayrollRun).where(PayrollRun.year == y, PayrollRun.month == m))}
-    run = runs.get(cid)
-    lines = sorted(run.lines, key=lambda l: (l.department, l.employee_code)) if run else []
+    all_mode = _all_mode(user, company, comps)
+    if all_mode:
+        cid = "all"
+        rl = [r for r in runs.values() if r.company_id in {c.id for c in comps}]
+        lines = sorted((l for r in rl for l in r.lines), key=lambda l: (l.department, l.employee_code))
+        status = _all_status(comps, rl)
+        run = NS(id=None, status=status, created_by=", ".join(sorted({r.created_by for r in rl})),
+                 created_at=max(r.created_at for r in rl), finalized_by=None,
+                 finalized_at=None) if rl else None
+        company = NS(id=0, code="ALL", name=f"all companies ({', '.join(c.code for c in comps)})")
+        run_base = f"/payroll/all/{y:04d}-{m:02d}"
+        bank = disb.company_bank(db, 0)
+    else:
+        cid = company_filter(user, company) or (comps[0].id if comps else None)
+        check_company(user, cid)
+        run = runs.get(cid)
+        lines = sorted(run.lines, key=lambda l: (l.department, l.employee_code)) if run else []
+        company = db.get(Company, cid) if cid else None
+        run_base = f"/payroll/run/{run.id}" if run else ""
+        bank = disb.company_bank(db, cid) if cid else {}
     totals = {k: sum((getattr(l, k) or 0) for l in lines) for k in
               ("earned_gross", "ot_amount", "absent_deduction", "total_deductions", "net_pay", "custom_additions",
                "late_deduction")} if lines else {}
     by_mode: dict[str, Decimal] = {}
     for l in lines:
         by_mode[l.payment_mode] = by_mode.get(l.payment_mode, 0) + l.net_pay
-    r = report_ctx(db, user, "payroll", {"company": str(cid or ""), "month": f"{y}-{m:02d}"})
+    r = report_ctx(db, user, "payroll", {"company": "" if all_mode else str(cid or ""), "month": f"{y}-{m:02d}"})
     return render(request, "payroll.html", user, y=y, m=m, run=run, lines=lines, totals=totals, by_mode=by_mode,
-                  companies=comps, cid=cid, company=db.get(Company, cid) if cid else None, runs=runs,
+                  companies=comps, cid=cid, company=company, runs=runs, all_mode=all_mode, run_base=run_base,
                   warn_count=sum(1 for l in lines if l.warnings), r=r,
-                  bank=disb.company_bank(db, cid) if cid else {}, pay_problems=disb.problems(lines),
+                  bank=bank, pay_problems=disb.problems(lines),
                   count_mode={k: sum(1 for l in lines if l.payment_mode == k and l.net_pay > 0) for k in disb.MODES},
-                  modes=disb.MODES)
+                  modes=disb.MODES, by_company={c.code: (len(runs[c.id].lines), runs[c.id].status) if c.id in runs else None
+                                                 for c in comps})
+
+
+@app.get("/payroll/all/{ym}/{what}")
+def payroll_all_files(ym: str, what: str, employee_code: str = "", user=Depends(page_user),
+                      db: Session = Depends(get_db)):
+    """All companies together: salary.xlsx, payslips.pdf, payment.pdf, transfer.xlsx."""
+    need(user, "payroll.view", "reports.export")
+    from types import SimpleNamespace as NS
+    from services.branding import BRAND
+    y, m = parse_month(ym)
+    comps, runs = _all_runs(db, user, y, m)
+    if not runs:
+        return go(f"/payroll?company=all&month={y:04d}-{m:02d}", err="Process the payroll first")
+    lines = [l for r in runs for l in r.lines]
+    tag = f"{y}-{m:02d}"
+    audit(db, user, "PAYROLL_EXPORT", f"all companies {tag} {what}" + (f" {employee_code}" if employee_code else ""))
+    if what == "salary.xlsx":
+        return Response(combined_salary(runs, y, m), media_type=XLSX,
+                        headers={"Content-Disposition": f"attachment; filename=salary-all-companies-{tag}.xlsx"})
+    if what == "payslips.pdf":
+        sel = [l for l in lines if not employee_code or l.employee_code == employee_code]
+        return Response(payslips_pdf(None, sel), media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="payslips-{employee_code or "all"}-{tag}.pdf"'})
+    status = _all_status(comps, runs)
+    group = NS(company=NS(name=BRAND["name"], code="ALL", address=BRAND.get("address") or ""), year=y, month=m,
+               status="FINAL" if status == "FINAL" else "DRAFT", lines=lines)
+    if what == "payment.pdf":
+        return Response(disb.payment_pdf(group, disb.company_bank(db, 0), now_local().date()),
+                        media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="payment-all-companies-{tag}.pdf"'})
+    if what == "transfer.xlsx":
+        return Response(disb.transfer_xlsx(group), media_type=XLSX,
+                        headers={"Content-Disposition": f"attachment; filename=bank-transfer-all-companies-{tag}.xlsx"})
+    raise HTTPException(404, "Unknown file")
 
 
 @app.post("/payroll/process")
-def payroll_process(month: str = Form(...), company_id: int = Form(...), user=Depends(page_user),
+def payroll_process(month: str = Form(...), company_id: str = Form(...), user=Depends(page_user),
                     db: Session = Depends(get_db)):
     need(user, "payroll.process")
-    check_company(user, company_id)
     y, m = parse_month(month)
+    if company_id == "all":
+        back = f"/payroll?company=all&month={y:04d}-{m:02d}"
+        done, locked, errors = [], [], []
+        for c in visible_companies(db, user):
+            try:
+                run = run_payroll(db, c.id, y, m, user)
+                done.append(f"{c.code} {len(run.lines)}")
+                errors += [f"{c.code}: {e}" for e in run.errors]
+            except PayrollLocked:
+                locked.append(c.code)
+            except ValueError as exc:
+                errors.append(f"{c.code}: {exc}")
+        if errors:
+            log_error("PAYROLL", f"all companies {y}-{m:02d}: {len(errors)} employees skipped",
+                      detail="\n".join(errors), username=user["username"])
+        n = sum(int(x.split()[-1]) for x in done)
+        return go(back, msg=f"Draft payroll ready for {n} employees ({', '.join(done)})"
+                            + (f"; already final, not changed: {', '.join(locked)}" if locked else ""),
+                  err=("Skipped: " + "; ".join(errors)[:1200]) if errors else "")
+    company_id = int(company_id)
+    check_company(user, company_id)
     try:
         run = run_payroll(db, company_id, y, m, user)
     except (PayrollLocked, ValueError) as exc:
@@ -2154,11 +2249,27 @@ def payroll_process(month: str = Form(...), company_id: int = Form(...), user=De
 
 
 @app.post("/payroll/finalize")
-def payroll_finalize(month: str = Form(...), company_id: int = Form(...), confirm: str = Form(""),
+def payroll_finalize(month: str = Form(...), company_id: str = Form(...), confirm: str = Form(""),
                      user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "payroll.finalize")
-    check_company(user, company_id)
     y, m = parse_month(month)
+    if company_id == "all":
+        back = f"/payroll?company=all&month={y:04d}-{m:02d}"
+        if confirm.strip().upper() != "FINAL":
+            return go(back, err="Type FINAL to confirm")
+        comps, runs = _all_runs(db, user, y, m)
+        have = {r.company_id for r in runs}
+        missing = [c.code for c in comps if c.id not in have and c.active]
+        if missing:
+            return go(back, err=f"Process the payroll first - not processed yet: {', '.join(missing)}")
+        done = []
+        for r in runs:
+            if r.status != "FINAL":
+                finalize_payroll(db, r.company_id, y, m, user)
+                done.append(r.company.code)
+        return go(back, msg=f"Payroll finalized and locked: {', '.join(done) or 'already final'}")
+    company_id = int(company_id)
+    check_company(user, company_id)
     if confirm.strip().upper() != "FINAL":
         return go(_payroll_url(company_id, y, m), err="Type FINAL to confirm")
     try:
@@ -2200,13 +2311,14 @@ def payroll_transfer_xlsx(run_id: int, user=Depends(page_user), db: Session = De
 async def payroll_bank_settings(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "payroll.finalize")
     f = await request.form()
-    cid = int(f.get("company_id"))
-    check_company(user, cid)
+    cid = 0 if f.get("company_id") == "all" else int(f.get("company_id"))
+    if cid or user.get("company_id"):
+        check_company(user, cid)
     for k in disb.BANK_KEYS:
         set_setting(db, f"salary_bank.{k}", str(f.get(k) or "").strip()[:120], cid, commit=False)
     audit(db, user, "SALARY_BANK", f"company {cid}: {f.get('bank_name')} {f.get('account_no')}", commit=False)
     db.commit()
-    return go(f"/payroll?company={cid}&month={f.get('month')}#payment", msg="Company salary account saved")
+    return go(f"/payroll?company={cid or 'all'}&month={f.get('month')}#payment", msg="Company salary account saved")
 
 
 @app.get("/payroll/run/{run_id}/salary.xlsx")
@@ -2413,17 +2525,17 @@ async def payroll_line_save(request: Request, user=Depends(page_user), db: Sessi
 
 
 @app.post("/payroll/adjustments")
-async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...), file: UploadFile = File(...),
+async def payroll_adjustments(month: str = Form(...), company_id: str = Form(...), file: UploadFile = File(...),
                               tab: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
-    """Excel: employee_code, other_addition, advance, other_deduction, tax, note (one company)."""
+    """Excel: employee_code, other_addition, advance, other_deduction, tax, note (one company or all)."""
     need(user, "payroll.process")
-    check_company(user, company_id)
     from openpyxl import load_workbook
+    ids, company_id, _, _ = _scope(db, user, company_id)
     y, m = parse_month(month)
-    back = _payroll_url(company_id, y, m) if tab not in INPUT_TABS else \
-        f"/payroll/inputs?company={company_id}&month={y:04d}-{m:02d}&tab={tab}"
-    run = get_run(db, company_id, y, m)
-    if run and run.status == "FINAL":
+    back = (f"/payroll?company={company_id}&month={y:04d}-{m:02d}" if tab not in INPUT_TABS else
+            f"/payroll/inputs?company={company_id}&month={y:04d}-{m:02d}&tab={tab}")
+    locked = _locked(db, ids, y, m)
+    if ids and set(ids) <= locked:
         return go(back, err="Payroll is final - adjustments are locked")
     try:
         ws = load_workbook(io.BytesIO(await file.read()), data_only=True).worksheets[0]
@@ -2431,7 +2543,7 @@ async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...
         head = [str(h or "").strip().lower() for h in next(it)]
         if "employee_code" not in head:
             raise ValueError("first row must contain employee_code")
-        emps = {e.employee_code: e for e in db.scalars(select(Employee).where(Employee.company_id == company_id))}
+        emps = {e.employee_code: e for e in db.scalars(select(Employee).where(Employee.company_id.in_(ids or [0])))}
         n = 0
         for row in it:
             r = dict(zip(head, row))
@@ -2443,6 +2555,8 @@ async def payroll_adjustments(month: str = Form(...), company_id: int = Form(...
             e = emps.get(code)
             if not e:
                 raise ValueError(f"employee_code {code} is not in this company")
+            if e.company_id in locked:
+                raise ValueError(f"{code}: that company's payroll for this month is final")
             a = db.scalar(select(PayrollAdjustment).where(PayrollAdjustment.employee_id == e.id,
                                                           PayrollAdjustment.year == y, PayrollAdjustment.month == m))
             if not a:
@@ -2477,10 +2591,10 @@ def adjustments_template(tab: str = "manual", company: str = "", month: str = ""
     ws.append(["employee_code", "name", "department"] + [c for c, _ in cols])
     for cell in ws[1]:
         cell.font, cell.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="E8332F")
-    cid = company_filter(user, company)
-    if cid:
+    ids = _scope(db, user, company)[0] if company else []
+    if ids:
         y, m = parse_month(month)
-        emps, adj = _input_rows(db, cid, y, m, "", "")
+        emps, adj = _input_rows(db, ids, y, m, "", "")
         for e in emps:
             a = adj.get(e.id)
             ws.append([e.employee_code, e.full_name, e.department.name if e.department else ""]
@@ -2512,10 +2626,53 @@ INPUT_TABS = {
 }
 
 
-def _input_rows(db: Session, cid: int, y: int, m: int, q: str, dept: str):
+def _scope(db, user, company):
+    """(company ids, cid value for links, display company). 'all' = every company the user may see."""
+    from types import SimpleNamespace as NS
+    comps = visible_companies(db, user)
+    if _all_mode(user, company, comps):
+        return [c.id for c in comps], "all", NS(id=0, code="ALL", name="All companies"), comps
+    cid = company_filter(user, company) or (comps[0].id if comps else None)
+    if cid:
+        check_company(user, cid)
+    return ([cid] if cid else []), cid, db.get(Company, cid) if cid else None, comps
+
+
+def _scope_run(db, ids, y, m):
+    """The payroll run to show (one company) or a combined status (all companies)."""
+    from types import SimpleNamespace as NS
+    if len(ids) == 1:
+        return get_run(db, ids[0], y, m)
+    runs = [r for r in db.scalars(select(PayrollRun).where(PayrollRun.year == y, PayrollRun.month == m,
+                                                         PayrollRun.company_id.in_(ids or [0])))]
+    st = _all_status([0] * len(ids), runs)
+    return NS(status=st) if st else None
+
+
+def _locked(db, ids, y, m) -> set[int]:
+    return set(db.scalars(select(PayrollRun.company_id).where(PayrollRun.year == y, PayrollRun.month == m,
+                                                             PayrollRun.status == "FINAL",
+                                                             PayrollRun.company_id.in_(ids or [0]))))
+
+
+def _process_scope(db, user, ids, y, m) -> tuple[int, list[str]]:
+    n, errors = 0, []
+    for cid in ids:
+        try:
+            run = run_payroll(db, cid, y, m, user)
+            n += len(run.lines)
+            errors += run.errors
+        except PayrollLocked:
+            continue
+        except ValueError as exc:
+            errors.append(str(exc))
+    return n, errors
+
+
+def _input_rows(db: Session, cid, y: int, m: int, q: str, dept: str):
     from services.processing import employees_for_month
     first, last = month_bounds(y, m)
-    emps = [e for e in employees_for_month(db, first, last, [cid])]
+    emps = [e for e in employees_for_month(db, first, last, cid if isinstance(cid, list) else [cid])]
     if dept:
         emps = [e for e in emps if e.department and str(e.department.id) == dept]
     if q:
@@ -2540,11 +2697,9 @@ def payroll_bonus(request: Request, company: str = "", month: str = "", name: st
     need(user, "payroll.process")
     from services import bonus as bonus_svc
     y, m = parse_month(month)
-    comps = visible_companies(db, user)
-    cid = company_filter(user, company) or (comps[0].id if comps else None)
-    if not cid:
+    ids, cid, company_obj, comps = _scope(db, user, company)
+    if not ids:
         return go("/settings", err="Add a company first")
-    check_company(user, cid)
     first, last = month_bounds(y, m)
     try:
         as_of_d = date.fromisoformat(as_of) if as_of else last
@@ -2552,7 +2707,7 @@ def payroll_bonus(request: Request, company: str = "", month: str = "", name: st
         minm = int(min_months or 0)
     except ValueError as exc:
         return go(f"/payroll/bonus?company={cid}&month={y:04d}-{m:02d}", err=str(exc))
-    emps, adj = _input_rows(db, cid, y, m, "", "")
+    emps, adj = _input_rows(db, ids, y, m, "", "")
     name = name.strip()[:60] or bonus_svc.NAMES[0]
     rows = bonus_svc.compute(emps, as_of_d, "gross" if basis == "gross" else "basic", pct, minm, bool(prorate),
                              religion) if calc else []
@@ -2563,7 +2718,7 @@ def payroll_bonus(request: Request, company: str = "", month: str = "", name: st
     return render(request, "payroll_bonus.html", user, rows=rows, calc=bool(calc), saved=saved, bonus_name=name,
                   names=bonus_svc.NAMES, basis=basis, percent=percent, min_months=min_months, prorate=prorate,
                   religion=religion, as_of=as_of_d, y=y, m=m, mval=f"{y:04d}-{m:02d}", cid=cid, companies=comps,
-                  company=db.get(Company, cid), run=get_run(db, cid, y, m), tabs=INPUT_TABS,
+                  company=company_obj, run=_scope_run(db, ids, y, m), tabs=INPUT_TABS, multi=len(ids) > 1,
                   existing_names=bonus_svc.names_in(adj.values()),
                   total=sum((r.amount for r in rows), Decimal(0)))
 
@@ -2573,19 +2728,20 @@ async def payroll_bonus_save(request: Request, user=Depends(page_user), db: Sess
     need(user, "payroll.process")
     from services import bonus as bonus_svc
     f = await request.form(max_fields=50000)
-    cid = int(f.get("company_id"))
-    check_company(user, cid)
+    scope, cid, _, _ = _scope(db, user, str(f.get("company_id") or ""))
     y, m = parse_month(str(f.get("month")))
     name = str(f.get("name") or "").strip()[:60]
     back = f"/payroll/bonus?company={cid}&month={y:04d}-{m:02d}&name={quote(name)}"
     if not name:
         return go(back, err="Give the bonus a name")
-    run = get_run(db, cid, y, m)
-    if run and run.status == "FINAL":
+    locked = _locked(db, scope, y, m)
+    if scope and set(scope) <= locked:
         return go(back, err="This month's payroll is final (locked)")
     remove = bool(f.get("remove"))
     ids = [int(x) for x in f.getlist("emp") if str(x).isdigit()]
-    valid = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(ids or [0]), Employee.company_id == cid))}
+    valid = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(ids or [0]),
+                                                                Employee.company_id.in_(scope or [0])))
+             if e.company_id not in locked}
     adjs = {a.employee_id: a for a in db.scalars(select(PayrollAdjustment).where(
         PayrollAdjustment.year == y, PayrollAdjustment.month == m, PayrollAdjustment.employee_id.in_(list(valid) or [0])))}
     n, total = 0, Decimal(0)
@@ -2614,12 +2770,10 @@ async def payroll_bonus_save(request: Request, user=Depends(page_user), db: Sess
     if remove:
         return go(back, msg=f"{name} removed from {month_name[m]} {y}")
     if f.get("process"):
-        try:
-            run = run_payroll(db, cid, y, m, user)
-        except (PayrollLocked, ValueError) as exc:
-            return go(back, err=f"Bonus saved, but payroll was not processed: {exc}")
-        return go(_payroll_url(cid, y, m), msg=f"{name} saved for {n} employees (Tk {total:,.0f}). Draft payroll ready "
-                                                f"for {len(run.lines)} employees")
+        cnt, errs = _process_scope(db, user, scope, y, m)
+        return go(f"/payroll?company={cid}&month={y:04d}-{m:02d}",
+                  msg=f"{name} saved for {n} employees (Tk {total:,.0f}). Draft payroll ready for {cnt} employees",
+                  err=("Skipped: " + "; ".join(errs)[:1200]) if errs else "")
     return go(back, msg=f"{name} saved for {n} employees, total Tk {total:,.0f} - process the payroll to apply it")
 
 
@@ -2629,18 +2783,17 @@ def payroll_inputs(request: Request, tab: str = "manual", company: str = "", mon
     need(user, "payroll.process")
     tab = tab if tab in INPUT_TABS else "manual"
     y, m = parse_month(month)
-    comps = visible_companies(db, user)
-    cid = company_filter(user, company) or (comps[0].id if comps else None)
-    if not cid:
+    ids, cid, company_obj, comps = _scope(db, user, company)
+    if not ids:
         return go("/settings", err="Add a company first")
-    check_company(user, cid)
-    emps, adj = _input_rows(db, cid, y, m, q.strip(), department)
-    run = get_run(db, cid, y, m)
+    emps, adj = _input_rows(db, ids, y, m, q.strip(), department)
+    run = _scope_run(db, ids, y, m)
+    locked = _locked(db, ids, y, m)
     cols = INPUT_TABS[tab]["cols"]
     totals = {c: sum((getattr(adj[e.id], c) or 0) for e in emps if e.id in adj) for c, _ in cols if c != "note"}
     return render(request, "payroll_inputs.html", user, tab=tab, tabs=INPUT_TABS, cols=cols, emps=emps, adj=adj,
-                  y=y, m=m, mval=f"{y:04d}-{m:02d}", cid=cid, companies=comps, company=db.get(Company, cid), run=run,
-                  q=q, department=department, totals=totals,
+                  y=y, m=m, mval=f"{y:04d}-{m:02d}", cid=cid, companies=comps, company=company_obj, run=run,
+                  q=q, department=department, totals=totals, locked=locked, multi=len(ids) > 1,
                   depts=db.scalars(select(Department).order_by(Department.name)).all())
 
 
@@ -2650,19 +2803,20 @@ async def payroll_inputs_save(request: Request, user=Depends(page_user), db: Ses
     f = await request.form(max_fields=50000)
     tab = str(f.get("tab") or "manual")
     tab = tab if tab in INPUT_TABS else "manual"
-    cid = int(f.get("company_id"))
-    check_company(user, cid)
+    scope, cid, _, _ = _scope(db, user, str(f.get("company_id") or ""))
     y, m = parse_month(str(f.get("month")))
     back = f"/payroll/inputs?company={cid}&month={y:04d}-{m:02d}&tab={tab}"
     for k in ("q", "department"):
         if f.get(k):
             back += f"&{k}={quote(str(f.get(k)))}"
-    run = get_run(db, cid, y, m)
-    if run and run.status == "FINAL":
+    locked = _locked(db, scope, y, m)
+    if scope and set(scope) <= locked:
         return go(back, err="This month's payroll is final (locked) - nothing can be changed")
     cols = [c for c, _ in INPUT_TABS[tab]["cols"]]
     ids = [int(x) for x in f.getlist("emp") if str(x).isdigit()]
-    valid = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(ids or [0]), Employee.company_id == cid))}
+    valid = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(ids or [0]),
+                                                                Employee.company_id.in_(scope or [0])))
+             if e.company_id not in locked}
     existing = {a.employee_id: a for a in db.scalars(select(PayrollAdjustment).where(
         PayrollAdjustment.year == y, PayrollAdjustment.month == m, PayrollAdjustment.employee_id.in_(list(valid) or [0])))}
     changed, errors = 0, []
@@ -2698,13 +2852,10 @@ async def payroll_inputs_save(request: Request, user=Depends(page_user), db: Ses
     audit(db, user, "PAYROLL_INPUTS", f"company {cid} {y}-{m:02d} {tab}: {changed} employees changed", commit=False)
     db.commit()
     if f.get("process"):
-        try:
-            run = run_payroll(db, cid, y, m, user)
-        except (PayrollLocked, ValueError) as exc:
-            return go(back, err=f"Saved {changed}, but payroll was not processed: {exc}")
-        return go(_payroll_url(cid, y, m), msg=f"Saved {changed} employee(s). Draft payroll ready for "
-                                                f"{len(run.lines)} employees",
-                  err=("Skipped: " + "; ".join(run.errors)[:1200]) if run.errors else "")
+        n, errs = _process_scope(db, user, scope, y, m)
+        return go(f"/payroll?company={cid}&month={y:04d}-{m:02d}", msg=f"Saved {changed} employee(s). Draft payroll "
+                                                                      f"ready for {n} employees",
+                  err=("Skipped: " + "; ".join(errs)[:1200]) if errs else "")
     return go(back, msg=f"Saved - {changed} employee(s) changed. Process the payroll to apply.")
 
 

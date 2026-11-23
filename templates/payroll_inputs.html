@@ -3,7 +3,7 @@
 {% block content %}
 <div class="steps">{% for k, t in tabs.items() %}<a class="{{ 'on' if k == tab }}" href="/payroll/inputs?company={{ cid }}&month={{ mval }}&tab={{ k }}"><b>{{ loop.index }}</b> {{ t.title }}</a>{% endfor %}<a href="/payroll/bonus?company={{ cid }}&month={{ mval }}"><b>★</b> Festival bonus</a><a href="/payroll?company={{ cid }}&month={{ mval }}"><b>5</b> Process payroll</a></div>
 <div class="panel"><form class="inline" method="get"><input type="hidden" name="tab" value="{{ tab }}">
-<div><label>Company</label><select name="company">{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div><label>Company</label><select name="company">{% if companies|length > 1 and not user.company_id %}<option value="all" {{ 'selected' if cid == 'all' }}>All companies</option>{% endif %}{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
 <div><label>Month</label><input type="month" name="month" value="{{ mval }}"></div>
 <div><label>Department</label><select name="department"><option value="">All</option>{% for d in depts %}<option value="{{ d.id }}" {{ 'selected' if department == d.id|string }}>{{ d.name }}</option>{% endfor %}</select></div>
 <div><label>Employee</label><input name="q" value="{{ q }}" placeholder="code, card or name"></div><button class="sec">Show</button></form>
@@ -14,12 +14,12 @@
 <input type="file" name="file" accept=".xlsx" required><button class="sec">⬆ Upload filled Excel</button></form>{% endif %}</div>
 {% if run and run.status == 'FINAL' %}<div class="alert err">{{ company.code }} payroll for {{ month_name[m] }} {{ y }} is final (locked) - these amounts can no longer be changed.</div>{% endif %}
 <form method="post" action="/payroll/inputs"><input type="hidden" name="tab" value="{{ tab }}"><input type="hidden" name="company_id" value="{{ cid }}"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="department" value="{{ department }}">
-<div class="table-wrap" style="max-height:62vh"><table class="input-grid"><tr><th>Code</th><th>Name</th><th>Department</th><th class="num">Gross</th>{% for c, lab in cols %}<th>{{ lab }}</th>{% endfor %}</tr>
-{% for e in emps %}{% set a = adj.get(e.id) %}<tr><td><input type="hidden" name="emp" value="{{ e.id }}">{{ e.employee_code }}</td><td><a href="/employees/{{ e.id }}">{{ e.full_name }}</a></td><td>{{ e.department.name if e.department }}</td>
+<div class="table-wrap" style="max-height:62vh"><table class="input-grid"><tr><th>Code</th><th>Name</th>{% if multi %}<th>Company</th>{% endif %}<th>Department</th><th class="num">Gross</th>{% for c, lab in cols %}<th>{{ lab }}</th>{% endfor %}</tr>
+{% for e in emps %}{% set a = adj.get(e.id) %}<tr><td><input type="hidden" name="emp" value="{{ e.id }}">{{ e.employee_code }}</td><td><a href="/employees/{{ e.id }}">{{ e.full_name }}</a>{% if e.company_id in locked %} <span class="tag FINAL">final</span>{% endif %}</td>{% if multi %}<td>{{ e.company.code if e.company }}</td>{% endif %}<td>{{ e.department.name if e.department }}</td>
 <td class="num">{{ '{:,.0f}'.format(e.gross or 0) if 'salary.view' in user.perms else '' }}</td>
 {% for c, lab in cols %}{% set v = a[c] if a else none %}<td>{% if c == 'note' %}<input name="note_{{ e.id }}" value="{{ v or '' }}" style="width:180px">{% else %}<input name="{{ c }}_{{ e.id }}" value="{{ '%g'|format(v) if v else '' }}" inputmode="decimal" style="width:100px;text-align:right" placeholder="0">{% endif %}</td>{% endfor %}</tr>
-{% else %}<tr><td colspan="9" class="empty">No employees for this company and month.</td></tr>{% endfor %}
-{% if emps %}<tr><th colspan="4">Total ({{ emps|length }} employees)</th>{% for c, lab in cols %}<th class="num">{{ '{:,.0f}'.format(totals[c]) if c in totals else '' }}</th>{% endfor %}</tr>{% endif %}
+{% else %}<tr><td colspan="10" class="empty">No employees for this company and month.</td></tr>{% endfor %}
+{% if emps %}<tr><th colspan="{{ 5 if multi else 4 }}">Total ({{ emps|length }} employees)</th>{% for c, lab in cols %}<th class="num">{{ '{:,.0f}'.format(totals[c]) if c in totals else '' }}</th>{% endfor %}</tr>{% endif %}
 </table></div>
 {% if emps and (not run or run.status != 'FINAL') %}<p style="margin-top:12px"><button>💾 Save</button><button class="sec" name="process" value="1">Save &amp; process payroll →</button></p>{% endif %}
 </form>

@@ -112,13 +112,14 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
 
 
 def payslips_pdf(run, lines=None) -> bytes:
+    """run=None: lines from several companies (each line's own run gives its company name)."""
     lines = sorted(lines if lines is not None else run.lines, key=lambda l: (l.department, l.employee_code))
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     W, H = A4
     for i, l in enumerate(lines):
         half = i % 2
-        _slip(c, l, run, H - half * H / 2)
+        _slip(c, l, run or l.run, H - half * H / 2)
         if half == 0:
             c.setDash(3, 3); c.setStrokeColorRGB(0.6, 0.6, 0.6)
             c.line(8 * mm, H / 2, W - 8 * mm, H / 2)

@@ -677,6 +677,18 @@ def main():
     ok("Allowances / Bonus" in head and "Late Ded." in head, f"salary sheet columns: {head}")
     r = page(s, f"/payroll/run/{run2}/payslips.pdf?employee_code=LTL-0001")
     ok(r.content[:4] == b"%PDF", "payslip")
+    # all companies as one payroll (they all sit at the Head Office)
+    r = page(s, f"/payroll?month={month}", must="All companies - one payroll")
+    ok("PARTLY FINAL" in r.text and "Ms. Karima" in r.text and "Abdul Karim" in r.text, "one payroll for everyone")
+    post(s, "/payroll/process", {"month": month, "company_id": "all"}, must="already final, not changed: HO")
+    for f_ in ("payslips.pdf", "payment.pdf"):
+        ok(page(s, f"/payroll/all/{month}/{f_}").content[:4] == b"%PDF", f"all companies {f_}")
+    load_workbook(io.BytesIO(page(s, f"/payroll/all/{month}/salary.xlsx").content))
+    load_workbook(io.BytesIO(page(s, f"/payroll/all/{month}/transfer.xlsx").content))
+    r = page(s, f"/payroll/inputs?company=all&month={month}&tab=tax", must="Ms. Karima")
+    ok("Abdul Karim" in r.text and ">final</span>" in r.text, "all-company input screen")
+    post(s, "/payroll/inputs", {"tab": "tax", "company_id": "all", "month": month, "emp": [kar, kid],
+                                f"tax_{kar}": "300", f"tax_{kid}": "999"}, must="1 employee(s) changed")
 
     step("staff ID cards: A4 sheet and card printer")
     page(s, "/idcards", must="Print staff ID cards")

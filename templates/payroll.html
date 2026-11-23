@@ -3,7 +3,7 @@
 {% block content %}
 {% set mval = '%04d-%02d'|format(y, m) %}
 <div class="panel"><form class="inline" method="get">
-<div><label>Company</label><select name="company">{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div><label>Company</label><select name="company">{% if companies|length > 1 and not user.company_id %}<option value="all" {{ 'selected' if all_mode }}>All companies - one payroll</option>{% endif %}{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
 <div><label>Month</label><input type="month" name="month" value="{{ mval }}"></div><button class="sec">Open</button></form>
 <a class="btn sec" href="/payroll/combined.xlsx?month={{ mval }}" style="margin-left:6px">All companies in one Excel (HO)</a>
 {% if companies|length > 1 %}<p class="hint" style="margin-top:10px">{{ month_name[m] }} {{ y }}:
@@ -11,7 +11,7 @@
 {% if not company %}<div class="alert err">Add a company under Settings first.</div>{% else %}
 {% if not run or run.status != 'FINAL' %}
 <div class="steps">{% for k, t in [('manual','Employee-wise (manual)'),('advances','Advances & deductions'),('tax','Tax'),('other','Other')] %}<a href="/payroll/inputs?company={{ cid }}&month={{ mval }}&tab={{ k }}"><b>{{ loop.index }}</b> {{ t }}</a>{% endfor %}<a href="/payroll/bonus?company={{ cid }}&month={{ mval }}"><b>★</b> Festival bonus</a><a class="on" href="#process"><b>5</b> Process payroll</a></div>
-<div class="panel" id="process"><h3>5. Process payroll</h3><p class="hint">Enter this month's advances, deductions, tax and other additions with steps 1-4 (type them per employee or upload Excel). Processing re-reads {{ company.name }}'s attendance for the month and calculates every employee with this company's pay policy and pay components. You can re-process until the payroll is finalized.</p>
+<div class="panel" id="process"><h3>5. Process payroll</h3><p class="hint">Enter this month's advances, deductions, tax and other additions with steps 1-4 (type them per employee or upload Excel). Processing re-reads {{ company.name }} attendance for the month and calculates every employee with their company's pay policy and pay components. You can re-process until the payroll is finalized.</p>
 <form method="post" action="/payroll/process"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><button>{{ 'Re-process' if run else 'Process' }} payroll</button></form></div>{% endif %}
 {% if run %}
 <div class="cards">
@@ -25,19 +25,20 @@
 <div class="panel"><p>{% for k, v in by_mode.items() %}<b>{{ k }}</b>: Tk {{ '{:,.0f}'.format(v) }} &nbsp; {% endfor %}</p>
 <p class="hint">Processed by {{ run.created_by }} at {{ run.created_at.strftime('%d/%m/%Y %H:%M') }}{% if run.finalized_at %} · Finalized by {{ run.finalized_by }} at {{ run.finalized_at.strftime('%d/%m/%Y %H:%M') }}{% endif %}
 {% if warn_count %} · <b style="color:#8f1714">{{ warn_count }} employees have warnings (see Remarks)</b>{% endif %}</p>
-<a class="btn" href="/payroll/run/{{ run.id }}/salary.xlsx">Salary sheet + bank/cash sheets (Excel)</a> <a class="btn sec" href="/payroll/run/{{ run.id }}/payslips.pdf" target="_blank">All payslips (PDF)</a>
+<a class="btn" href="{{ run_base }}/salary.xlsx">Salary sheet + bank/cash sheets (Excel)</a> <a class="btn sec" href="{{ run_base }}/payslips.pdf" target="_blank">All payslips (PDF)</a>
 <a class="btn sec" href="/reports/payroll?company={{ cid }}&month={{ mval }}">Salary report (filters &amp; columns)</a>
+{% if all_mode %}<p class="hint" style="margin-top:8px">By company: {% for code, x in by_company.items() %}<b>{{ code }}</b> {% if x %}{{ x[0] }} staff <span class="tag {{ x[1] }}">{{ x[1] }}</span>{% else %}<span class="tag">not run</span>{% endif %} &nbsp; {% endfor %}</p>{% endif %}
 {% if run.status != 'FINAL' and 'payroll.finalize' in user.perms %}
-<form class="inline" method="post" action="/payroll/finalize" style="margin-top:14px" onsubmit="return confirm('Finalize and lock {{ company.code }} for this month? This cannot be undone here.')">
-<input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><div><label>Type FINAL to lock {{ company.code }} for this month</label><input name="confirm" required></div><button class="red">Finalize</button></form>{% endif %}
+<form class="inline" method="post" action="/payroll/finalize" style="margin-top:14px" onsubmit="return confirm('Finalize and lock {{ 'ALL companies' if all_mode else company.code }} for this month? This cannot be undone here.')">
+<input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="company_id" value="{{ cid }}"><div><label>Type FINAL to lock {{ 'all companies' if all_mode else company.code }} for this month</label><input name="confirm" required></div><button class="red">Finalize</button></form>{% endif %}
 </div>
 <div class="panel" id="payment"><h3>Salary payment (disbursement)</h3>
 <div class="cards" style="margin:6px 0 10px">{% for k, label in modes.items() %}<div class="metric"><span>{{ label }}</span><strong>Tk {{ '{:,.0f}'.format(by_mode.get(k, 0)) }}</strong><small class="hint" style="margin:0">{{ count_mode[k] }} people</small></div>{% endfor %}</div>
 {% if pay_problems %}<div class="alert info"><b>Fix before paying ({{ pay_problems|length }}):</b><br>{{ pay_problems[:15]|join('<br>')|safe }}{% if pay_problems|length > 15 %}<br>…{% endif %}<br><small>Change pay mode, bank and account / wallet no. in the employee profile, then process the payroll again.</small></div>{% endif %}
-<a class="btn" href="/payroll/run/{{ run.id }}/payment.pdf" target="_blank">🏦 Bank advice letter + cash &amp; mobile sheets (PDF)</a>
-<a class="btn sec" href="/payroll/run/{{ run.id }}/transfer.xlsx">Bank / bKash / Nagad upload file (Excel)</a>
+<a class="btn" href="{{ run_base }}/payment.pdf" target="_blank">🏦 Bank advice letter + cash &amp; mobile sheets (PDF)</a>
+<a class="btn sec" href="{{ run_base }}/transfer.xlsx">Bank / bKash / Nagad upload file (Excel)</a>
 {% if run.status != 'FINAL' %}<p class="hint" style="margin-top:8px">Print the bank letter after the payroll is finalized - draft letters are marked DRAFT.</p>{% endif %}
-{% if 'payroll.finalize' in user.perms %}<details style="margin-top:10px" {{ 'open' if not bank.account_no }}><summary><b>{{ company.code }} salary account</b> (debited by the bank): {{ bank.bank_name or 'not set' }} {{ bank.account_no }}</summary>
+{% if 'payroll.finalize' in user.perms %}<details style="margin-top:10px" {{ 'open' if not bank.account_no }}><summary><b>{{ 'Head Office (all companies)' if all_mode else company.code }} salary account</b> (debited by the bank): {{ bank.bank_name or 'not set' }} {{ bank.account_no }}</summary>
 <form method="post" action="/payroll/bank-settings"><input type="hidden" name="company_id" value="{{ cid }}"><input type="hidden" name="month" value="{{ mval }}"><div class="form-grid">
 <div><label>Bank</label><input name="bank_name" value="{{ bank.bank_name }}" placeholder="e.g. Dutch-Bangla Bank PLC"></div>
 <div><label>Branch</label><input name="branch" value="{{ bank.branch }}" placeholder="e.g. Motijheel Branch, Dhaka"></div>
@@ -49,6 +50,6 @@
 <p class="hint">With this set, one letter goes to your bank for all staff; accounts in other banks are marked for BEFTN. Without it, one letter is made per employee bank.</p></details>{% endif %}
 </div>
 {{ report_bar(r) }}
-{% call(l) report_table(r) %}<a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ l.employee_code }}" target="_blank">payslip</a>{% if 'payroll.edit' in user.perms and run.status != 'FINAL' %} · <a href="/payroll/line?company={{ cid }}&month={{ mval }}&emp={{ l.employee_id }}">edit</a>{% endif %}{% if l.edited %} <span class="tag DRAFT" title="edited by Admin">edited</span>{% endif %}{% endcall %}
+{% call(l) report_table(r) %}<a href="{{ run_base }}/payslips.pdf?employee_code={{ l.employee_code }}" target="_blank">payslip</a>{% if 'payroll.edit' in user.perms and run.status != 'FINAL' %} · <a href="/payroll/line?company={{ l.run.company_id }}&month={{ mval }}&emp={{ l.employee_id }}">edit</a>{% endif %}{% if l.edited %} <span class="tag DRAFT" title="edited by Admin">edited</span>{% endif %}{% endcall %}
 {% endif %}{% endif %}
 {% endblock %}

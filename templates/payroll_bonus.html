@@ -4,7 +4,7 @@
 <div class="steps">{% for k, t in tabs.items() %}<a href="/payroll/inputs?company={{ cid }}&month={{ mval }}&tab={{ k }}"><b>{{ loop.index }}</b> {{ t.title }}</a>{% endfor %}<a class="on" href="#"><b>★</b> Festival bonus</a><a href="/payroll?company={{ cid }}&month={{ mval }}"><b>5</b> Process payroll</a></div>
 <div class="panel"><h3>1. Bonus rule</h3>
 <form method="get" action="/payroll/bonus"><input type="hidden" name="calc" value="1"><div class="form-grid">
-<div><label>Company</label><select name="company">{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
+<div><label>Company</label><select name="company">{% if companies|length > 1 and not user.company_id %}<option value="all" {{ 'selected' if cid == 'all' }}>All companies</option>{% endif %}{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == cid }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>
 <div><label>Paid with salary of</label><input type="month" name="month" value="{{ mval }}"></div>
 <div><label>Bonus name (on payslip)</label><input name="name" value="{{ bonus_name }}" list="bnames"><datalist id="bnames">{% for n in names %}<option value="{{ n }}">{% endfor %}</datalist></div>
 <div><label>Amount</label><div style="display:flex;gap:6px"><input name="percent" value="{{ percent }}" style="width:80px"> <select name="basis"><option value="basic">% of basic</option><option value="gross" {{ 'selected' if basis == 'gross' }}>% of gross</option></select></div></div>
@@ -18,8 +18,8 @@
 </div>
 <form method="post" action="/payroll/bonus"><input type="hidden" name="company_id" value="{{ cid }}"><input type="hidden" name="month" value="{{ mval }}"><input type="hidden" name="name" value="{{ bonus_name }}">
 <div class="panel"><h3>2. {{ bonus_name }} - {{ 'calculated, not saved yet' if calc else ('saved amounts' if saved else 'nothing saved yet') }} · Total Tk {{ '{:,.0f}'.format(total) }} · {{ rows|selectattr('amount')|list|length }} of {{ rows|length }} staff</h3>
-<div class="table-wrap" style="max-height:60vh"><table class="input-grid"><tr><th>Code</th><th>Name</th><th>Department</th><th>Religion</th><th>Joined</th><th class="num">Service (months)</th><th class="num">Basic</th><th class="num">Gross</th><th>Bonus (Tk)</th><th>How</th></tr>
-{% for r in rows %}{% set e = r.employee %}<tr><td><input type="hidden" name="emp" value="{{ e.id }}">{{ e.employee_code }}</td><td>{{ e.full_name }}</td><td>{{ e.department.name if e.department }}</td><td>{{ e.religion or '' }}</td>
+<div class="table-wrap" style="max-height:60vh"><table class="input-grid"><tr><th>Code</th><th>Name</th>{% if multi %}<th>Company</th>{% endif %}<th>Department</th><th>Religion</th><th>Joined</th><th class="num">Service (months)</th><th class="num">Basic</th><th class="num">Gross</th><th>Bonus (Tk)</th><th>How</th></tr>
+{% for r in rows %}{% set e = r.employee %}<tr><td><input type="hidden" name="emp" value="{{ e.id }}">{{ e.employee_code }}</td><td>{{ e.full_name }}</td>{% if multi %}<td>{{ e.company.code if e.company }}</td>{% endif %}<td>{{ e.department.name if e.department }}</td><td>{{ e.religion or '' }}</td>
 <td>{{ e.joined_on.strftime('%d/%m/%Y') if e.joined_on else '-' }}</td><td class="num">{{ r.months }}</td><td class="num">{{ '{:,.0f}'.format(e.basic or 0) }}</td><td class="num">{{ '{:,.0f}'.format(e.gross or 0) }}</td>
 <td><input name="amt_{{ e.id }}" value="{{ '%g'|format(r.amount) if r.amount else '' }}" style="width:100px;text-align:right" placeholder="0"></td><td class="hint" style="margin:0">{{ r.reason }}</td></tr>
 {% else %}<tr><td colspan="10" class="empty">No employees.</td></tr>{% endfor %}</table></div>
