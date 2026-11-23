@@ -118,6 +118,29 @@ class EmployeeDocument(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
+class EmployeeAsset(Base):
+    """Company items given to an employee (laptop, mobile, SIM, ID card, uniform, tools ...) and their return."""
+    __tablename__ = "employee_assets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    category: Mapped[str] = mapped_column(String(30), default="OTHER")
+    name: Mapped[str] = mapped_column(String(150))
+    brand_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    serial_no: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    asset_tag: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    value: Mapped[Decimal] = mapped_column(Money, default=0)
+    issued_on: Mapped[date] = mapped_column(Date)
+    issued_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    condition_issued: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    status: Mapped[str] = mapped_column(String(12), default="ISSUED")     # ISSUED / RETURNED / LOST / DAMAGED
+    returned_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    returned_to: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    condition_returned: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    employee = relationship("Employee")
+
+
 class Device(Base):
     """A punch machine. ZKTeco machines push to /iclock (ADMS); Hikvision machines are polled (ISAPI).
     Machines that contact the server but are not approved here are listed as pending and ignored."""

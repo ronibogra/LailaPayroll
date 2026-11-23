@@ -345,7 +345,8 @@ def main():
 
     step("Reports centre: 7 reports, filters, Excel + PDF")
     r = page(s, "/reports")
-    for t in ("Punch records", "First &amp; last punch", "Daily attendance", "Leave", "Job card", "Employees", "Payroll"):
+    for t in ("Punch records", "First &amp; last punch", "Daily attendance", "Leave", "Job card", "Employees", "Payroll",
+              "Assets with staff"):
         ok(t in r.text, f"reports centre missing {t}")
     rng = f"start={date(y, m, 1)}&end={prev_last}"
     pages = {"punches": rng + "&company=2", "first_last": rng + "&single=1", "attendance": rng + "&att_status=ABSENT&att_status=LATE",
@@ -460,6 +461,21 @@ def main():
     ok(s.get(BASE + f"/employees/{kid}/documents/{doc_id}", timeout=30).content == pdf_doc, "document download")
     post(s, f"/employees/{kid}/documents", {"doc_type": "OTHER"}, files={"files": ("bad.exe", b"MZ", "application/x-msdownload")},
          must="not allowed", must_not=None)
+    r = post(s, f"/employees/{kid}/assets", {"category": "LAPTOP", "name": "Laptop", "brand_model": "Dell Latitude 5420",
+                                             "serial_no": "SN-CI-001", "asset_tag": "LG-IT-0042", "quantity": "1",
+                                             "value": "65000", "condition": "Good"}, must="Laptop given to Abdul Karim")
+    ok("SN-CI-001" in r.text and "With employee" in r.text, "asset must show on the profile")
+    post(s, f"/employees/{kid}/assets", {"category": "SIM", "name": "Office SIM", "serial_no": "01700000000"},
+         must="Office SIM given")
+    rid0 = re.search(r'/employees/(\d+)/edit">Edit', page(s, "/employees?q=HO-0001").text).group(1)
+    post(s, f"/employees/{rid0}/assets", {"category": "LAPTOP", "name": "Laptop", "serial_no": "SN-CI-001"},
+         must="is still with 12127", must_not=None)
+    aid = re.search(rf"/employees/{kid}/assets/(\d+)/return", r.text).group(1)
+    post(s, f"/employees/{kid}/assets/{aid}/return", {"status": "RETURNED", "condition": "Good"}, must="returned")
+    ws = load_workbook(io.BytesIO(page(s, "/export/assets.xlsx?asset_status=OUT").content)).active
+    vals = {ws.cell(i, 7).value for i in range(6, ws.max_row + 1)} - {None}
+    ok("Office SIM" in vals and "Laptop" not in vals, f"assets report (with staff now): {vals}")
+    page(s, "/reports/assets", must="Assets with staff")
     r = page(s, f"/employees/{kid}/profile.pdf")
     ok(r.content[:4] == b"%PDF" and r.headers["content-type"] == "application/pdf", "profile PDF")
     # role without "salary.edit" can edit the profile but not the salary
@@ -469,7 +485,7 @@ def main():
          must="saved")
     h = requests.Session()
     post(h, "/login", {"username": "hrnosal", "password": "Hrnosal@12345"}, must="Dashboard")
-    r = page(h, f"/employees/{kid}/edit", must="cannot change salaries")
+    r = page(h, f"/employees/{kid}/edit", must="can only be changed by an Admin")
     ok('name="gross"' not in r.text, "salary fields must be hidden without salary.edit")
     post(h, "/employees/save", dict(form, gross="99999", designation="Senior Accountant"), files={"_": ("", b"")},
          must="Saved 12127")

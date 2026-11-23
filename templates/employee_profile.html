@@ -77,6 +77,31 @@
 <td class="num"><b>{{ '{:,.0f}'.format(l.net_pay) }}</b></td><td><a href="/payroll/run/{{ run.id }}/payslips.pdf?employee_code={{ e.employee_code }}" target="_blank">payslip</a></td></tr>
 {% else %}<tr><td colspan="6" class="hint">No payroll yet.</td></tr>{% endfor %}</table></div></div>{% endif %}
 </div>
+{% set out = assets|selectattr('status', 'equalto', 'ISSUED')|list %}
+<div class="panel" id="assets"><h3>Assets <small class="hint" style="margin:0">{{ out|length }} item(s) with {{ e.full_name }}{% if out %}, value Tk {{ '{:,.0f}'.format(out|sum(attribute='value')) }}{% endif %}</small></h3>
+{% if out and e.employment_status != 'ACTIVE' %}<div class="alert err">{{ e.full_name }} is not active but still has {{ out|length }} company item(s) - collect them before final settlement.</div>{% endif %}
+<div class="table-wrap"><table><tr><th>Type</th><th>Item</th><th>Brand / model</th><th>Serial no.</th><th>Asset tag</th><th class="num">Qty</th><th class="num">Value</th><th>Given</th><th>Status</th><th></th></tr>
+{% for a in assets %}<tr><td>{{ asset_cats.get(a.category, a.category) }}</td><td><b>{{ a.name }}</b>{% if a.note %}<div class="hint" style="margin:0">{{ a.note }}</div>{% endif %}</td><td>{{ a.brand_model or '' }}</td><td>{{ a.serial_no or '' }}</td><td>{{ a.asset_tag or '' }}</td>
+<td class="num">{{ a.quantity }}</td><td class="num">{{ '{:,.0f}'.format(a.value or 0) }}</td><td>{{ a.issued_on.strftime('%d/%m/%Y') }}<div class="hint" style="margin:0">{{ a.condition_issued or '' }}{{ ' · ' ~ a.issued_by if a.issued_by }}</div></td>
+<td><span class="tag {{ 'DRAFT' if a.status == 'ISSUED' else ('yes' if a.status == 'RETURNED' else 'ABSENT') }}">{{ asset_status.get(a.status, a.status) }}</span>{% if a.returned_on %}<div class="hint" style="margin:0">{{ a.returned_on.strftime('%d/%m/%Y') }}{{ ' · ' ~ a.condition_returned if a.condition_returned }}</div>{% endif %}</td>
+<td>{% if 'employees.edit' in user.perms %}{% if a.status == 'ISSUED' %}<details><summary class="link">take back</summary><form method="post" action="/employees/{{ e.id }}/assets/{{ a.id }}/return" style="margin-top:6px">
+<select name="status"><option value="RETURNED">Returned</option><option value="DAMAGED">Returned damaged</option><option value="LOST">Lost</option></select>
+<input type="date" name="returned_on" value="{{ today }}"> <select name="condition"><option value="">Condition</option>{% for c in asset_conds %}<option>{{ c }}</option>{% endfor %}</select>
+<input name="note" placeholder="Note"> <button class="sec">Save</button></form></details>{% endif %}
+<form method="post" action="/employees/{{ e.id }}/assets/{{ a.id }}/delete" onsubmit="return confirm('Remove this entry (only if it was entered by mistake)?')" style="display:inline"><button class="link">remove</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="10" class="hint">No company items recorded for this employee.</td></tr>{% endfor %}</table></div>
+{% if 'employees.edit' in user.perms %}<form method="post" action="/employees/{{ e.id }}/assets" style="margin-top:12px"><div class="form-grid">
+<div><label>Type</label><select name="category">{% for k, v in asset_cats.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+<div><label>Item *</label><input name="name" required placeholder="e.g. Laptop, Office SIM, Uniform set"></div>
+<div><label>Brand / model</label><input name="brand_model" placeholder="e.g. Dell Latitude 5420"></div>
+<div><label>Serial no. / IMEI / SIM no.</label><input name="serial_no"></div>
+<div><label>Asset tag</label><input name="asset_tag" placeholder="e.g. LG-IT-0042"></div>
+<div><label>Quantity</label><input type="number" name="quantity" value="1" min="1"></div>
+<div><label>Value (Tk)</label><input name="value" placeholder="0"></div>
+<div><label>Given on</label><input type="date" name="issued_on" value="{{ today }}"></div>
+<div><label>Condition</label><select name="condition">{% for c in asset_conds %}<option>{{ c }}</option>{% endfor %}</select></div>
+<div><label>Note</label><input name="note"></div>
+</div><p><button>+ Give item</button></p></form>{% endif %}</div>
 <div class="panel" id="documents"><h3>Documents &amp; certificates</h3>
 <div class="table-wrap"><table><tr><th>Type</th><th>Title</th><th>File</th><th>Size</th><th>Uploaded</th><th></th></tr>
 {% for d in documents %}<tr><td>{{ doc_types.get(d.doc_type, d.doc_type) }}</td><td>{{ d.title }}</td><td><a href="/employees/{{ e.id }}/documents/{{ d.id }}" target="_blank">{{ d.original_name }}</a></td>

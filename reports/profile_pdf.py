@@ -22,7 +22,7 @@ def _money(v):
     return f"Tk {float(v or 0):,.0f}"
 
 
-def profile_pdf(e, photo, balances, documents, show_salary: bool, components=()) -> bytes:
+def profile_pdf(e, photo, balances, documents, show_salary: bool, components=(), assets=()) -> bytes:
     from config import settings
     buf = io.BytesIO()
     W, H = A4
@@ -92,6 +92,20 @@ def profile_pdf(e, photo, balances, documents, show_salary: bool, components=())
         t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), RED), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                                ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#BBBBBB")),
                                ("ALIGN", (1, 0), (-1, -1), "CENTER")]))
+        story.append(t)
+    if assets:
+        from services.assets import CATEGORIES, STATUS
+        story.append(Paragraph("Company assets", h2))
+        data = [["Item", "Serial / tag", "Given", "Status"]] + [
+            [Paragraph(esc(f"{a.name} ({CATEGORIES.get(a.category, a.category)})" + (f" x{a.quantity}" if a.quantity > 1 else "")), cell),
+             Paragraph(esc(" / ".join(x for x in (a.serial_no, a.asset_tag) if x) or "-"), cell),
+             a.issued_on.strftime("%d/%m/%Y"),
+             STATUS.get(a.status, a.status) + (f" {a.returned_on:%d/%m/%Y}" if a.returned_on else "")]
+            for a in assets]
+        t = Table(data, colWidths=[72 * mm, 45 * mm, 25 * mm, 38 * mm])
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), RED), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                               ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 8.5), ("FONTSIZE", (0, 1), (-1, -1), 8.5),
+                               ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#BBBBBB")), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
         story.append(t)
     if documents:
         story.append(Paragraph("Documents on file", h2))

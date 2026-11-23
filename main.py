@@ -22,7 +22,7 @@ from integration.employee_import import import_employees, template_bytes
 from integration.zk_adms import options_response
 from models import (Company, Department, Employee, Shift, Device, AttendanceLog, DailyAttendance, Holiday, Leave,
                     PayrollAdjustment, PayrollRun, PayrollLine, User, ErrorLog, Role, EmployeeDocument,
-                    LeaveType, SpecialHoliday, PayComponent, EmployeeComponent)
+                    LeaveType, SpecialHoliday, PayComponent, EmployeeComponent, EmployeeAsset)
 from payroll.engine import split_gross
 from reports.excel import (salary_sheet, attendance_month, attendance_day, punches_sheet, first_last_sheet,
                            combined_salary)
@@ -32,6 +32,7 @@ from security import (hash_password, verify_password, create_token, decode_token
 from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, parse as parse_perms
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
 from services import leave as leave_svc, documents as docs, components as comp_svc, disbursement as disb
+from services import assets as asset_svc
 from services.errors import log_error
 from services.photos import save_photo, save_signature, photo_path, bulk_photos
 from integration import generic_import
@@ -1054,6 +1055,9 @@ def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db:
     return render(request, "employee_profile.html", user, e=emp, summary=summary, month_rows=month_rows, today=today,
                   first_last=fl, leaves=leaves, pays=pays, show_salary=show_salary, documents=documents,
                   doc_types=docs.DOC_TYPES, bal=leave_svc.balances(db, emp), leave_labels=leave_svc.STATUS_LABEL,
+                  assets=db.scalars(select(EmployeeAsset).where(EmployeeAsset.employee_id == emp.id)
+                                    .order_by(EmployeeAsset.status != "ISSUED", EmployeeAsset.issued_on.desc())).all(),
+                  asset_cats=asset_svc.CATEGORIES, asset_status=asset_svc.STATUS, asset_conds=asset_svc.CONDITIONS,
                   components=comp_svc.for_employee(emp, *comp_svc.load_all(db)) if show_salary else [],
                   calcs=comp_svc.CALCS)
 
@@ -1085,6 +1089,79 @@ def employee_photo(emp_id: int, user=Depends(page_user), db: Session = Depends(g
     if not path:
         return RedirectResponse("/static/img/no-photo.png", status_code=303)
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60"})
+
+
+@app.post("/employees/{emp_id}/assets")
+async def employee_asset_add(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    f = await request.form()
+    v = lambda k: str(f.get(k) or "").strip()  # noqa: E731
+    back = f"/employees/{emp.id}#assets"
+    try:
+        if not v("name"):
+            raise ValueError("Give the item name (e.g. Dell Latitude 5420, Grameenphone SIM)")
+        issued = date.fromisoformat(v("issued_on")) if v("issued_on") else now_local().date()
+        qty = int(v("quantity") or 1)
+        if not 1 <= qty <= 10000:
+            raise ValueError("Quantity must be 1 or more")
+        value = dec(v("value"), "Value")
+        serial = v("serial_no")[:120] or None
+        if serial:
+            other = db.scalar(select(EmployeeAsset).where(EmployeeAsset.serial_no == serial,
+                                                          EmployeeAsset.status == "ISSUED"))
+            if other:
+                raise ValueError(f"Serial {serial} is still with {other.employee.employee_code} "
+                                 f"{other.employee.full_name} - take it back there first")
+    except ValueError as exc:
+        return go(back, err=str(exc))
+    db.add(EmployeeAsset(employee_id=emp.id, category=v("category") if v("category") in asset_svc.CATEGORIES else "OTHER",
+                         name=v("name")[:150], brand_model=v("brand_model")[:120] or None, serial_no=serial,
+                         asset_tag=v("asset_tag")[:60] or None, quantity=qty, value=value, issued_on=issued,
+                         issued_by=user["username"], condition_issued=v("condition")[:30] or None,
+                         note=v("note")[:300] or None))
+    audit(db, user, "ASSET_ISSUE", f"{emp.employee_code}: {v('name')} {serial or ''} x{qty}", commit=False)
+    db.commit()
+    return go(back, msg=f"{v('name')} given to {emp.full_name}")
+
+
+@app.post("/employees/{emp_id}/assets/{asset_id}/return")
+async def employee_asset_return(request: Request, emp_id: int, asset_id: int, user=Depends(page_user),
+                                db: Session = Depends(get_db)):
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    a = db.get(EmployeeAsset, asset_id)
+    back = f"/employees/{emp.id}#assets"
+    if not a or a.employee_id != emp.id or a.status != "ISSUED":
+        return go(back, err="That item is not with this employee")
+    f = await request.form()
+    status = str(f.get("status") or "RETURNED")
+    try:
+        a.returned_on = date.fromisoformat(str(f.get("returned_on"))) if f.get("returned_on") else now_local().date()
+    except ValueError:
+        return go(back, err="Give a valid return date")
+    a.status = status if status in ("RETURNED", "LOST", "DAMAGED") else "RETURNED"
+    a.returned_to = user["username"]
+    a.condition_returned = str(f.get("condition") or "").strip()[:30] or None
+    note = str(f.get("note") or "").strip()
+    if note:
+        a.note = ((a.note + " | ") if a.note else "") + f"Return: {note}"[:200]
+    audit(db, user, "ASSET_" + a.status, f"{emp.employee_code}: {a.name} {a.serial_no or ''}", commit=False)
+    db.commit()
+    return go(back, msg=f"{a.name}: {asset_svc.STATUS[a.status].lower()}")
+
+
+@app.post("/employees/{emp_id}/assets/{asset_id}/delete")
+def employee_asset_delete(emp_id: int, asset_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    a = db.get(EmployeeAsset, asset_id)
+    if a and a.employee_id == emp.id:
+        audit(db, user, "ASSET_DELETE", f"{emp.employee_code}: {a.name} {a.serial_no or ''} (entered by mistake)",
+              commit=False)
+        db.delete(a)
+        db.commit()
+    return go(f"/employees/{emp.id}#assets", msg="Entry removed")
 
 
 @app.post("/employees/{emp_id}/documents")
@@ -1154,7 +1231,9 @@ def employee_profile_pdf(emp_id: int, user=Depends(page_user), db: Session = Dep
                  if d.doc_type != "APPOINTMENT" or "appointment.letter" in user["perms"]]
     pdf = profile_pdf(emp, photo_path(emp.photo), leave_svc.balances(db, emp), documents,
                       show_salary="salary.view" in user["perms"],
-                      components=comp_svc.for_employee(emp, *comp_svc.load_all(db)))
+                      components=comp_svc.for_employee(emp, *comp_svc.load_all(db)),
+                      assets=db.scalars(select(EmployeeAsset).where(EmployeeAsset.employee_id == emp.id)
+                                        .order_by(EmployeeAsset.issued_on)).all())
     audit(db, user, "PROFILE_PDF", emp.employee_code)
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="profile-{emp.employee_code}.pdf"'})

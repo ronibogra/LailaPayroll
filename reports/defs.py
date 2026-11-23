@@ -6,7 +6,7 @@ from datetime import date, time, timedelta
 from sqlalchemy import func, or_, select
 
 from models import (AttendanceLog, AuditLog, Company, DailyAttendance, Department, Device, Employee, ErrorLog, Holiday,
-                    Leave, PayrollLine, PayrollRun, Shift)
+                    Leave, PayrollLine, PayrollRun, Shift, EmployeeAsset)
 from reports.engine import Col, Report
 from reports.filters import emp_conditions, has_emp_filter
 from timeutil import now_local
@@ -508,6 +508,54 @@ def fetch_errors(db, user, p, export):
     return rows, p.get("source", ""), len(rows)
 
 
+# ------------------------------------------------------------ assets with employees
+def _asset_labels():
+    from services.assets import CATEGORIES, STATUS
+    return CATEGORIES, STATUS
+
+
+ASSET_COLS = [
+    Col("code", "Code", lambda r: r[1].employee_code, link=lambda r: emp_link(r[1]) + "#assets"),
+    Col("name", "Name", lambda r: r[1].full_name, link=lambda r: emp_link(r[1]) + "#assets"),
+    Col("company", "Company", lambda r: r[1].company.code if r[1].company else ""),
+    Col("department", "Department", lambda r: r[1].department.name if r[1].department else ""),
+    Col("emp_status", "Employee status", lambda r: r[1].employment_status, False),
+    Col("type", "Type", lambda r: _asset_labels()[0].get(r[0].category, r[0].category)),
+    Col("item", "Item", lambda r: r[0].name),
+    Col("model", "Brand / model", lambda r: r[0].brand_model),
+    Col("serial", "Serial no.", lambda r: r[0].serial_no),
+    Col("tag", "Asset tag", lambda r: r[0].asset_tag),
+    Col("qty", "Qty", lambda r: r[0].quantity, kind="num"),
+    Col("value", "Value", lambda r: r[0].value, kind="money"),
+    Col("issued", "Given on", lambda r: r[0].issued_on, kind="date"),
+    Col("status", "Status", lambda r: _asset_labels()[1].get(r[0].status, r[0].status)),
+    Col("returned", "Returned on", lambda r: r[0].returned_on, kind="date"),
+    Col("condition", "Condition", lambda r: " → ".join(x for x in (r[0].condition_issued, r[0].condition_returned) if x),
+        False),
+    Col("note", "Note", lambda r: r[0].note, False),
+]
+
+
+def fetch_assets(db, user, p, export):
+    stmt = (select(EmployeeAsset, Employee).join(Employee, Employee.id == EmployeeAsset.employee_id)
+            .where(*emp_conditions(p, user)))
+    if p.get("asset_status") == "OUT":
+        stmt = stmt.where(EmployeeAsset.status == "ISSUED")
+    elif p.get("asset_status") in ("RETURNED", "LOST", "DAMAGED"):
+        stmt = stmt.where(EmployeeAsset.status == p["asset_status"])
+    elif p.get("asset_status") == "OUT_LEFT":       # items still with staff who have left
+        stmt = stmt.where(EmployeeAsset.status == "ISSUED", Employee.employment_status != "ACTIVE")
+    if p.get("asset_type"):
+        stmt = stmt.where(EmployeeAsset.category == p["asset_type"])
+    if p.get("asset_q"):
+        q = f"%{p['asset_q'].strip()}%"
+        stmt = stmt.where(or_(EmployeeAsset.name.ilike(q), EmployeeAsset.serial_no.ilike(q),
+                              EmployeeAsset.asset_tag.ilike(q), EmployeeAsset.brand_model.ilike(q)))
+    rows = db.execute(stmt.order_by(Employee.company_id, Employee.employee_code, EmployeeAsset.issued_on)).all()
+    total = sum((r[0].value or 0) for r in rows if r[0].status == "ISSUED")
+    return rows, f"{len(rows)} item(s) · with staff now: Tk {total:,.0f}{_comp_name(db, _company(user, p))}", len(rows)
+
+
 REPORTS: dict[str, Report] = {r.id: r for r in [
     Report("punches", "Punch records", "punches.view", PUNCH_COLS, fetch_punches,
            filters=["start", "end"] + EMP_F + ["machine", "source", "direction", "unknown"],
@@ -538,6 +586,10 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
            totals=["gross", "basic", "house_rent", "medical", "transport", "food", "earned", "absent_ded", "ot",
                    "bonus", "late_ded", "custom_add", "addition", "advance", "other_ded", "tax", "custom_ded", "stamp",
                    "deductions", "net"]),
+    Report("assets", "Assets with staff", "employees.view", ASSET_COLS, fetch_assets,
+           filters=EMP_F + ["asset_status", "asset_type", "asset_q"], totals=["qty", "value"],
+           description="Company items given to employees - laptops, phones, SIMs, ID cards, uniforms, tools - "
+                       "what is still with staff, returned, lost, and items still with people who have left."),
     Report("holidays", "Holidays", "attendance.view", HOLIDAY_COLS, fetch_holidays, landscape=False),
     Report("shifts", "Shifts", "attendance.view", SHIFT_COLS, fetch_shifts),
     Report("machines", "Machines", "machines.manage", DEVICE_COLS, fetch_devices),
@@ -545,4 +597,4 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
     Report("errors", "Error log", "logs.view", ERROR_COLS, fetch_errors),
 ]}
 
-CENTRE = ["punches", "first_last", "attendance", "leaves", "jobcard", "employees", "payroll"]
+CENTRE = ["punches", "first_last", "attendance", "leaves", "jobcard", "employees", "payroll", "assets"]
