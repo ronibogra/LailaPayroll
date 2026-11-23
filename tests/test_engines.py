@@ -268,3 +268,12 @@ def test_ot_divisor_zero_does_not_crash():
     r = compute_pay(split_gross(12500, pol), m, pol)
     assert r.ot_rate == 0 and r.ot_amount == 0 and r.net_pay == D("12500")
     assert any("OT hourly divisor" in w for w in r.warnings)
+
+
+def test_split_pay_bank_and_cash():
+    from services.disbursement import split
+    assert split(D("23500"), "BANK", "FIXED", D("15000")) == (D("15000"), D("8500"))
+    assert split(D("10000"), "BANK", "FIXED", D("15000")) == (D("10000"), D("0"))      # never more than net
+    assert split(D("20000"), "MOBILE", "PERCENT", D("60")) == (D("12000"), D("8000"))
+    assert split(D("20000"), "BANK", "", D("0")) == (D("20000"), D("0"))
+    assert split(D("20000"), "CASH", "FIXED", D("5000")) == (D("0"), D("20000"))

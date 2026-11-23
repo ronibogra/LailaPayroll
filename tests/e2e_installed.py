@@ -690,6 +690,27 @@ def main():
     ok("Abdul Karim" in r.text and ">final</span>" in r.text, "all-company input screen")
     post(s, "/payroll/inputs", {"tab": "tax", "company_id": "all", "month": month, "emp": [kar, kid],
                                 f"tax_{kar}": "300", f"tax_{kid}": "999"}, must="1 employee(s) changed")
+    # part bank, part cash
+    post(s, "/employees/save", {"emp_id": kar, "company_id": "2", "employee_code": "LTL-0001", "card_no": "2002",
+                                "full_name": "Ms. Karima", "department": "Sewing", "gross": "13550", "auto_split": "1",
+                                "payment_mode": "CASH", "split_mode": "FIXED", "split_value": "5000",
+                                "employment_status": "ACTIVE"}, files={"_": ("", b"")}, must="needs pay mode BANK",
+         must_not=None)
+    post(s, "/employees/save", {"emp_id": kar, "company_id": "2", "employee_code": "LTL-0001", "card_no": "2002",
+                                "full_name": "Ms. Karima", "department": "Sewing", "gross": "13550", "auto_split": "1",
+                                "payment_mode": "BANK", "bank_name": "Dutch-Bangla Bank", "account_no": "1011100055555",
+                                "split_mode": "FIXED", "split_value": "5000", "employment_status": "ACTIVE"},
+         files={"_": ("", b"")}, must="split: Tk 5,000 to bank, rest cash")
+    post(s, "/payroll/process", {"month": month, "company_id": "2"}, must="Draft payroll ready")
+    post(s, "/report-columns/payroll", {"col": ["code", "net", "to_bank", "cash_part"], "back": "/reports/payroll"})
+    ws = load_workbook(io.BytesIO(page(s, f"/export/payroll.xlsx?company=2&month={month}").content)).active
+    row = [ws.cell(6, i).value for i in range(1, 5)]
+    ok(row[0] == "LTL-0001" and float(row[2]) == 5000 and abs(float(row[1]) - 5000 - float(row[3])) < 0.01,
+       f"split pay: {row}")
+    post(s, "/report-columns/payroll", {"reset": "1", "back": "/reports/payroll"})
+    run2 = re.search(r"/payroll/run/(\d+)/payment.pdf", page(s, f"/payroll?company=2&month={month}").text).group(1)
+    wb = load_workbook(io.BytesIO(page(s, f"/payroll/run/{run2}/salary.xlsx").content))
+    ok("Bank Advice" in wb.sheetnames and "Cash Payment" in wb.sheetnames, f"split in both sheets: {wb.sheetnames}")
 
     step("staff ID cards: A4 sheet and card printer")
     page(s, "/idcards", must="Print staff ID cards")

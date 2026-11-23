@@ -91,6 +91,9 @@ EMP_COLS = [
     Col("birth_cert", "Birth certificate", lambda e: e.birth_certificate_no, False),
     Col("passport", "Passport", lambda e: e.passport_no, False),
     Col("weekly_off", "Own weekly off", lambda e: _wo(e.weekly_off), False),
+    Col("split", "Split pay", lambda e: (f"Tk {e.split_value:,.0f} to bank, rest cash" if e.split_mode == "FIXED" else
+                                         f"{e.split_value:g}% to bank, rest cash" if e.split_mode == "PERCENT" else ""),
+        False),
     Col("ot_eligible", "OT eligible", lambda e: e.ot_eligible is not False, False),
     Col("email", "Email", lambda e: e.email, False),
     Col("emergency", "Emergency contact", lambda e: e.emergency_contact, False),
@@ -395,6 +398,11 @@ def fetch_devices(db, user, p, export):
 
 
 # ------------------------------------------------------------ payroll lines (one company, one month)
+def _parts(l):
+    from services.disbursement import bank_part, cash_part
+    return bank_part(l), cash_part(l)
+
+
 def _items_text(js) -> str:
     import json
     try:
@@ -440,7 +448,9 @@ PAY_COLS = [
     Col("stamp", "Stamp", lambda l: l.stamp, False, kind="money"),
     Col("deductions", "Deductions", lambda l: l.total_deductions, kind="money"),
     Col("net", "Net pay", lambda l: l.net_pay, kind="money"),
-    Col("mode", "Mode", lambda l: l.payment_mode),
+    Col("to_bank", "To bank / wallet", lambda l: _parts(l)[0], False, kind="money"),
+    Col("cash_part", "Cash", lambda l: _parts(l)[1], False, kind="money"),
+    Col("mode", "Mode", lambda l: l.payment_mode + (" + cash" if l.cash_amount and l.bank_amount else "")),
     Col("bank", "Bank", lambda l: l.bank_name, False), Col("account", "Account no.", lambda l: l.account_no, False),
     Col("items", "Pay items", lambda l: _items_text(l.items_json), False),
     Col("edited", "Edited", lambda l: "edited" if l.edited else "", False),
@@ -585,7 +595,7 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
            description="Salary lines for one or many months and companies: earnings, overtime, deductions, net pay.",
            totals=["gross", "basic", "house_rent", "medical", "transport", "food", "earned", "absent_ded", "ot",
                    "bonus", "late_ded", "custom_add", "addition", "advance", "other_ded", "tax", "custom_ded", "stamp",
-                   "deductions", "net"]),
+                   "deductions", "net", "to_bank", "cash_part"]),
     Report("assets", "Assets with staff", "employees.view", ASSET_COLS, fetch_assets,
            filters=EMP_F + ["asset_status", "asset_type", "asset_q"], totals=["qty", "value"],
            description="Company items given to employees - laptops, phones, SIMs, ID cards, uniforms, tools - "

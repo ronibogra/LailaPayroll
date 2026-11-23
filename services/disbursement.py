@@ -16,6 +16,50 @@ MODES = {"BANK": "Bank transfer", "MOBILE": "Mobile banking (bKash / Nagad / Roc
 BANK_KEYS = ("bank_name", "branch", "account_name", "account_no", "signatory1", "signatory2")
 
 
+def split(net, mode: str, split_mode: str, split_value) -> tuple[Decimal, Decimal]:
+    """(to bank / wallet, in cash) for one net pay."""
+    net = Decimal(str(net or 0))
+    if net <= 0:
+        return Decimal(0), Decimal(0)
+    if mode not in ("BANK", "MOBILE"):
+        return Decimal(0), net
+    v = Decimal(str(split_value or 0))
+    if split_mode == "FIXED" and v > 0:
+        bank = min(v, net)
+    elif split_mode == "PERCENT" and 0 < v < 100:
+        bank = (net * v / 100).quantize(Decimal(1))
+    else:
+        bank = net
+    return bank, net - bank
+
+
+def bank_part(l) -> Decimal:
+    if l.bank_amount is not None:
+        return Decimal(l.bank_amount)
+    return Decimal(l.net_pay) if l.payment_mode in ("BANK", "MOBILE") and l.net_pay > 0 else Decimal(0)
+
+
+def cash_part(l) -> Decimal:
+    if l.cash_amount is not None:
+        return Decimal(l.cash_amount)
+    return Decimal(l.net_pay) if l.payment_mode not in ("BANK", "MOBILE") and l.net_pay > 0 else Decimal(0)
+
+
+def totals(lines) -> dict:
+    """Amounts per channel (a split employee counts in both)."""
+    out = {"BANK": Decimal(0), "MOBILE": Decimal(0), "CASH": Decimal(0)}
+    people = {"BANK": 0, "MOBILE": 0, "CASH": 0}
+    for l in lines:
+        b, c = bank_part(l), cash_part(l)
+        if b > 0 and l.payment_mode in ("BANK", "MOBILE"):
+            out[l.payment_mode] += b
+            people[l.payment_mode] += 1
+        if c > 0:
+            out["CASH"] += c
+            people["CASH"] += 1
+    return {"amount": out, "people": people}
+
+
 def company_bank(db, company_id: int) -> dict:
     from services.policy import get_setting
     return {k: get_setting(db, f"salary_bank.{k}", company_id, default="") or "" for k in BANK_KEYS}
@@ -23,7 +67,7 @@ def company_bank(db, company_id: int) -> dict:
 
 def group_by(lines, mode: str) -> "OrderedDict[str, list]":
     out: OrderedDict[str, list] = OrderedDict()
-    for l in sorted((l for l in lines if l.payment_mode == mode and l.net_pay > 0),
+    for l in sorted((l for l in lines if l.payment_mode == mode and bank_part(l) > 0),
                     key=lambda l: ((l.bank_name or "").strip().lower(), l.employee_code)):
         out.setdefault((l.bank_name or "(bank not set)").strip() or "(bank not set)", []).append(l)
     return out
@@ -33,7 +77,7 @@ def problems(lines) -> list[str]:
     """Things to fix before paying: missing account numbers, duplicates."""
     out, seen = [], {}
     for l in lines:
-        if l.payment_mode in ("BANK", "MOBILE") and l.net_pay > 0:
+        if l.payment_mode in ("BANK", "MOBILE") and bank_part(l) > 0:
             if not (l.account_no or "").strip():
                 out.append(f"{l.employee_code} {l.full_name}: {l.payment_mode.lower()} pay but no account / wallet no.")
             elif l.payment_mode == "MOBILE" and not (l.account_no.strip().isdigit() and len(l.account_no.strip()) == 11):
@@ -61,11 +105,11 @@ def transfer_xlsx(run) -> bytes:
             ws["A1"].font = Font(bold=True, size=12)
             if mode == "BANK":
                 head = ["SL", "Employee ID", "Account name", "Account no.", "Amount (Tk)", "Narration"]
-                rows = [[i, l.employee_code, l.full_name, l.account_no or "", float(l.net_pay), f"Salary {period}"]
+                rows = [[i, l.employee_code, l.full_name, l.account_no or "", float(bank_part(l)), f"Salary {period}"]
                         for i, l in enumerate(ls, 1)]
             else:
                 head = ["SL", "Wallet number", "Amount (Tk)", "Name", "Employee ID", "Reference"]
-                rows = [[i, l.account_no or "", float(l.net_pay), l.full_name, l.employee_code, f"Salary {period}"]
+                rows = [[i, l.account_no or "", float(bank_part(l)), l.full_name, l.employee_code, f"Salary {period}"]
                         for i, l in enumerate(ls, 1)]
             ws.append(head)
             for c in ws[2]:
@@ -73,7 +117,7 @@ def transfer_xlsx(run) -> bytes:
             for r in rows:
                 ws.append(r)
             amt_col = 5 if mode == "BANK" else 3
-            ws.append([""] * (amt_col - 2) + ["Total", float(sum(l.net_pay for l in ls))])
+            ws.append([""] * (amt_col - 2) + ["Total", float(sum(bank_part(l) for l in ls))])
             ws.cell(ws.max_row, amt_col).font = Font(bold=True)
             for r in range(3, ws.max_row + 1):
                 ws.cell(r, amt_col).number_format = "#,##0.00"
@@ -124,7 +168,7 @@ def payment_pdf(run, bank: dict, letter_date: date | None = None) -> bytes:
     else:                  # company bank not set: one letter per employee bank
         letters = [(name, ls, False) for name, ls in banks.items()]
     for n, (name, ls, with_bank_col) in enumerate(letters, 1):
-        total = sum((l.net_pay for l in ls), Decimal(0))
+        total = sum((bank_part(l) for l in ls), Decimal(0))
         story.append(Paragraph(f"Ref: {run.company.code}/ACC/SAL/{run.year}{run.month:02d}/{n:02d}"
                                f" &nbsp;&nbsp;&nbsp; Date: {letter_date:%d %B %Y}", body))
         story.append(Spacer(1, 10))
@@ -144,11 +188,11 @@ def payment_pdf(run, bank: dict, letter_date: date | None = None) -> bytes:
         story.append(Spacer(1, 8))
         if with_bank_col:
             rows = [[i, l.employee_code, l.full_name[:28], (l.bank_name or "")[:22], l.account_no or "",
-                     f"{l.net_pay:,.2f}"] for i, l in enumerate(ls, 1)]
+                     f"{bank_part(l):,.2f}"] for i, l in enumerate(ls, 1)]
             story.append(table(["SL", "Emp ID", "Account name", "Bank", "Account no.", "Amount (Tk)"], rows,
                                [10 * mm, 21 * mm, 50 * mm, 37 * mm, 34 * mm, 28 * mm], 5, total))
         else:
-            rows = [[i, l.employee_code, l.full_name[:34], l.account_no or "", f"{l.net_pay:,.2f}"]
+            rows = [[i, l.employee_code, l.full_name[:34], l.account_no or "", f"{bank_part(l):,.2f}"]
                     for i, l in enumerate(ls, 1)]
             story.append(table(["SL", "Emp ID", "Account name", "Account no.", "Amount (Tk)"], rows,
                                [12 * mm, 24 * mm, 62 * mm, 45 * mm, 32 * mm], 4, total))
@@ -163,21 +207,22 @@ def payment_pdf(run, bank: dict, letter_date: date | None = None) -> bytes:
                               ("CASH", "Cash salary payment sheet", ["SL", "Emp ID", "Name", "Department",
                                                                      "Amount (Tk)", "Signature"])):
         ls = [l for g in group_by(run.lines, mode).values() for l in g] if mode == "MOBILE" else \
-            sorted((l for l in run.lines if l.payment_mode == mode and l.net_pay > 0),
+            sorted((l for l in run.lines if cash_part(l) > 0),
                    key=lambda l: (l.department, l.employee_code))
         if not ls:
             continue
-        total = sum((l.net_pay for l in ls), Decimal(0))
+        amt = bank_part if mode == "MOBILE" else cash_part
+        total = sum((amt(l) for l in ls), Decimal(0))
         story.append(Paragraph(f"{title} - {period}", h))
         story.append(Paragraph(f"{len(ls)} employee(s), total Tk {total:,.2f} ({taka_words(total)})", body))
         story.append(Spacer(1, 8))
         if mode == "MOBILE":
             rows = [[i, l.employee_code, l.full_name[:30], (l.bank_name or "")[:14], l.account_no or "",
-                     f"{l.net_pay:,.2f}"] for i, l in enumerate(ls, 1)]
+                     f"{bank_part(l):,.2f}"] for i, l in enumerate(ls, 1)]
             story.append(table(cols, rows, [11 * mm, 22 * mm, 55 * mm, 25 * mm, 32 * mm, 30 * mm], 5, total))
         else:
-            rows = [[i, l.employee_code, l.full_name[:30], (l.department or "")[:20], f"{l.net_pay:,.2f}", ""]
-                    for i, l in enumerate(ls, 1)]
+            rows = [[i, l.employee_code, l.full_name[:30] + (" (part)" if bank_part(l) > 0 else ""),
+                     (l.department or "")[:20], f"{cash_part(l):,.2f}", ""] for i, l in enumerate(ls, 1)]
             t = table(cols, rows, [11 * mm, 22 * mm, 55 * mm, 35 * mm, 27 * mm, 30 * mm], 4, total)
             t.setStyle(TableStyle([("BOTTOMPADDING", (0, 1), (-1, -2), 9), ("TOPPADDING", (0, 1), (-1, -2), 9)]))
             story.append(t)

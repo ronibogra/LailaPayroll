@@ -94,9 +94,17 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     c.setFont("Helvetica-Oblique", 8.5)
     c.drawString(x0 + 62 * mm, y - 2 * mm, f"({taka_words(l.net_pay)})"[:95])
     c.setFont("Helvetica", 8.5)
-    c.drawRightString(x1, y - 7 * mm, {"BANK": f"Paid to bank: {l.bank_name or ''} {l.account_no or ''}",
-                                       "MOBILE": f"Paid to {l.bank_name or 'mobile wallet'}: {l.account_no or ''}",
-                                       "CASH": "Paid in cash"}.get(l.payment_mode, "")[:70])
+    from services.disbursement import bank_part, cash_part
+    b, cash = bank_part(l), cash_part(l)
+    where = {"BANK": f"bank {l.bank_name or ''} {l.account_no or ''}".strip(),
+             "MOBILE": f"{l.bank_name or 'mobile wallet'} {l.account_no or ''}".strip()}.get(l.payment_mode, "")
+    if b and cash:
+        paid = f"Paid: Tk {_tk(b)} to {where} + Tk {_tk(cash)} in cash"
+    elif b:
+        paid = f"Paid to {where}"
+    else:
+        paid = "Paid in cash"
+    c.drawRightString(x1, y - 7 * mm, paid[:95])
     c.setFont("Helvetica", 8)
     c.drawString(x0, y - 15 * mm, "Employee signature: ____________________")
     c.drawRightString(x1, y - 15 * mm, "Authorised signature: ____________________")

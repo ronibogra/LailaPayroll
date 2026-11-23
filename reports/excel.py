@@ -65,12 +65,13 @@ SALARY_HEAD = ["Emp Code", "Name", "Department", "Designation", "Grade", "Days",
                "Paid Leave", "Off Days", "Late Days", "Gross", "Basic", "House Rent", "Medical",
                "Transport", "Food", "Earned Gross", "Absent Ded.", "Late Ded.", "OT Hrs", "OT Rate", "OT Amount",
                "Att. Bonus", "Allowances / Bonus", "Other Add.", "Advance", "Other Ded.", "Custom Ded.", "Tax", "Stamp",
-               "Net Pay", "Pay Mode", "Bank", "Account No", "Remarks", "Signature"]
-SALARY_MONEY = set(range(12, 33))
-SALARY_TOTAL = (12, 18, 19, 20, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32)
+               "Net Pay", "To Bank / Wallet", "Cash", "Pay Mode", "Bank", "Account No", "Remarks", "Signature"]
+SALARY_MONEY = set(range(12, 35))
+SALARY_TOTAL = (12, 18, 19, 20, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34)
 
 
 def _salary_row(l) -> list:
+    from services.disbursement import bank_part, cash_part
     f = float
     return [l.employee_code, l.full_name, l.department, l.designation, l.grade, l.employed_days,
             l.present_days, l.absent_days, l.paid_leave_days, l.offdays, l.late_days, f(l.gross),
@@ -78,7 +79,7 @@ def _salary_row(l) -> list:
             f(l.absent_deduction), f(l.late_deduction or 0), f(l.ot_hours), f(l.ot_rate), f(l.ot_amount),
             f(l.attendance_bonus), f(l.custom_additions or 0), f(l.other_addition), f(l.advance),
             f(l.other_deduction), f(l.custom_deductions or 0), f(l.tax), f(l.stamp), f(l.net_pay),
-            l.payment_mode, l.bank_name, l.account_no, l.warnings, ""]
+            f(bank_part(l)), f(cash_part(l)), l.payment_mode, l.bank_name, l.account_no, l.warnings, ""]
 
 
 def salary_sheet(run) -> bytes:
@@ -92,15 +93,20 @@ def salary_sheet(run) -> bytes:
     lines = sorted(run.lines, key=lambda l: (l.department, l.employee_code))
     _table(ws, SALARY_HEAD, [_salary_row(l) for l in lines], SALARY_MONEY, SALARY_TOTAL)
 
+    from services.disbursement import bank_part, cash_part
     for mode, label in (("BANK", "Bank Advice"), ("CASH", "Cash Payment"), ("MOBILE", "Mobile Banking")):
-        sel = [l for l in lines if l.payment_mode == mode]
+        if mode == "CASH":
+            sel = [(l, cash_part(l)) for l in lines if cash_part(l) > 0]
+        else:
+            sel = [(l, bank_part(l)) for l in lines if l.payment_mode == mode and bank_part(l) > 0]
         if not sel:
             continue
         ws2 = wb.create_sheet(label)
-        head = ["Emp Code", "Name", "Department", "Bank / Wallet", "Account / Number", "Net Pay", "Signature"]
+        head = ["Emp Code", "Name", "Department", "Bank / Wallet", "Account / Number", "Amount", "Signature"]
         _title(ws2, f"{label} - {period} ({status})", len(head), cname)
-        _table(ws2, head, [[l.employee_code, l.full_name, l.department, l.bank_name, l.account_no,
-                            float(l.net_pay), ""] for l in sel], {6}, (6,))
+        _table(ws2, head, [[l.employee_code, l.full_name + (" (part)" if mode == "CASH" and bank_part(l) else ""),
+                            l.department, "" if mode == "CASH" else l.bank_name, "" if mode == "CASH" else l.account_no,
+                            float(a), ""] for l, a in sel], {6}, (6,))
         ws2.column_dimensions["E"].width = 22
 
     ws3 = wb.create_sheet("Department Summary")

@@ -96,6 +96,9 @@ class Employee(Base):
     allow_mobile: Mapped[bool] = mapped_column(Boolean, default=False)    # may punch from phone
     mobile_pin_hash: Mapped[str | None] = mapped_column(String(300), nullable=True)
     payment_mode: Mapped[str] = mapped_column(String(10), default="CASH")  # CASH / BANK / MOBILE
+    # part to bank / wallet when the rest is paid in cash: "" = all by pay mode, FIXED = Tk amount, PERCENT = % of net
+    split_mode: Mapped[str] = mapped_column(String(10), default="")
+    split_value: Mapped[Decimal] = mapped_column(Money, default=0)
     bank_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     account_no: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
@@ -385,6 +388,8 @@ class PayrollLine(Base):
     total_earnings: Mapped[Decimal] = mapped_column(Money)
     total_deductions: Mapped[Decimal] = mapped_column(Money)
     net_pay: Mapped[Decimal] = mapped_column(Money)
+    bank_amount: Mapped[Decimal | None] = mapped_column(Money, nullable=True)   # to bank / wallet (pay mode)
+    cash_amount: Mapped[Decimal | None] = mapped_column(Money, nullable=True)   # in cash
     warnings: Mapped[str] = mapped_column(Text, default="")
     run = relationship("PayrollRun", back_populates="lines")
 

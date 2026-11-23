@@ -1358,6 +1358,15 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
             e.basic, e.house_rent, e.medical, e.transport, e.food = parts
             e.payment_mode = val("payment_mode") or "CASH"
             e.bank_name, e.account_no = val("bank_name") or None, val("account_no") or None
+            sm = val("split_mode") if val("split_mode") in ("FIXED", "PERCENT") else ""
+            sv = dec(val("split_value"), "Bank part") if sm else Decimal(0)
+            if sm == "PERCENT" and not 0 < sv < 100:
+                raise ValueError("Bank part % must be between 1 and 99")
+            if sm == "FIXED" and sv <= 0:
+                raise ValueError("Give the bank / wallet amount (Tk) for the split")
+            if sm and e.payment_mode == "CASH":
+                raise ValueError("Split pay needs pay mode BANK or MOBILE (that part goes there, the rest is cash)")
+            e.split_mode, e.split_value = sm, sv
         if "shifts.manage" in user["perms"] and f.get("ew_mode"):
             e.weekly_off = weekly_off_from_form(f, "ew")
         if can_salary:
@@ -2164,15 +2173,14 @@ def payroll_page(request: Request, month: str = "", company: str = "", user=Depe
     totals = {k: sum((getattr(l, k) or 0) for l in lines) for k in
               ("earned_gross", "ot_amount", "absent_deduction", "total_deductions", "net_pay", "custom_additions",
                "late_deduction")} if lines else {}
-    by_mode: dict[str, Decimal] = {}
-    for l in lines:
-        by_mode[l.payment_mode] = by_mode.get(l.payment_mode, 0) + l.net_pay
+    pay_tot = disb.totals(lines)
+    by_mode = pay_tot["amount"]
     r = report_ctx(db, user, "payroll", {"company": "" if all_mode else str(cid or ""), "month": f"{y}-{m:02d}"})
     return render(request, "payroll.html", user, y=y, m=m, run=run, lines=lines, totals=totals, by_mode=by_mode,
                   companies=comps, cid=cid, company=company, runs=runs, all_mode=all_mode, run_base=run_base,
                   warn_count=sum(1 for l in lines if l.warnings), r=r,
                   bank=bank, pay_problems=disb.problems(lines),
-                  count_mode={k: sum(1 for l in lines if l.payment_mode == k and l.net_pay > 0) for k in disb.MODES},
+                  count_mode=pay_tot["people"],
                   modes=disb.MODES, by_company={c.code: (len(runs[c.id].lines), runs[c.id].status) if c.id in runs else None
                                                  for c in comps})
 

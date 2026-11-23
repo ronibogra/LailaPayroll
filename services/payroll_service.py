@@ -11,6 +11,7 @@ from services.audit import audit
 from services.policy import load_policy
 from services.processing import process_month
 from services import components as comp_svc
+from services.disbursement import split as split_pay
 from timeutil import now_local
 
 
@@ -85,6 +86,8 @@ def run_payroll(db: Session, company_id: int, year: int, month: int, user: dict)
             attendance_bonus=r.attendance_bonus, other_addition=r.other_addition,
             advance=r.advance, other_deduction=r.other_deduction, tax=r.tax, stamp=r.stamp,
             total_earnings=r.total_earnings, total_deductions=r.total_deductions, net_pay=r.net_pay,
+            bank_amount=split_pay(r.net_pay, e.payment_mode or "CASH", e.split_mode or "", e.split_value)[0],
+            cash_amount=split_pay(r.net_pay, e.payment_mode or "CASH", e.split_mode or "", e.split_value)[1],
             warnings="; ".join(r.warnings)))
     audit(db, user, "PAYROLL_PROCESS",
           f"{company.code} {year}-{month:02d}: {len(run.lines)} employees" + (f"; skipped: {'; '.join(errors)}" if errors else ""),

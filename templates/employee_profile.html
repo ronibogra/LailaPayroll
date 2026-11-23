@@ -49,7 +49,7 @@
 {% if show_salary %}<div>Gross salary</div><div><b>Tk {{ '{:,.0f}'.format(e.gross) }}</b></div>
 <div>Basic / house rent</div><div>{{ '{:,.0f}'.format(e.basic) }} / {{ '{:,.0f}'.format(e.house_rent) }}</div>
 <div>Medical / transport / food</div><div>{{ '{:,.0f}'.format(e.medical) }} / {{ '{:,.0f}'.format(e.transport) }} / {{ '{:,.0f}'.format(e.food) }}</div>
-<div>Payment</div><div>{{ e.payment_mode }} {{ e.bank_name or '' }} {{ e.account_no or '' }}</div>
+<div>Payment</div><div>{{ e.payment_mode }} {{ e.bank_name or '' }} {{ e.account_no or '' }}{% if e.split_mode == 'FIXED' %} · split: Tk {{ '{:,.0f}'.format(e.split_value) }} to {{ 'bank' if e.payment_mode == 'BANK' else 'wallet' }}, rest cash{% elif e.split_mode == 'PERCENT' %} · split: {{ '%g'|format(e.split_value) }}% to {{ 'bank' if e.payment_mode == 'BANK' else 'wallet' }}, rest cash{% endif %}</div>
 {% for c in components %}<div>{{ c.name }}</div><div>{{ '+' if c.kind == 'ADD' else '-' }} {{ c.value }} <small class="hint">{{ calcs[c.calc] }}</small></div>{% endfor %}{% endif %}
 <div>Overtime</div><div>{{ 'not eligible' if e.ot_eligible is false else 'as per company policy' }}</div>
 <div>Mobile punch</div><div>{{ 'allowed' if e.allow_mobile else 'no' }}</div>
