@@ -9,9 +9,9 @@
 {% if not emp %}
   <div class="panel"><form method="post" action="/m/login">
   <label>Employee ID</label><input name="employee_code" required style="width:100%;margin-bottom:12px" autocomplete="username">
-  <label>PIN</label><input name="pin" type="password" inputmode="numeric" required style="width:100%;margin-bottom:16px" autocomplete="current-password">
+  <label>PIN or password</label><input name="pin" type="password" required style="width:100%;margin-bottom:16px" autocomplete="current-password">
   <button style="width:100%">Log in</button></form>
-  <p class="hint">Ask HR to enable mobile attendance and give you a PIN.</p></div>
+  <p class="hint">Use your mobile PIN, or the password you chose on the website. Ask HR if you have neither.</p></div>
 {% else %}
   {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
   <div class="panel" style="text-align:center"><b>{{ emp.full_name }}</b><div class="hint" style="margin:0">{{ emp.employee_code }} · {{ emp.company.name if emp.company }}{{ ' · ' ~ emp.department.name if emp.department }}</div></div>

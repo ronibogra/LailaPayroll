@@ -10,6 +10,7 @@
 {% set pm = user.perms %}
 <aside class="sidebar">
   <div class="brand"><img src="/brand/logo.png?v={{ brand.logo_version }}" alt="LG"><div><b>{{ brand.name }}</b><small>SPhere Payroll</small></div></div>
+  {% if 'self.service' in pm %}<a href="/me" class="{{ 'active' if path.startswith('/me') }}">👤 My page</a>{% endif %}
   {% if 'dashboard.view' in pm %}<a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>{% endif %}
   {% if 'punches.view' in pm or 'attendance.view' in pm or 'employees.view' in pm or 'payroll.view' in pm %}<a href="/reports" class="{{ 'active' if path.startswith('/reports') }}">📊 Reports</a>{% endif %}
   {% if 'punches.view' in pm or 'machines.manage' in pm %}<div class="nav-label">PUNCH</div>{% endif %}
@@ -22,7 +23,7 @@
   <a href="/shifts" class="{{ 'active' if path.startswith('/shifts') }}">Shifts</a>{% endif %}
   {% if 'leave.approve_dept' in pm or 'leave.approve_final' in pm %}<a href="/leaves/approvals" class="{{ 'active' if path.startswith('/leaves/approvals') }}">Leave approvals{% if pending_leave_count %} <span class="count">{{ pending_leave_count }}</span>{% endif %}</a>{% endif %}
   {% if 'leave.policy' in pm %}<a href="/leave-policy" class="{{ 'active' if path.startswith('/leave-policy') }}">Leave policy</a>{% endif %}
-  <div class="nav-label">PEOPLE &amp; PAY</div>
+  {% if 'employees.view' in pm or 'payroll.view' in pm %}<div class="nav-label">PEOPLE &amp; PAY</div>{% endif %}
   {% if 'employees.view' in pm %}<a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>
   <a class="sub {{ 'active' if path.startswith('/idcards') }}" href="/idcards">Print ID cards</a>{% endif %}
   {% if 'payroll.view' in pm %}<a href="/payroll" class="{{ 'active' if path == '/payroll' or path.startswith('/payroll/line') }}">Payroll</a>{% endif %}
@@ -33,7 +34,7 @@
   <a class="sub {{ 'active' if path == '/payroll/inputs' and ptab == 'other' }}" href="/payroll/inputs?tab=other">Other</a>
   <a class="sub {{ 'active' if path == '/payroll/bonus' }}" href="/payroll/bonus">Festival bonus</a>{% endif %}
   {% if 'payroll.edit' in pm %}<a href="/payroll/components" class="{{ 'active' if path.startswith('/payroll/components') }}">Pay components</a>{% endif %}
-  <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
+  {% if ['company.manage', 'policy.edit', 'holidays.manage', 'payroll.view', 'attendance.view']|select('in', pm)|list %}<a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>{% endif %}
   {% if 'logs.view' in pm or 'users.manage' in pm or 'backup.manage' in pm or 'company.manage' in pm %}<div class="nav-label">ADMIN</div>{% endif %}
   {% if 'appointment.letter' in pm %}<a href="/appointment-letter" class="{{ 'active' if path.startswith('/appointment-letter') }}">Appointment letter</a>{% endif %}
   {% if 'users.manage' in pm %}<a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users &amp; roles</a>{% endif %}
@@ -44,7 +45,7 @@
 </aside>
 <main class="main">
   <div class="topbar"><h1>{% block heading %}{% endblock %}</h1>
-    <div class="who">{{ user.full_name }} ({{ user.role }}) · <a href="/logout">Log out</a></div></div>
+    <div class="who">{{ user.full_name }} ({{ user.role }}) · <a href="/me/password">Password</a> · <a href="/logout">Log out</a></div></div>
   {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
   {% if err %}<div class="alert err">{{ err }}</div>{% endif %}
   {% block content %}{% endblock %}

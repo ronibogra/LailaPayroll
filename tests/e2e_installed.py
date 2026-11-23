@@ -806,6 +806,40 @@ def main():
     page(s, f"/employees/{kid}", must="Appointment letter HO/HR/APT/")
     ok(c.post(BASE + f"/employees/{kid}/appointment", timeout=30).status_code == 403, "clerk must not make letters")
 
+    step("staff login: Employee ID + default password, must change it, sees only own data")
+    st = requests.Session()
+    post(st, "/login", {"username": "12127", "password": "wrong-pass"}, must="Wrong username or password", must_not=None)
+    r = post(st, "/login", {"username": "12127", "password": "12345678"}, must="Change my password")
+    ok("choose your own password" in r.text.lower(), "first login must ask for a new password")
+    page(st, "/me", must="Change my password")          # nothing else until the password is changed
+    post(st, "/me/password", {"current": "12345678", "new": "12345678", "new2": "12345678"},
+         must="not the default", must_not=None)
+    post(st, "/me/password", {"current": "12345678", "new": "Karim@2026", "new2": "Karim@2026"}, must="Password changed")
+    r = page(st, "/me", must="My page")
+    ok("Abdul Karim" in r.text and "My payslips" in r.text and "Request leave" in r.text, "staff page content")
+    ok('href="/payroll"' not in r.text and 'href="/employees"' not in r.text and 'href="/settings"' not in r.text,
+       "staff menu must only show My page")
+    for forbidden in ("/payroll", "/employees", "/reports/payroll", "/settings", "/punches", "/users",
+                      f"/employees/{rid0}", f"/export/payroll.xlsx?month={month}"):
+        code = st.get(BASE + forbidden, timeout=30, headers={"accept": "text/html"}).status_code
+        ok(code == 403, f"{forbidden} must be forbidden for staff, got {code}")
+    page(st, "/", must="My page")                       # dashboard sends staff to My page
+    post(st, "/me/leave", {"leave_type": "CASUAL", "start_date": str(nn + timedelta(days=50)),
+                           "end_date": str(nn + timedelta(days=50)), "reason": "personal"}, must="Leave request sent")
+    st.get(BASE + "/logout")
+    post(st, "/login", {"username": "12127", "password": "12345678"}, must="Wrong username or password", must_not=None)
+    post(st, "/login", {"username": "12127", "password": "Karim@2026"}, must="My page")
+    r = requests.Session().post(HTTPS + "/m/login", data={"employee_code": "12127", "pin": "Karim@2026"}, verify=False,
+                                timeout=30)
+    ok("Payslip" in r.text and "Log out" in r.text, "phone login with the website password")
+    page(s, "/users", must="1 employee(s) have logged in")
+    post(s, "/users/staff-login", {"reset_code": "12127"}, must="set back to the default")
+    post(requests.Session(), "/login", {"username": "12127", "password": "12345678"}, must="Change my password")
+    post(s, "/users/staff-login", {"default_password": "12345678"}, must="settings saved")       # switched off
+    post(requests.Session(), "/login", {"username": "12160", "password": "12345678"}, must="Wrong username or password",
+         must_not=None)
+    post(s, "/users/staff-login", {"enabled": "1", "default_password": "12345678"}, must="settings saved")
+
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")
     name = re.search(r"(LailaPayroll_backup_[0-9_]+_manual\.zip)", r.text).group(1)

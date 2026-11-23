@@ -85,6 +85,7 @@ def page_user(request: Request) -> dict:
             role = db.query(Role).filter(Role.name == row.role).first()
             perms = parse(role.permissions) if role else set()
         return {"username": row.username, "role": row.role, "company_id": row.company_id, "perms": perms,
-                "full_name": row.full_name or row.username}
+                "full_name": row.full_name or row.username, "employee_id": row.employee_id,
+                "must_change": bool(row.must_change)}
     finally:
         db.close()

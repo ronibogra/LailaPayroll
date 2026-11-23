@@ -30,10 +30,11 @@ PERMS: dict[str, str] = {
     "backup.manage": "Backup and restore",
     "logs.view": "Error log and activity log",
     "reports.export": "Export reports to Excel / PDF",
+    "self.service": "My page: own profile, attendance, leave requests, payslips and assets (Staff)",
 }
 
 GROUPS = [
-    ("General", ["dashboard.view", "reports.export"]),
+    ("General", ["dashboard.view", "reports.export", "self.service"]),
     ("Employees", ["employees.view", "employees.edit", "salary.view", "salary.edit", "mobile.manage",
                    "appointment.letter"]),
     ("Punch & machines", ["punches.view", "punches.edit", "machines.manage"]),
@@ -55,6 +56,7 @@ BUILTIN_ROLES: dict[str, tuple[str, list[str]]] = {
                                                           "punches.view", "attendance.view"]),
     "DEPT_HEAD": ("Department Head - approves leave of own departments", [
         "dashboard.view", "reports.export", "employees.view", "punches.view", "attendance.view", "leave.approve_dept"]),
+    "STAFF": ("Staff - employee's own page only", ["self.service"]),
     "CFO": ("CFO - final leave approval, payroll view & finalize", [
         "dashboard.view", "reports.export", "employees.view", "salary.view", "punches.view", "attendance.view",
         "payroll.view", "payroll.finalize", "leave.approve_final"]),

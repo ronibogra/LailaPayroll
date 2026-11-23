@@ -81,6 +81,8 @@ def need(user: dict, *perms: str) -> None:
 def render(request: Request, name: str, user: dict | None, **ctx) -> HTMLResponse:
     ctx.update(request=request, user=user, msg=request.query_params.get("msg", ""),
                err=request.query_params.get("err", ""))
+    if user and user.get("must_change") and name != "me_password.html":
+        return go("/me/password", err="Please choose your own password first")
     if user and {"leave.approve_dept", "leave.approve_final"} & user["perms"] and "pending_leave_count" not in ctx:
         try:
             with SessionLocal() as s:
@@ -528,6 +530,10 @@ def login_page(request: Request):
 def login(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.username == username.strip(), User.active == True))  # noqa: E712
     ip = request.client.host if request.client else ""
+    if user is None:
+        user = _staff_first_login(db, username.strip(), password)
+    elif user.role == "STAFF" and not staff_login_on(db):
+        user = None             # staff login switched off by the Admin
     if not user or not verify_password(password, user.password_hash):
         audit(db, username[:80], "LOGIN_FAILED", ip)
         return go("/login", err="Wrong username or password")
@@ -535,6 +541,32 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     resp = go("/")
     resp.set_cookie(COOKIE, create_token(user.username, user.role), **cookie_kwargs(request, settings.session_hours))
     return resp
+
+
+def staff_login_on(db) -> bool:
+    return (get_setting(db, "staff_login", default="1") or "1") == "1"
+
+
+def staff_default_password(db) -> str:
+    return get_setting(db, "staff_default_password", default="12345678") or "12345678"
+
+
+def _staff_first_login(db, code: str, password: str):
+    """An employee's first login with Employee ID + the default password creates their Staff account
+    (they must choose their own password straight away)."""
+    if not code or not staff_login_on(db) or password != staff_default_password(db):
+        return None
+    if db.scalar(select(User).where(User.username == code)):      # account exists (maybe blocked)
+        return None
+    emp = db.scalar(select(Employee).where(Employee.employee_code == code, Employee.employment_status == "ACTIVE"))
+    if not emp:
+        return None
+    u = User(username=code, full_name=emp.full_name, role="STAFF", employee_id=emp.id, company_id=None,
+             password_hash=hash_password(password), must_change=True, active=True)
+    db.add(u)
+    audit(db, code, "STAFF_ACCOUNT", f"created at first login for {emp.full_name}", commit=False)
+    db.commit()
+    return u
 
 
 @app.get("/logout")
@@ -548,6 +580,8 @@ def logout():
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, day: str = "", company: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
     """Colourful overview with charts. All numbers follow the user's company limit and the company filter."""
+    if "dashboard.view" not in user["perms"] and "self.service" in user["perms"]:
+        return go("/me")
     need(user, "dashboard.view")
     from collections import Counter
     from calendar import month_abbr
@@ -2868,8 +2902,13 @@ async def payroll_inputs_save(request: Request, user=Depends(page_user), db: Ses
 
 
 # ---------------------------------------------------------------- settings
+SETTINGS_PERMS = {"company.manage", "policy.edit", "holidays.manage", "payroll.view", "attendance.view"}
+
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, policy_company: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    if not SETTINGS_PERMS & user["perms"]:
+        raise HTTPException(403, "Not allowed")
     pc = company_filter(user, policy_company) or 0
     year = now_local().year
     del year
@@ -3145,6 +3184,8 @@ def users_page(request: Request, role: str = "", edit: str = "", user=Depends(pa
     roles = db.scalars(select(Role).order_by(Role.builtin.desc(), Role.name)).all()
     return render(request, "users.html", user, users=db.scalars(select(User).order_by(User.username)).all(),
                   eu=db.scalar(select(User).where(User.username == edit)) if edit else None,
+                  staff_on=staff_login_on(db), staff_pw=staff_default_password(db),
+                  staff_count=db.scalar(select(func.count(User.id)).where(User.role == "STAFF")) or 0,
                   roles=roles, edit_role=db.scalar(select(Role).where(Role.name == role)) if role else None,
                   companies=db.scalars(select(Company).order_by(Company.code)).all(), perms=PERMS, groups=GROUPS,
                   role_perms={r.name: (set(PERMS) if r.name == "ADMIN" else parse_perms(r.permissions)) for r in roles},
@@ -3247,6 +3288,126 @@ def mobile_employee(request: Request, db: Session) -> Employee | None:
     return db.scalar(select(Employee).where(Employee.employee_code == data["sub"]))
 
 
+# ---------------------------------------------------------------- My page (Staff self-service)
+def _me(db, user) -> Employee:
+    need(user, "self.service")
+    emp = db.get(Employee, user.get("employee_id") or 0)
+    if not emp:
+        raise HTTPException(403, "This login is not linked to an employee - ask HR")
+    return emp
+
+
+@app.get("/me", response_class=HTMLResponse)
+def me_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    emp = _me(db, user)
+    today = now_local().date()
+    first, last = month_bounds(today.year, today.month)
+    days = db.scalars(select(DailyAttendance).where(DailyAttendance.employee_id == emp.id,
+                                                    DailyAttendance.work_date >= first, DailyAttendance.work_date <= last)
+                      .order_by(DailyAttendance.work_date.desc())).all()
+    summary = {"present": sum(d.status in ("PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK") for d in days),
+               "late": sum(d.late_minutes > 0 for d in days), "absent": sum(d.status == "ABSENT" for d in days),
+               "leave": sum(d.status in ("LEAVE_PAID", "LEAVE_UNPAID") for d in days)}
+    return render(request, "me.html", user, e=emp, days=days, summary=summary, today=today,
+                  bal=leave_svc.balances(db, emp),
+                  ltypes=[t for t in leave_svc.types(db) if t.self_request and (not t.gender or t.gender == emp.gender)],
+                  my_leave=db.scalars(select(Leave).where(Leave.employee_id == emp.id)
+                                      .order_by(Leave.start_date.desc()).limit(15)).all(),
+                  labels=leave_svc.STATUS_LABEL,
+                  slips=db.execute(select(PayrollLine, PayrollRun).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
+                                   .where(PayrollLine.employee_id == emp.id, PayrollRun.status == "FINAL")
+                                   .order_by(PayrollRun.year.desc(), PayrollRun.month.desc()).limit(12)).all(),
+                  assets=db.scalars(select(EmployeeAsset).where(EmployeeAsset.employee_id == emp.id,
+                                                               EmployeeAsset.status == "ISSUED")).all(),
+                  asset_cats=asset_svc.CATEGORIES)
+
+
+@app.get("/me/photo")
+def me_photo(user=Depends(page_user), db: Session = Depends(get_db)):
+    emp = _me(db, user)
+    path = photo_path(emp.photo)
+    if not path:
+        return RedirectResponse("/static/img/no-photo.png", status_code=303)
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.post("/me/leave")
+async def me_leave(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    emp = _me(db, user)
+    ok_, msg = await _request_leave(db, emp, await request.form(), user["username"])
+    return go("/me#leave", msg=msg if ok_ else "", err="" if ok_ else msg)
+
+
+@app.post("/me/leave/{leave_id}/cancel")
+def me_leave_cancel(leave_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    emp = _me(db, user)
+    lv = db.get(Leave, leave_id)
+    if not lv or lv.employee_id != emp.id or lv.status not in leave_svc.OPEN:
+        return go("/me#leave", err="This request cannot be cancelled")
+    lv.status = "CANCELLED"
+    audit(db, user, "LEAVE_CANCEL", f"{emp.employee_code} {lv.leave_type} {lv.start_date}..{lv.end_date}", commit=False)
+    db.commit()
+    return go("/me#leave", msg="Request cancelled")
+
+
+@app.get("/me/payslip/{run_id}.pdf")
+def me_payslip(run_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    emp = _me(db, user)
+    run = db.get(PayrollRun, run_id)
+    line = next((l for l in run.lines if l.employee_id == emp.id), None) if run and run.status == "FINAL" else None
+    if not line:
+        return go("/me#pay", err="Payslip not available")
+    audit(db, user, "PAYSLIP_SELF", f"{run.year}-{run.month:02d}")
+    return Response(payslips_pdf(run, [line]), media_type="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="payslip-{emp.employee_code}-{run.year}-{run.month:02d}.pdf"'})
+
+
+@app.get("/me/password", response_class=HTMLResponse)
+def me_password_page(request: Request, user=Depends(page_user)):
+    return render(request, "me_password.html", user)
+
+
+@app.post("/me/password")
+def me_password_save(request: Request, current: str = Form(...), new: str = Form(...), new2: str = Form(...),
+                     user=Depends(page_user), db: Session = Depends(get_db)):
+    """Any logged-in user changes their own password (Staff must do this after the first login)."""
+    u = db.scalar(select(User).where(User.username == user["username"]))
+    if not u or not verify_password(current, u.password_hash):
+        return go("/me/password", err="Current password is wrong")
+    if new != new2:
+        return go("/me/password", err="The two new passwords are not the same")
+    if len(new) < 8 or new == staff_default_password(db) or new.lower() in (u.username.lower(), "password"):
+        return go("/me/password", err="Choose a new password of 8+ characters, not the default and not your ID")
+    u.password_hash, u.must_change = hash_password(new), False
+    audit(db, user, "PASSWORD_CHANGE", "own password", commit=False)
+    db.commit()
+    return go("/me" if "self.service" in user["perms"] else "/", msg="Password changed")
+
+
+@app.post("/users/staff-login")
+def staff_login_settings(enabled: str = Form(""), default_password: str = Form(""), reset_code: str = Form(""),
+                         user=Depends(page_user), db: Session = Depends(get_db)):
+    """Admin: staff login on/off, the default password, and resetting one employee back to the default."""
+    need(user, "users.manage")
+    if reset_code.strip():
+        u = db.scalar(select(User).where(User.username == reset_code.strip()))
+        if not u or u.role != "STAFF":
+            return go("/users#staff", err=f"No staff login for {reset_code.strip()} yet - they can log in with the "
+                                           "default password")
+        u.password_hash, u.must_change, u.active = hash_password(staff_default_password(db)), True, True
+        audit(db, user, "STAFF_PASSWORD_RESET", u.username, commit=False)
+        db.commit()
+        return go("/users#staff", msg=f"{u.username}: password set back to the default - they must change it at login")
+    pw = default_password.strip() or staff_default_password(db)
+    if len(pw) < 6:
+        return go("/users#staff", err="Default password needs 6+ characters")
+    set_setting(db, "staff_login", "1" if enabled else "0", commit=False)
+    set_setting(db, "staff_default_password", pw, commit=False)
+    audit(db, user, "STAFF_LOGIN_SETTINGS", f"enabled={bool(enabled)}", commit=False)
+    db.commit()
+    return go("/users#staff", msg="Staff login settings saved")
+
+
 @app.get("/m", response_class=HTMLResponse)
 def mobile_page(request: Request, db: Session = Depends(get_db)):
     if request.url.scheme != "https" and request.headers.get("x-forwarded-proto") != "https":
@@ -3273,7 +3434,12 @@ def mobile_login(request: Request, employee_code: str = Form(...), pin: str = Fo
     try:
         emp = mobile.login(db, employee_code, pin)
     except mobile.MobileError as exc:
-        return go("/m", err=str(exc))
+        # also the employee's own website password (only after they changed it from the default)
+        u = db.scalar(select(User).where(User.username == employee_code.strip(), User.role == "STAFF",
+                                         User.active == True, User.must_change == False))  # noqa: E712
+        emp = db.get(Employee, u.employee_id) if u and verify_password(pin, u.password_hash) else None
+        if not emp or emp.employment_status != "ACTIVE":
+            return go("/m", err=str(exc))
     resp = go("/m")
     resp.set_cookie(MOBILE_COOKIE, create_token(emp.employee_code, "EMPLOYEE", 24 * 30), **cookie_kwargs(request, 24 * 30))
     return resp
@@ -3316,13 +3482,8 @@ def mobile_payslip(request: Request, run_id: int, db: Session = Depends(get_db))
         "Content-Disposition": f'inline; filename="payslip-{emp.employee_code}-{run.year}-{run.month:02d}.pdf"'})
 
 
-@app.post("/m/leave")
-async def mobile_leave(request: Request, db: Session = Depends(get_db)):
-    """Employee requests leave from the phone; it goes to the approval workflow."""
-    emp = mobile_employee(request, db)
-    if not emp or emp.employment_status != "ACTIVE":
-        return go("/m", err="Please log in again")
-    f = await request.form()
+async def _request_leave(db, emp: Employee, f, actor: str) -> tuple[bool, str]:
+    """Employee's own leave request (phone or My page): checks the rules, then starts the approval workflow."""
     lt = db.scalar(select(LeaveType).where(LeaveType.code == str(f.get("leave_type") or "")))
     try:
         if not lt or not lt.self_request:
@@ -3337,15 +3498,24 @@ async def mobile_leave(request: Request, db: Session = Depends(get_db)):
         days = leave_svc.validate(db, emp, lt, s, e, has_doc)
         stored = await _leave_document(f, emp)
     except ValueError as exc:
-        return go("/m?tab=leave", err=str(exc)[:300])
+        return False, str(exc)[:300]
     status = leave_svc.first_status(db, emp)
     db.add(Leave(employee_id=emp.id, start_date=s, end_date=e, leave_type=lt.code, paid=lt.paid, days=days,
                  status=status, source="SELF", reason=reason[:300], note=reason[:250], document=stored,
                  requested_by=emp.employee_code, requested_at=now_local()))
-    audit(db, f"mobile:{emp.employee_code}", "LEAVE_REQUEST", f"{lt.code} {s}..{e} ({days} days) -> {status}",
-          commit=False)
+    audit(db, actor, "LEAVE_REQUEST", f"{emp.employee_code} {lt.code} {s}..{e} ({days} days) -> {status}", commit=False)
     db.commit()
-    return go("/m?tab=leave", msg=f"Leave request sent - {leave_svc.STATUS_LABEL[status].lower()}")
+    return True, f"Leave request sent - {leave_svc.STATUS_LABEL[status].lower()}"
+
+
+@app.post("/m/leave")
+async def mobile_leave(request: Request, db: Session = Depends(get_db)):
+    """Employee requests leave from the phone; it goes to the approval workflow."""
+    emp = mobile_employee(request, db)
+    if not emp or emp.employment_status != "ACTIVE":
+        return go("/m", err="Please log in again")
+    ok_, msg = await _request_leave(db, emp, await request.form(), f"mobile:{emp.employee_code}")
+    return go("/m?tab=leave", msg=msg if ok_ else "", err="" if ok_ else msg)
 
 
 @app.post("/m/leave/{leave_id}/cancel")

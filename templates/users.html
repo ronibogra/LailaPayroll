@@ -19,6 +19,13 @@
 {% for p in plist %}<label style="display:inline-block;margin:3px 14px 3px 0;color:inherit;font-size:13px"><input type="checkbox" name="perm_{{ p }}" value="1" {{ 'checked' if p in have }}> {{ perms[p] }}</label>{% endfor %}</div>{% endfor %}
 <p><button>Save role</button>{% if edit_role %} <a class="btn sec" href="/users">New role</a>{% endif %}</p></form></div>
 </div>
+<div class="panel" id="staff"><h3>Staff login (employees)</h3>
+<p class="hint">Employees sign in with their <b>Employee ID</b> and the default password below. Their account is made at the first login with the <b>STAFF</b> role (My page only: own profile, attendance, leave requests, payslips) and they must choose their own password straight away. {{ staff_count }} employee(s) have logged in so far.</p>
+<form method="post" action="/users/staff-login" class="inline"><div><label style="color:inherit"><input type="checkbox" name="enabled" value="1" {{ 'checked' if staff_on }}> Employees may log in</label></div>
+<div><label>Default password</label><input name="default_password" value="{{ staff_pw }}"></div><button class="sec">Save</button></form>
+<form method="post" action="/users/staff-login" class="inline" style="margin-top:10px"><input type="hidden" name="enabled" value="{{ '1' if staff_on else '' }}"><input type="hidden" name="default_password" value="{{ staff_pw }}">
+<div><label>Forgot password? Employee ID</label><input name="reset_code" placeholder="e.g. 12127"></div><button class="sec">Reset to default password</button></form>
+<p class="hint">To block one employee: tick off "Active" for their ID in the user form above (username = Employee ID).</p></div>
 <div class="grid2">
 <div class="panel"><h3>Roles</h3><div class="table-wrap"><table><tr><th>Role</th><th>Description</th><th class="num">Users</th><th class="num">Permissions</th><th></th></tr>
 {% for r in roles %}<tr><td><b>{{ r.name }}</b>{% if r.builtin %} <span class="tag">built-in</span>{% endif %}</td><td>{{ r.label }}</td><td class="num">{{ counts.get(r.name, 0) }}</td>
@@ -26,7 +33,7 @@
 <td>{% if r.name != 'ADMIN' %}<a href="/users?role={{ r.name }}">Edit</a>{% endif %}
 {% if not r.builtin %}<form method="post" action="/roles/{{ r.name }}/delete" style="display:inline" onsubmit="return confirm('Remove role {{ r.name }}?')"><button class="link">Remove</button></form>{% endif %}</td></tr>{% endfor %}</table></div></div>
 <div class="panel"><h3>Users</h3><div class="table-wrap"><table><tr><th>Username</th><th>Name</th><th>Role</th><th>Company access</th><th>Active</th><th></th></tr>
-{% for u in users %}<tr><td>{{ u.username }}</td><td>{{ u.full_name or '' }}</td><td>{{ u.role }}</td><td>{% for c in companies if c.id == u.company_id %}{{ c.code }} only{% else %}All{% endfor %}</td><td>{{ 'yes' if u.active else 'no' }}</td>
+{% for u in users if u.role != 'STAFF' %}<tr><td>{{ u.username }}</td><td>{{ u.full_name or '' }}</td><td>{{ u.role }}</td><td>{% for c in companies if c.id == u.company_id %}{{ c.code }} only{% else %}All{% endfor %}</td><td>{{ 'yes' if u.active else 'no' }}</td>
 <td>{% if u.role != 'ADMIN' or user.role == 'ADMIN' %}<a href="/users?edit={{ u.username|urlencode }}#userform">Edit</a>{% endif %}</td></tr>{% endfor %}</table></div></div>
 </div>
 {% endblock %}

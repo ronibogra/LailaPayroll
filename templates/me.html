@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% block title %}My page{% endblock %}{% block heading %}My page{% endblock %}
+{% block content %}
+<div class="panel"><div class="profile-head">
+<img class="photo" src="/me/photo" alt="">
+<div style="flex:1"><h2>{{ e.full_name }}</h2>
+<p class="hint" style="font-size:14px;margin:0 0 10px">{{ e.designation or '' }}{{ ', ' ~ e.department.name if e.department }} · <b>{{ e.company.name if e.company }}</b></p>
+<div class="kv"><div>Employee ID</div><div><b>{{ e.employee_code }}</b></div><div>Joined</div><div>{{ e.joined_on.strftime('%d %b %Y') if e.joined_on else '-' }}</div>
+<div>Shift</div><div>{{ e.shift.code ~ ' (' ~ e.shift.start.strftime('%H:%M') ~ '-' ~ e.shift.end.strftime('%H:%M') ~ ')' if e.shift else 'GENERAL' }}</div>
+<div>Blood group</div><div>{{ e.blood_group or '-' }}</div><div>Mobile</div><div>{{ e.phone or '-' }}</div></div>
+<p class="hint">Something wrong in your details? Tell HR. · <a href="/me/password">Change my password</a></p></div></div></div>
+<div class="cards">
+<div class="metric g"><span>Present ({{ today.strftime('%B') }})</span><strong>{{ summary.present }}</strong></div>
+<div class="metric a"><span>Late</span><strong>{{ summary.late }}</strong></div>
+<div class="metric r"><span>Absent</span><strong>{{ summary.absent }}</strong></div>
+<div class="metric"><span>Leave</span><strong>{{ summary.leave }}</strong></div>
+</div>
+<div class="grid2">
+<div class="panel"><h3>My attendance - {{ today.strftime('%B %Y') }}</h3><div class="table-wrap" style="max-height:420px"><table><tr><th>Date</th><th>Status</th><th>In</th><th>Out</th><th class="num">Late (min)</th></tr>
+{% for r in days %}<tr><td>{{ r.work_date.strftime('%a %d/%m') }}</td><td><span class="tag {{ r.status }}">{{ r.status }}</span></td><td>{{ r.in_time.strftime('%H:%M') if r.in_time }}</td><td>{{ r.out_time.strftime('%H:%M') if r.out_time }}</td><td class="num">{{ r.late_minutes or '' }}</td></tr>
+{% else %}<tr><td colspan="5" class="hint">Nothing yet this month.</td></tr>{% endfor %}</table></div></div>
+<div class="panel" id="pay"><h3>My payslips</h3>
+{% for l, run in slips %}<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eee">
+<div><b>{{ month_name[run.month] }} {{ run.year }}</b><div class="hint" style="margin:0">Net pay Tk {{ '{:,.0f}'.format(l.net_pay) }} · {{ l.present_days }} days present</div></div>
+<a class="btn sec" href="/me/payslip/{{ run.id }}.pdf" target="_blank">PDF</a></div>
+{% else %}<p class="hint">No payslip yet. Payslips appear here after the month's payroll is finalized.</p>{% endfor %}
+{% if assets %}<h3 style="margin-top:16px">Company items with me</h3>{% for a in assets %}<div>{{ asset_cats.get(a.category, a.category) }}: <b>{{ a.name }}</b> {{ a.serial_no or '' }} <span class="hint">since {{ a.issued_on.strftime('%d/%m/%Y') }}</span></div>{% endfor %}{% endif %}</div>
+</div>
+<div class="grid2" id="leave">
+<div class="panel"><h3>My leave {{ today.year }}</h3>
+<div class="bal">{% for b in bal %}<div><small>{{ b.type.name }}</small><b>{{ '∞' if b.left is none else b.left }}</b><small>{% if b.entitled %}of {{ b.entitled }} · {% endif %}used {{ b.used }}{% if b.pending %} · waiting {{ b.pending }}{% endif %}</small></div>{% endfor %}</div>
+<h3 style="margin-top:12px">Request leave</h3>
+<form method="post" action="/me/leave" enctype="multipart/form-data"><div class="form-grid">
+<div><label>Type</label><select name="leave_type" id="lt">{% for t in ltypes %}<option value="{{ t.code }}" data-rule="{{ t.doc_rule }}" data-after="{{ t.doc_after_days }}" data-label="{{ t.doc_label }}">{{ t.name }}</option>{% endfor %}</select></div>
+<div><label>From</label><input type="date" name="start_date" id="d1" required value="{{ today }}"></div>
+<div><label>To</label><input type="date" name="end_date" id="d2" required value="{{ today }}"></div>
+<div><label>Reason</label><input name="reason" required></div>
+<div><label>Document (if needed)</label><input type="file" name="document" accept="image/*,.pdf"></div>
+</div><p class="hint" id="dochint"></p><p><button>Send request</button></p></form></div>
+<div class="panel"><h3>My requests</h3><div class="table-wrap"><table><tr><th>Type</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
+{% for lv in my_leave %}<tr><td>{{ lv.leave_type }}</td><td>{{ lv.start_date.strftime('%d/%m/%Y') }}</td><td>{{ lv.end_date.strftime('%d/%m/%Y') }}</td>
+<td><span class="tag {{ lv.status }}">{{ labels.get(lv.status, lv.status) }}</span>{% if lv.reject_reason %}<div class="hint" style="margin:0">{{ lv.reject_reason }}</div>{% endif %}</td>
+<td>{% if lv.status in ('PENDING_DEPT', 'PENDING_FINAL') %}<form method="post" action="/me/leave/{{ lv.id }}/cancel"><button class="link">cancel</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="5" class="hint">No leave yet.</td></tr>{% endfor %}</table></div></div>
+</div>
+<script>
+(function(){var lt=document.getElementById('lt');if(!lt)return;var d1=document.getElementById('d1'),d2=document.getElementById('d2'),h=document.getElementById('dochint');
+function upd(){var o=lt.options[lt.selectedIndex];if(!o)return;var r=o.dataset.rule,a=+o.dataset.after||0,n=Math.round((new Date(d2.value)-new Date(d1.value))/864e5)+1;
+var need=r==='ALWAYS'||(r==='OVER_DAYS'&&n>a);h.textContent=(n>0?n+' day(s). ':'')+(need?'Attach: '+o.dataset.label+' (required).':'');h.style.color=need?'#b3261e':'';}
+[lt,d1,d2].forEach(function(x){x.addEventListener('change',upd)});upd();})();
+</script>
+{% endblock %}

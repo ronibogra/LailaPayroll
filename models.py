@@ -413,6 +413,8 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True)  # None = all companies
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    employee_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)   # Staff login: own record
+    must_change: Mapped[bool] = mapped_column(Boolean, default=False)                     # change password at next login
 
 
 class AuditLog(Base):
