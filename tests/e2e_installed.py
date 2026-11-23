@@ -847,6 +847,9 @@ def main():
          must="User admin saved")
     page(s, "/me", must="Md. Rahim")
     post(s, "/users/save", {"username": "admin", "role": "ADMIN", "active": "1", "employee_code": ""}, must="saved")
+    post(s, "/users/save", {"username": "12160", "role": "STAFF", "active": "1", "password": "Staff@12160"}, must="saved")
+    sx = requests.Session()
+    post(sx, "/login", {"username": "12160", "password": "Staff@12160"}, must="My page")    # hand-made Staff user works
 
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")

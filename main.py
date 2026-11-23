@@ -3236,6 +3236,10 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
             db.rollback()
             return go("/users", err=f"{emp.employee_code} is already linked to the login '{other.username}'")
         u.employee_id = emp.id
+    elif role == "STAFF" and not u.employee_id:      # Staff made by hand: username = employee code
+        emp = db.scalar(select(Employee).where(Employee.employee_code == u.username))
+        if emp and not db.scalar(select(User).where(User.employee_id == emp.id, User.username != u.username)):
+            u.employee_id = emp.id
     elif role != "STAFF":
         u.employee_id = None
     audit(db, user, "USER_SAVE", f"{u.username} role={role} company={company_id or 'ALL'} active={bool(active)}"
@@ -3312,8 +3316,15 @@ class NotLinked(Exception):
 def _me(db, user) -> Employee:
     need(user, "self.service")
     emp = db.get(Employee, user.get("employee_id") or 0)
-    if not emp:
-        raise NotLinked()
+    if not emp:      # e.g. a Staff user made by hand: link it when the username is an employee code
+        emp = db.scalar(select(Employee).where(Employee.employee_code == user["username"]))
+        u = db.scalar(select(User).where(User.username == user["username"]))
+        taken = emp and db.scalar(select(User).where(User.employee_id == emp.id, User.username != user["username"]))
+        if not emp or not u or taken:
+            raise NotLinked()
+        u.employee_id = emp.id
+        audit(db, user, "STAFF_LINK", f"login {u.username} linked to employee {emp.employee_code}", commit=False)
+        db.commit()
     return emp
 
 
