@@ -11,15 +11,15 @@
 <div>Weekly off</div><div>{{ weekly_off_text(e.weekly_off) if e.weekly_off else ('shift: ' ~ weekly_off_text(e.shift.weekly_off) if e.shift and e.shift.weekly_off else 'company default') }}</div>
 <div>Mobile</div><div>{{ e.phone or '-' }}</div>
 <div>Signature</div><div>{% if e.signature %}<img src="/employees/{{ e.id }}/signature" alt="signature" style="max-height:40px;max-width:180px">{% else %}<span class="hint" style="margin:0">not uploaded</span>{% endif %}</div></div></div>
-<div style="display:flex;flex-direction:column;gap:6px"><a class="btn" href="/employees/{{ e.id }}/profile.pdf" target="_blank">⬇ Profile PDF</a><a class="btn sec" href="/idcards.pdf?codes={{ e.employee_code|urlencode }}&layout=card&status=" target="_blank">🪪 ID card</a>{% if show_salary %}<a class="btn sec" href="#appointment" onclick="document.getElementById('appointment').style.display='';">📄 Appointment letter</a>{% endif %}{% if 'employees.edit' in user.perms %}<a class="btn sec" href="/employees/{{ e.id }}/edit">Edit</a>{% endif %}<a class="btn sec" href="/employees">Back</a></div>
+<div style="display:flex;flex-direction:column;gap:6px"><a class="btn" href="/employees/{{ e.id }}/profile.pdf" target="_blank">⬇ Profile PDF</a><a class="btn sec" href="/idcards.pdf?codes={{ e.employee_code|urlencode }}&layout=card&status=" target="_blank">🪪 ID card</a>{% if 'appointment.letter' in user.perms %}<a class="btn sec" href="#appointment" onclick="document.getElementById('appointment').style.display='';">📄 Appointment letter</a>{% endif %}{% if 'employees.edit' in user.perms %}<a class="btn sec" href="/employees/{{ e.id }}/edit">Edit</a>{% endif %}<a class="btn sec" href="/employees">Back</a></div>
 </div></div>
-{% if show_salary %}<div class="panel" id="appointment" style="display:none"><h3>Appointment letter</h3>
+{% if 'appointment.letter' in user.perms %}<div class="panel" id="appointment" style="display:none"><h3>Appointment letter</h3>
 <form method="post" action="/employees/{{ e.id }}/appointment" target="_blank"><div class="form-grid">
 <div><label>Letter date</label><input type="date" name="letter_date" value="{{ today }}"></div>
 <div><label>Joining date</label><input type="date" name="joining_date" value="{{ e.joined_on or '' }}"></div>
 <div><label>Reference no. (blank = automatic)</label><input name="ref" placeholder="{{ (e.company.code if e.company else 'HO') ~ '/HR/APT/' ~ today.year ~ '/' ~ e.employee_code }}"></div>
 {% if 'employees.edit' in user.perms %}<div><label style="color:inherit"><input type="checkbox" name="save_copy" value="1" checked> Save a copy in Documents</label></div>{% endif %}
-</div><p><button>Make appointment letter (PDF)</button>{% if 'company.manage' in user.perms %} <a class="btn sec" href="/appointment-letter">Edit letter text</a>{% endif %}</p>
+</div><p><button>Make appointment letter (PDF)</button> <a class="btn sec" href="/appointment-letter">Edit letter text</a></p>
 {% if not e.designation or not e.gross %}<p class="hint" style="color:#b3261e">Fill the designation and salary in the profile first - they are printed in the letter.</p>{% endif %}
 </form></div>{% endif %}
 <div class="cards">
@@ -84,7 +84,7 @@
 <td>{% if 'employees.edit' in user.perms %}<form method="post" action="/employees/{{ e.id }}/documents/{{ d.id }}/delete" onsubmit="return confirm('Delete this document?')"><button class="link">delete</button></form>{% endif %}</td></tr>
 {% else %}<tr><td colspan="6" class="hint">No documents yet - upload educational certificates, NID copy, CV, appointment letter...</td></tr>{% endfor %}</table></div>
 {% if 'employees.edit' in user.perms %}<form method="post" action="/employees/{{ e.id }}/documents" enctype="multipart/form-data" style="margin-top:12px"><div class="form-grid">
-<div><label>Type</label><select name="doc_type">{% for k, v in doc_types.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+<div><label>Type</label><select name="doc_type">{% for k, v in doc_types.items() if k != 'APPOINTMENT' or 'appointment.letter' in user.perms %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
 <div><label>Title (e.g. SSC certificate)</label><input name="title"></div>
 <div><label>Files (PDF, JPG, PNG, Word - up to 20 MB each)</label><input type="file" name="files" multiple required></div>
 </div><p><button>Upload</button></p></form>{% endif %}</div>

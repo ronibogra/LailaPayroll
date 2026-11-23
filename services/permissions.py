@@ -6,7 +6,9 @@ PERMS: dict[str, str] = {
     "employees.view": "See employees & profiles",
     "employees.edit": "Add / edit / import employees, photos and documents",
     "salary.view": "See salaries and salary details",
-    "salary.edit": "Change salaries, pay mode and OT eligibility of employees",
+    "salary.edit": "Change salaries, pay mode and OT eligibility of employees (Admin)",
+    "mobile.manage": "Allow mobile punch and set employees' mobile PINs (Admin)",
+    "appointment.letter": "Make and change appointment letters (Admin)",
     "punches.view": "See punch records and first & last punch",
     "punches.edit": "Import punch files, manual punches, download from machines",
     "machines.manage": "Add / edit / remove machines",
@@ -32,7 +34,8 @@ PERMS: dict[str, str] = {
 
 GROUPS = [
     ("General", ["dashboard.view", "reports.export"]),
-    ("Employees", ["employees.view", "employees.edit", "salary.view", "salary.edit"]),
+    ("Employees", ["employees.view", "employees.edit", "salary.view", "salary.edit", "mobile.manage",
+                   "appointment.letter"]),
     ("Punch & machines", ["punches.view", "punches.edit", "machines.manage"]),
     ("Attendance", ["attendance.view", "attendance.process", "shifts.manage", "holidays.manage"]),
     ("Leave", ["leave.manage", "leave.approve_dept", "leave.approve_final", "leave.policy"]),
@@ -42,7 +45,7 @@ GROUPS = [
 
 BUILTIN_ROLES: dict[str, tuple[str, list[str]]] = {
     "ADMIN": ("Administrator - everything", list(PERMS)),
-    "HR": ("HR", ["dashboard.view", "reports.export", "employees.view", "employees.edit", "salary.view", "salary.edit",
+    "HR": ("HR", ["dashboard.view", "reports.export", "employees.view", "employees.edit", "salary.view",
                   "punches.view", "punches.edit", "machines.manage", "attendance.view", "attendance.process",
                   "leave.manage", "holidays.manage", "payroll.view", "payroll.process", "logs.view"]),
     "ACCOUNTS": ("Accounts", ["dashboard.view", "reports.export", "employees.view", "salary.view", "punches.view",
@@ -60,6 +63,8 @@ BUILTIN_ROLES: dict[str, tuple[str, list[str]]] = {
 # changes to built-in roles of existing installations, applied once each (see main.startup)
 ROLE_MIGRATIONS = [
     (2, "HR", ["salary.edit"], ["shifts.manage"]),
+    # salary & payment, mobile attendance and appointment letters: Admin only
+    (3, "HR", [], ["salary.edit"]),
 ]
 
 

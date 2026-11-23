@@ -15,8 +15,14 @@
 {% else %}
   {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
   <div class="panel" style="text-align:center"><b>{{ emp.full_name }}</b><div class="hint" style="margin:0">{{ emp.employee_code }} · {{ emp.company.name if emp.company }}{{ ' · ' ~ emp.department.name if emp.department }}</div></div>
-  <div class="m-tabs"><a href="/m" class="{{ 'on' if tab != 'leave' }}">Punch</a><a href="/m?tab=leave" class="{{ 'on' if tab == 'leave' }}">Leave</a></div>
-  {% if tab != 'leave' %}
+  <div class="m-tabs"><a href="/m" class="{{ 'on' if tab != 'leave' }}">Punch</a><a href="/m?tab=leave" class="{{ 'on' if tab == 'leave' }}">Leave</a><a href="/m?tab=pay" class="{{ 'on' if tab == 'pay' }}">Payslip</a></div>
+  {% if tab == 'pay' %}
+  <div class="panel"><h3>My payslips</h3>
+  {% for l, run in slips %}<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eee">
+  <div><b>{{ month_name[run.month] }} {{ run.year }}</b><div class="hint" style="margin:0">Net pay Tk {{ '{:,.0f}'.format(l.net_pay) }} · {{ l.present_days }} days present</div></div>
+  <a class="btn sec" href="/m/payslip/{{ run.id }}.pdf" target="_blank">PDF</a></div>
+  {% else %}<p class="hint">No payslip yet. Payslips appear here after the month's payroll is finalized.</p>{% endfor %}</div>
+  {% elif tab != 'leave' %}
   <div class="clock" id="clock">--:--</div><div class="date" id="date"></div>
   {% if emp.allow_mobile %}
   <button class="punch-btn" id="punch">PUNCH</button>

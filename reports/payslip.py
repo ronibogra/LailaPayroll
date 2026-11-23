@@ -32,8 +32,9 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     c.setFont("Helvetica", 8)
     c.setFillColorRGB(0.4, 0.4, 0.4)
     c.drawRightString(x1, y, f"A {BRAND['name']} concern")
-    if run.company.address:
-        c.drawRightString(x1, y - 4 * mm, run.company.address[:70])
+    addr = run.company.address or BRAND.get("address")      # all companies sit at the Head Office
+    if addr:
+        c.drawRightString(x1, y - 4 * mm, addr[:70])
     c.setFillColorRGB(0, 0, 0)
     y -= 15 * mm
     c.setFont("Helvetica", 9)

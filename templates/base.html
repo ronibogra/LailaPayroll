@@ -35,7 +35,7 @@
   {% if 'payroll.edit' in pm %}<a href="/payroll/components" class="{{ 'active' if path.startswith('/payroll/components') }}">Pay components</a>{% endif %}
   <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
   {% if 'logs.view' in pm or 'users.manage' in pm or 'backup.manage' in pm or 'company.manage' in pm %}<div class="nav-label">ADMIN</div>{% endif %}
-  {% if 'company.manage' in pm %}<a href="/appointment-letter" class="{{ 'active' if path.startswith('/appointment-letter') }}">Appointment letter</a>{% endif %}
+  {% if 'appointment.letter' in pm %}<a href="/appointment-letter" class="{{ 'active' if path.startswith('/appointment-letter') }}">Appointment letter</a>{% endif %}
   {% if 'users.manage' in pm %}<a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users &amp; roles</a>{% endif %}
   {% if 'backup.manage' in pm %}<a href="/backup" class="{{ 'active' if path.startswith('/backup') }}">Backup &amp; restore</a>{% endif %}
   {% if 'logs.view' in pm %}<a href="/errors" class="{{ 'active' if path.startswith('/errors') }}">Error log</a>

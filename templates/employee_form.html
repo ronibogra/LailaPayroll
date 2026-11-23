@@ -48,10 +48,10 @@
 {{ f('bank_name', 'Bank / wallet (bKash, Nagad...)') }}{{ f('account_no', 'Account / wallet number') }}
 <div><input type="hidden" name="ot_field" value="1"><label><input type="checkbox" name="ot_eligible" value="1" {{ 'checked' if not e or e.ot_eligible is not false }}> Overtime applies to this employee</label></div>
 </div><p class="hint">Overtime is also switched off for a whole company in its pay policy (e.g. Head Office).</p></div>
-{% else %}<div class="panel"><h3>Salary &amp; payment</h3><p class="hint">Your role cannot change salaries, pay mode or overtime. Ask an Admin / HR with salary rights.</p></div>{% endif %}
-<div class="panel"><h3>Mobile attendance</h3><div class="form-grid">
+{% else %}<div class="panel"><h3>Salary &amp; payment</h3><p class="hint">Salary &amp; payment can only be changed by an Admin.</p></div>{% endif %}
+{% if 'mobile.manage' in user.perms %}<div class="panel"><h3>Mobile attendance</h3><div class="form-grid">
 <div><label><input type="checkbox" name="allow_mobile" value="1" {{ 'checked' if e and e.allow_mobile }}> Allow punching from phone</label></div>
 <div><label>Set new PIN (4+ digits, blank = keep)</label><input name="mobile_pin" inputmode="numeric" autocomplete="off"></div>
-</div></div>
+</div></div>{% else %}<div class="panel"><h3>Mobile attendance</h3><p class="hint">Mobile punch: <b>{{ 'allowed' if e and e.allow_mobile else 'not allowed' }}</b>. Only an Admin can change mobile attendance or set PINs.</p></div>{% endif %}
 <button>Save</button> <a class="btn sec" href="{{ '/employees/' ~ e.id if e else '/employees' }}">Cancel</a></form>
 {% endblock %}

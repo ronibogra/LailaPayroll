@@ -1043,8 +1043,9 @@ def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db:
     fl = [r for r in fl if r["card_no"] == emp.card_no][::-1]
     leaves = db.scalars(select(Leave).where(Leave.employee_id == emp.id).order_by(Leave.start_date.desc()).limit(20)).all()
     show_salary = "salary.view" in user["perms"]
-    documents = db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)
-                           .order_by(EmployeeDocument.doc_type, EmployeeDocument.uploaded_at)).all()
+    documents = [d for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)
+                                       .order_by(EmployeeDocument.doc_type, EmployeeDocument.uploaded_at))
+                 if d.doc_type != "APPOINTMENT" or "appointment.letter" in user["perms"]]
     pays = []
     if show_salary:
         pays = db.execute(select(PayrollLine, PayrollRun).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
@@ -1092,6 +1093,8 @@ async def employee_docs_upload(request: Request, emp_id: int, user=Depends(page_
     emp = _emp_or_404(db, user, emp_id)
     f = await request.form()
     doc_type = str(f.get("doc_type") or "OTHER")
+    if doc_type == "APPOINTMENT" and "appointment.letter" not in user["perms"]:
+        doc_type = "OTHER"
     title = str(f.get("title") or "").strip()
     saved, errors = 0, []
     for up in f.getlist("files"):
@@ -1119,6 +1122,8 @@ def employee_doc_get(emp_id: int, doc_id: int, user=Depends(page_user), db: Sess
     need(user, "employees.view")
     emp = _emp_or_404(db, user, emp_id)
     d = db.get(EmployeeDocument, doc_id)
+    if d and d.doc_type == "APPOINTMENT" and "appointment.letter" not in user["perms"]:
+        raise HTTPException(403, "Appointment letters can only be opened by an Admin")
     path = docs.path_of(d.stored_name) if d and d.employee_id == emp.id else None
     if not path:
         raise HTTPException(404, "Document not found")
@@ -1144,8 +1149,9 @@ def employee_profile_pdf(emp_id: int, user=Depends(page_user), db: Session = Dep
     need(user, "employees.view")
     from reports.profile_pdf import profile_pdf
     emp = _emp_or_404(db, user, emp_id)
-    documents = db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)
-                           .order_by(EmployeeDocument.uploaded_at)).all()
+    documents = [d for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)
+                                       .order_by(EmployeeDocument.uploaded_at))
+                 if d.doc_type != "APPOINTMENT" or "appointment.letter" in user["perms"]]
     pdf = profile_pdf(emp, photo_path(emp.photo), leave_svc.balances(db, emp), documents,
                       show_salary="salary.view" in user["perms"],
                       components=comp_svc.for_employee(emp, *comp_svc.load_all(db)))
@@ -1157,7 +1163,7 @@ def employee_profile_pdf(emp_id: int, user=Depends(page_user), db: Session = Dep
 @app.post("/employees/{emp_id}/appointment")
 async def employee_appointment(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
     """Appointment letter PDF from the template (Settings > Appointment letter); optional copy to Documents."""
-    need(user, "employees.view", "salary.view")
+    need(user, "employees.view", "appointment.letter")
     from services import appointment as apt
     emp = _emp_or_404(db, user, emp_id)
     f = await request.form()
@@ -1183,7 +1189,7 @@ async def employee_appointment(request: Request, emp_id: int, user=Depends(page_
 
 @app.get("/appointment-letter", response_class=HTMLResponse)
 def appointment_template_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "company.manage")
+    need(user, "appointment.letter")
     from services import appointment as apt
     return render(request, "appointment_template.html", user, tpl=apt.load_template(db), fields=apt.FIELDS,
                   default_body=apt.DEFAULT_BODY)
@@ -1191,7 +1197,7 @@ def appointment_template_page(request: Request, user=Depends(page_user), db: Ses
 
 @app.post("/appointment-letter")
 async def appointment_template_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "company.manage")
+    need(user, "appointment.letter")
     from services import appointment as apt
     f = await request.form()
     if f.get("reset"):
@@ -1251,7 +1257,8 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
                          dec(val("transport"), "Transport"), dec(val("food"), "Food")]
                 if sum(parts) != g:
                     raise ValueError(f"Salary parts add up to {sum(parts)}, not gross {g}. Tick 'split automatically'.")
-        pin = val("mobile_pin")
+        can_mobile = "mobile.manage" in user["perms"]
+        pin = val("mobile_pin") if can_mobile else ""
         if pin and (not pin.isdigit() or len(pin) < 4):
             raise ValueError("Mobile PIN must be at least 4 digits")
         dept = None
@@ -1284,7 +1291,10 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
             e.payment_mode, e.ot_eligible = "CASH", True
         for k in PROFILE_FIELDS:
             setattr(e, k, val(k)[:300] or None if k != "notes" else val(k) or None)
-        e.allow_mobile = bool(f.get("allow_mobile"))
+        if can_mobile:          # mobile punch and PIN: Admin only
+            e.allow_mobile = bool(f.get("allow_mobile"))
+        elif not emp_id:
+            e.allow_mobile = False
         if pin:
             e.mobile_pin_hash = hash_password(pin)
         if not emp_id:
@@ -3012,7 +3022,10 @@ def mobile_page(request: Request, db: Session = Depends(get_db)):
                                                              (not t.gender or t.gender == emp.gender)],
                    my_leave=db.scalars(select(Leave).where(Leave.employee_id == emp.id)
                                        .order_by(Leave.start_date.desc()).limit(12)).all(),
-                   labels=leave_svc.STATUS_LABEL, today=now_local().date(), tab=request.query_params.get("tab", ""))
+                   labels=leave_svc.STATUS_LABEL, today=now_local().date(), tab=request.query_params.get("tab", ""),
+                   slips=db.execute(select(PayrollLine, PayrollRun).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
+                                    .where(PayrollLine.employee_id == emp.id, PayrollRun.status == "FINAL")
+                                    .order_by(PayrollRun.year.desc(), PayrollRun.month.desc()).limit(12)).all())
     return render(request, "mobile.html", None, emp=emp, punches=mobile.today_punches(db, emp) if emp else [], **ctx)
 
 
@@ -3048,6 +3061,21 @@ def mobile_punch(request: Request, latitude: float = Form(...), longitude: float
     return {"ok": True, "message": f"Punch recorded at {log.punch_time:%I:%M %p}", "time": f"{log.punch_time:%H:%M}",
             "location": f"{log.latitude:.6f}, {log.longitude:.6f} (±{log.accuracy_m} m) · {log.note}",
             "map": f"https://maps.google.com/?q={log.latitude:.6f},{log.longitude:.6f}"}
+
+
+@app.get("/m/payslip/{run_id}.pdf")
+def mobile_payslip(request: Request, run_id: int, db: Session = Depends(get_db)):
+    """An employee's own payslip (finalized months only) from the phone."""
+    emp = mobile_employee(request, db)
+    if not emp:
+        return go("/m", err="Please log in again")
+    run = db.get(PayrollRun, run_id)
+    line = next((l for l in run.lines if l.employee_id == emp.id), None) if run and run.status == "FINAL" else None
+    if not line:
+        return go("/m?tab=pay", err="Payslip not available")
+    audit(db, f"mobile:{emp.employee_code}", "PAYSLIP_SELF", f"{run.year}-{run.month:02d}")
+    return Response(payslips_pdf(run, [line]), media_type="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="payslip-{emp.employee_code}-{run.year}-{run.month:02d}.pdf"'})
 
 
 @app.post("/m/leave")
