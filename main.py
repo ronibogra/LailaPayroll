@@ -82,7 +82,7 @@ def render(request: Request, name: str, user: dict | None, **ctx) -> HTMLRespons
     ctx.update(request=request, user=user, msg=request.query_params.get("msg", ""),
                err=request.query_params.get("err", ""))
     if user and user.get("must_change") and name != "me_password.html":
-        return go("/me/password", err="Please choose your own password first")
+        return go("/me/password")      # the page explains why
     if user and {"leave.approve_dept", "leave.approve_final"} & user["perms"] and "pending_leave_count" not in ctx:
         try:
             with SessionLocal() as s:
