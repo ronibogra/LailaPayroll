@@ -65,8 +65,8 @@ def run_payroll(db: Session, company_id: int, year: int, month: int, user: dict)
                 adj = Adjustments(a.other_addition, a.advance, a.other_deduction, a.tax, a.note or "",
                                   items=json.loads(a.items_json or "[]"), overrides=json.loads(a.overrides_json or "{}"))
             r = compute_pay(sal, att, policy, adj, comp_svc.for_employee(e, comps, per_emp))
-        except ValueError as exc:
-            errors.append(str(exc))
+        except (ValueError, ArithmeticError) as exc:     # one bad value must not stop everyone's payroll
+            errors.append(f"{e.employee_code}: {exc}" if not str(exc).startswith(e.employee_code) else str(exc))
             continue
         run.lines.append(PayrollLine(
             employee_id=e.id, employee_code=e.employee_code, full_name=e.full_name,

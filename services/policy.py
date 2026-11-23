@@ -85,6 +85,13 @@ def _validate(key: str, raw: str, kind) -> None:
         raise ValueError("absent_basis must be basic or gross")
     if key == "absent_divisor" and raw not in ("30", "month_days"):
         raise ValueError("absent_divisor must be 30 or month_days")
+    if key == "ot_divisor" and Decimal(str(raw)) <= 0:
+        raise ValueError("OT hourly divisor must be more than 0 (e.g. 208). To stop overtime, set "
+                         "'Overtime applies' to false instead")
+    if key in ("ot_multiplier", "late_deduction_days", "attendance_bonus", "stamp_charge") and Decimal(str(raw)) < 0:
+        raise ValueError(f"{LABELS.get(key, key)} cannot be negative")
+    if key in ("late_days_per_deduction", "half_day_late_minutes", "bonus_max_late_days") and int(raw) < 0:
+        raise ValueError(f"{LABELS.get(key, key)} cannot be negative")
 
 
 def _stored(db: Session, company_id: int) -> dict[str, str]:

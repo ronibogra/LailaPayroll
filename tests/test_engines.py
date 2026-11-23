@@ -260,3 +260,11 @@ def test_admin_overrides():
     assert r.absent_days == 2 and r.absent_deduction == D("446.67")
     assert r.ot_hours == D("10.00") and r.ot_amount == D("644.20")
     assert any("set to 2 by admin" in w for w in r.warnings)
+
+
+def test_ot_divisor_zero_does_not_crash():
+    pol = PayPolicy(ot_divisor=D("0"))
+    m = evaluate_month(2026, 11, full_month_punches(2026, 11, out=time(19, 0)), DAY, FRIDAY, set())
+    r = compute_pay(split_gross(12500, pol), m, pol)
+    assert r.ot_rate == 0 and r.ot_amount == 0 and r.net_pay == D("12500")
+    assert any("OT hourly divisor" in w for w in r.warnings)

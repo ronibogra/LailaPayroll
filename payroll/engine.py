@@ -201,7 +201,12 @@ def compute_pay(salary: SalaryComponents, att: MonthSummary, policy: PayPolicy,
         ot_hours = money(D(str(ov["ot_hours"])))
     if not policy.ot_enabled:
         ot_hours = ZERO
-    ot_rate = money(salary.basic / policy.ot_divisor * policy.ot_multiplier)
+    if policy.ot_divisor and policy.ot_divisor > 0:
+        ot_rate = money(salary.basic / policy.ot_divisor * policy.ot_multiplier)
+    else:          # 0 / empty divisor in the pay policy: no overtime pay instead of a crash
+        ot_rate = ZERO
+        if ot_hours:
+            warnings.append("OT not paid: 'OT hourly divisor' in the pay policy is 0")
     ot_amount = money(ot_rate * ot_hours)
 
     bonus = ZERO

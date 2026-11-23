@@ -276,6 +276,7 @@ def main():
 
     step("pay policy per company")
     post(s, "/settings/policy", {"policy_company": "2", "attendance_bonus": "500"}, must="Pay policy saved")
+    post(s, "/settings/policy", {"policy_company": "2", "ot_divisor": "0"}, must="must be more than 0", must_not=None)
     page(s, "/settings?policy_company=2", must="own")
 
     step("company-limited HR user sees only LTL")
