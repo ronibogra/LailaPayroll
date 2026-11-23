@@ -3183,7 +3183,9 @@ def users_page(request: Request, role: str = "", edit: str = "", user=Depends(pa
     need(user, "users.manage")
     roles = db.scalars(select(Role).order_by(Role.builtin.desc(), Role.name)).all()
     return render(request, "users.html", user, users=db.scalars(select(User).order_by(User.username)).all(),
-                  eu=db.scalar(select(User).where(User.username == edit)) if edit else None,
+                  eu=(eu := db.scalar(select(User).where(User.username == edit)) if edit else None),
+                  linked_code=(db.get(Employee, eu.employee_id).employee_code
+                               if eu and eu.employee_id and db.get(Employee, eu.employee_id) else ""),
                   staff_on=staff_login_on(db), staff_pw=staff_default_password(db),
                   staff_count=db.scalar(select(func.count(User.id)).where(User.role == "STAFF")) or 0,
                   roles=roles, edit_role=db.scalar(select(Role).where(Role.name == role)) if role else None,
@@ -3194,7 +3196,8 @@ def users_page(request: Request, role: str = "", edit: str = "", user=Depends(pa
 
 @app.post("/users/save")
 def user_save(username: str = Form(...), role: str = Form(...), password: str = Form(""), active: str = Form(""),
-              company_id: str = Form(""), full_name: str = Form(""), user=Depends(page_user),
+              company_id: str = Form(""), full_name: str = Form(""), employee_code: str = Form(""),
+              user=Depends(page_user),
               db: Session = Depends(get_db)):
     need(user, "users.manage")
     if not db.scalar(select(Role).where(Role.name == role)):
@@ -3222,6 +3225,19 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
         return go("/users", err="You cannot change your own role, company limit or active status")
     u.role, u.active, u.full_name = role, bool(active), full_name.strip() or u.full_name
     u.company_id = int(company_id) if company_id else None
+    code = employee_code.strip()
+    if code:      # this login is also an employee: gives them My page (own attendance, leave, payslips)
+        emp = db.scalar(select(Employee).where(or_(Employee.employee_code == code, Employee.card_no == code)))
+        if not emp:
+            db.rollback()
+            return go("/users", err=f"No employee with code {code}")
+        other = db.scalar(select(User).where(User.employee_id == emp.id, User.username != u.username))
+        if other:
+            db.rollback()
+            return go("/users", err=f"{emp.employee_code} is already linked to the login '{other.username}'")
+        u.employee_id = emp.id
+    elif role != "STAFF":
+        u.employee_id = None
     audit(db, user, "USER_SAVE", f"{u.username} role={role} company={company_id or 'ALL'} active={bool(active)}"
           + (" password changed" if password else ""), commit=False)
     db.commit()
@@ -3289,12 +3305,30 @@ def mobile_employee(request: Request, db: Session) -> Employee | None:
 
 
 # ---------------------------------------------------------------- My page (Staff self-service)
+class NotLinked(Exception):
+    pass
+
+
 def _me(db, user) -> Employee:
     need(user, "self.service")
     emp = db.get(Employee, user.get("employee_id") or 0)
     if not emp:
-        raise HTTPException(403, "This login is not linked to an employee - ask HR")
+        raise NotLinked()
     return emp
+
+
+@app.exception_handler(NotLinked)
+async def _not_linked(request: Request, exc: NotLinked):
+    """A login that is not an employee (e.g. admin) opened My page: explain instead of an error."""
+    try:
+        user = page_user(request)
+    except Exception:  # noqa: BLE001
+        return RedirectResponse("/login", status_code=303)
+    if "users.manage" in user["perms"]:
+        return go(f"/users?edit={quote(user['username'])}#userform",
+                  msg="My page shows an employee's own data. Your login is not linked to an employee - "
+                      "type your Employee ID in 'Linked employee' below if you have one.")
+    return go("/", err="My page is only for logins linked to an employee - ask HR to link yours")
 
 
 @app.get("/me", response_class=HTMLResponse)

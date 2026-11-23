@@ -839,6 +839,14 @@ def main():
     post(requests.Session(), "/login", {"username": "12160", "password": "12345678"}, must="Wrong username or password",
          must_not=None)
     post(s, "/users/staff-login", {"enabled": "1", "default_password": "12345678"}, must="settings saved")
+    r = page(s, "/me", must="not linked to an employee")             # admin without an employee record
+    ok('href="/me"' not in page(s, "/").text, "My page link only for linked logins")
+    post(s, "/users/save", {"username": "admin", "role": "ADMIN", "active": "1", "employee_code": "12127"},
+         must="already linked", must_not=None)
+    post(s, "/users/save", {"username": "admin", "role": "ADMIN", "active": "1", "employee_code": "HO-0001"},
+         must="User admin saved")
+    page(s, "/me", must="Md. Rahim")
+    post(s, "/users/save", {"username": "admin", "role": "ADMIN", "active": "1", "employee_code": ""}, must="saved")
 
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")
