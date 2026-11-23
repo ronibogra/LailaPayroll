@@ -473,7 +473,8 @@ def main():
     aid = re.search(rf"/employees/{kid}/assets/(\d+)/return", r.text).group(1)
     post(s, f"/employees/{kid}/assets/{aid}/return", {"status": "RETURNED", "condition": "Good"}, must="returned")
     ws = load_workbook(io.BytesIO(page(s, "/export/assets.xlsx?asset_status=OUT").content)).active
-    vals = {ws.cell(i, 7).value for i in range(6, ws.max_row + 1)} - {None}
+    head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
+    vals = {ws.cell(i, head.index("Item") + 1).value for i in range(6, ws.max_row + 1)} - {None}
     ok("Office SIM" in vals and "Laptop" not in vals, f"assets report (with staff now): {vals}")
     page(s, "/reports/assets", must="Assets with staff")
     r = page(s, f"/employees/{kid}/profile.pdf")
