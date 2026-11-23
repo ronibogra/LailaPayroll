@@ -111,3 +111,11 @@ jobs:
           gh release create latest installer\Output\LailaPayroll_Setup.exe `
             --title "LAILA GROUP Attendance & Payroll - installer (build $env:GITHUB_RUN_NUMBER)" `
             --notes "Tested on Windows: install, first-time setup, machines, employees, attendance, payroll, payslips, mobile punch, re-install, uninstall. Download LailaPayroll_Setup.exe below and double-click it on the head-office server. Developed by: SPHere - 01617144755"
+          # make sure the release is public (gh can leave it as a draft if publishing races the tag)
+          for ($i = 0; $i -lt 5; $i++) {
+            gh release edit latest --draft=false 2>$null
+            $d = gh release view latest --json isDraft --jq .isDraft 2>$null
+            if ($d -eq "false") { "release is public"; break }
+            Start-Sleep -Seconds 5
+          }
+          if ($d -ne "false") { throw "release 'latest' is still a draft" }
