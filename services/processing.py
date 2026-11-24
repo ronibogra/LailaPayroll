@@ -166,6 +166,8 @@ def start_auto_refresh(every_seconds: int = 300) -> None:
         while True:
             try:
                 with SessionLocal() as db:
+                    from services.changes import apply_due
+                    apply_due(db)        # increments / promotions whose date has come
                     top = db.scalar(select(func.max(AttendanceLog.id))) or 0
                     today = now_local().date()
                     if top != state["last_id"] or state.get("day") != today:

@@ -23,7 +23,7 @@ from integration.zk_adms import options_response
 from models import (Company, Department, Employee, Shift, Device, AttendanceLog, DailyAttendance, Holiday, Leave,
                     PayrollAdjustment, PayrollRun, PayrollLine, User, ErrorLog, Role, EmployeeDocument,
                     LeaveType, SpecialHoliday, PayComponent, EmployeeComponent, EmployeeAsset, EmployeeSeparation,
-                    AuditLog)
+                    AuditLog, EmployeeChange)
 from payroll.engine import split_gross
 from reports.excel import (salary_sheet, attendance_month, attendance_day, punches_sheet, first_last_sheet,
                            combined_salary)
@@ -33,7 +33,7 @@ from security import (hash_password, verify_password, create_token, decode_token
 from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, parse as parse_perms
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
 from services import leave as leave_svc, documents as docs, components as comp_svc, disbursement as disb
-from services import assets as asset_svc, letters as letter_svc
+from services import assets as asset_svc, letters as letter_svc, changes as change_svc
 from services.errors import log_error
 from services.photos import save_photo, save_signature, photo_path, bulk_photos
 from integration import generic_import
@@ -792,7 +792,7 @@ def _idcard_design(db) -> dict:
 
 
 AUTH_SIGN_FILE = branding.BRAND_DIR / "auth_signature.png"
-LETTER_DOCS = {"APPOINTMENT", "CONFIRMATION", "RELEASE", "EXPERIENCE"}
+LETTER_DOCS = {"APPOINTMENT", "CONFIRMATION", "RELEASE", "EXPERIENCE", "PROMOTION", "INCREMENT"}
 TPL_FILES = {"front": branding.BRAND_DIR / "idcard_front.png", "back": branding.BRAND_DIR / "idcard_back.png"}
 
 
@@ -1059,6 +1059,35 @@ def idcards_pdf(request: Request, company: str = "", department: str = "", codes
                     headers={"Content-Disposition": f'inline; filename="id-cards-{len(emps)}.pdf"'})
 
 
+def _work_hours(db, emp) -> list[dict]:
+    """Working hours per month and per year from processed attendance (newest first)."""
+    months: dict[tuple[int, int], dict] = {}
+    for r in db.scalars(select(DailyAttendance).where(DailyAttendance.employee_id == emp.id)):
+        k = (r.work_date.year, r.work_date.month)
+        x = months.setdefault(k, {"present": 0, "late": 0, "absent": 0, "leave": 0, "min": 0, "ot": 0})
+        x["present"] += r.status in ("PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK")
+        x["late"] += (r.late_minutes or 0) > 0
+        x["absent"] += r.status == "ABSENT"
+        x["leave"] += r.status in ("LEAVE_PAID", "LEAVE_UNPAID")
+        x["min"] += r.worked_minutes or 0
+        x["ot"] += (r.ot_minutes or 0) + (r.extra_ot_minutes or 0)
+    years: dict[int, dict] = {}
+    for (y, m), x in sorted(months.items(), reverse=True):
+        yr = years.setdefault(y, {"year": y, "months": [], "present": 0, "late": 0, "absent": 0, "leave": 0,
+                                  "min": 0, "ot": 0})
+        yr["months"].append({"m": m, **x, "hours": round(x["min"] / 60, 1), "ot_h": round(x["ot"] / 60, 1),
+                             "avg": round(x["min"] / 60 / x["present"], 1) if x["present"] else 0})
+        for k in ("present", "late", "absent", "leave", "min", "ot"):
+            yr[k] += x[k]
+    out = []
+    for y in sorted(years, reverse=True):
+        yr = years[y]
+        yr.update(hours=round(yr["min"] / 60, 1), ot_h=round(yr["ot"] / 60, 1),
+                  avg=round(yr["min"] / 60 / yr["present"], 1) if yr["present"] else 0)
+        out.append(yr)
+    return out
+
+
 def _history(db, emp, user) -> list[tuple]:
     """Everything that happened to this employee, newest first (kept after they leave)."""
     from services.assets import STATUS as AST
@@ -1078,6 +1107,19 @@ def _history(db, emp, user) -> list[tuple]:
         ev.append((a.issued_on, "💻", f"Received {a.name} {a.serial_no or ''}".strip()))
         if a.returned_on:
             ev.append((a.returned_on, "↩", f"{a.name}: {AST.get(a.status, a.status).lower()}"))
+    for ch in db.scalars(select(EmployeeChange).where(EmployeeChange.employee_id == emp.id,
+                                                      EmployeeChange.status != "CANCELLED")):
+        what = []
+        if ch.new_designation and ch.new_designation != ch.old_designation:
+            what.append(f"{ch.old_designation or '-'} → {ch.new_designation}")
+        if ch.new_grade and ch.new_grade != ch.old_grade:
+            what.append(f"grade {ch.old_grade or '-'} → {ch.new_grade}")
+        if ch.new_department:
+            what.append(f"to {ch.new_department}")
+        if ch.new_gross != ch.old_gross and "salary.view" in user["perms"]:
+            what.append(f"gross Tk {ch.old_gross:,.0f} → {ch.new_gross:,.0f}")
+        ev.append((ch.effective_date, "⬆", f"{change_svc.KINDS.get(ch.kind, ch.kind)}: {', '.join(what)}"
+                   + (" (from this date, not applied yet)" if ch.status == "PENDING" else "")))
     for sp in db.scalars(select(EmployeeSeparation).where(EmployeeSeparation.employee_id == emp.id)):
         ev.append((sp.created_at, "📝", f"{letter_svc.SEP_TYPES.get(sp.sep_type, sp.sep_type).title()} recorded, last "
                                        f"working day {sp.last_working_day:%d/%m/%Y}"
@@ -1099,6 +1141,7 @@ def _history(db, emp, user) -> list[tuple]:
 def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
     """Full profile: photo, personal and job details, this month's attendance, recent punches, leave, payslips."""
     need(user, "employees.view")
+    change_svc.apply_due(db)
     emp = _emp_or_404(db, user, emp_id)
     today = now_local().date()
     first, last = month_bounds(today.year, today.month)
@@ -1134,6 +1177,9 @@ def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db:
                   asset_cats=asset_svc.CATEGORIES, asset_status=asset_svc.STATUS, asset_conds=asset_svc.CONDITIONS,
                   sep=(sep := _open_sep(db, emp.id)), sep_check=letter_svc.checklist(sep), sep_types=letter_svc.SEP_TYPES,
                   check_items=letter_svc.CHECKLIST, letter_kinds=letter_svc.KINDS, history=_history(db, emp, user),
+                  changes=db.scalars(select(EmployeeChange).where(EmployeeChange.employee_id == emp.id)
+                                     .order_by(EmployeeChange.effective_date.desc(), EmployeeChange.id.desc())).all(),
+                  change_kinds=change_svc.KINDS, hours=_work_hours(db, emp),
                   service=letter_svc.service_length(emp.joined_on, emp.left_on or now_local().date()),
                   components=comp_svc.for_employee(emp, *comp_svc.load_all(db)) if show_salary else [],
                   calcs=comp_svc.CALCS)
@@ -1321,6 +1367,127 @@ def employee_asset_delete(emp_id: int, asset_id: int, user=Depends(page_user), d
     return go(f"/employees/{emp.id}#assets", msg="Entry removed")
 
 
+# ---------------------------------------------------------------- increments & promotions (Admin)
+@app.post("/employees/{emp_id}/changes")
+async def employee_change_add(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "salary.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    f = await request.form()
+    v = lambda k: str(f.get(k) or "").strip()  # noqa: E731
+    back = f"/employees/{emp.id}#changes"
+    try:
+        eff = date.fromisoformat(v("effective_date"))
+        kind = v("kind") if v("kind") in change_svc.KINDS else "INCREMENT"
+        how = v("how") if v("how") in ("AMOUNT", "PERCENT", "GROSS") else "NONE"
+        amount = dec(v("value"), "Increase") if how != "NONE" else Decimal(0)
+        if amount < 0:
+            raise ValueError("The increase cannot be negative")
+        old_g = Decimal(emp.gross or 0)
+        new_g = change_svc.new_gross(old_g, how, amount) if how != "NONE" else old_g
+        new_des, new_grade, new_dept = v("new_designation")[:120], v("new_grade")[:30], v("new_department")[:120]
+        cur_dept = emp.department.name if emp.department else ""
+        changed = (new_g != old_g or (new_des and new_des != (emp.designation or "")) or
+                   (new_grade and new_grade != (emp.grade or "")) or (new_dept and new_dept != cur_dept))
+        if not changed:
+            raise ValueError("Nothing changes - give a new designation, grade, department or a salary increase")
+        if kind == "PROMOTION" and not (new_des and new_des != (emp.designation or "")) and \
+                not (new_grade and new_grade != (emp.grade or "")):
+            raise ValueError("A promotion needs a new designation or grade")
+        if emp.joined_on and eff < emp.joined_on:
+            raise ValueError("Effective date is before the joining date")
+    except ValueError as exc:
+        return go(back, err=str(exc))
+    ch = EmployeeChange(employee_id=emp.id, kind=kind, effective_date=eff, old_designation=emp.designation,
+                        new_designation=new_des or None, old_grade=emp.grade, new_grade=new_grade or None,
+                        old_department=cur_dept or None, new_department=(new_dept if new_dept != cur_dept else None) or None,
+                        old_gross=old_g, new_gross=new_g, remarks=v("remarks")[:2000] or None, created_by=user["username"])
+    db.add(ch)
+    db.flush()
+    ch.employee = emp
+    applied = eff <= now_local().date()
+    if applied:
+        change_svc.apply(db, ch)
+    amt, pct = change_svc.increase(ch)
+    audit(db, user, kind, f"{emp.employee_code}: {ch.old_designation} -> {ch.new_designation or ch.old_designation}, "
+                          f"gross {old_g} -> {new_g} (+{amt}, {pct}%) from {eff}", commit=False)
+    db.commit()
+    return go(back, msg=f"{change_svc.KINDS[kind]} saved - " + ("applied now. Re-process this month's payroll if "
+                                                                 "it is already made." if applied else
+                                                                 f"it will apply automatically on {eff:%d/%m/%Y}."))
+
+
+@app.post("/employees/{emp_id}/changes/{change_id}/cancel")
+def employee_change_cancel(emp_id: int, change_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "salary.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    ch = db.get(EmployeeChange, change_id)
+    if not ch or ch.employee_id != emp.id or ch.status != "PENDING":
+        return go(f"/employees/{emp.id}#changes", err="Only a change that is not applied yet can be cancelled")
+    ch.status = "CANCELLED"
+    audit(db, user, "CHANGE_CANCEL", f"{emp.employee_code} {ch.kind} {ch.effective_date}", commit=False)
+    db.commit()
+    return go(f"/employees/{emp.id}#changes", msg="Cancelled")
+
+
+class _WithSalary:
+    """The employee as the letter should show them: new salary parts, everything else unchanged."""
+    def __init__(self, e, parts):
+        self._e, self._p = e, parts
+
+    def __getattr__(self, k):
+        if k in ("gross", "basic", "house_rent", "medical", "transport", "food") and self._p is not None:
+            return getattr(self._p, k)
+        return getattr(self._e, k)
+
+
+@app.post("/employees/{emp_id}/changes/{change_id}/letter")
+async def employee_change_letter(request: Request, emp_id: int, change_id: int, user=Depends(page_user),
+                                 db: Session = Depends(get_db)):
+    """Official promotion / increment letter for a recorded change (Admin)."""
+    need(user, "employees.view", "appointment.letter")
+    from services import appointment as apt
+    from payroll.engine import split_gross
+    emp = _emp_or_404(db, user, emp_id)
+    ch = db.get(EmployeeChange, change_id)
+    if not ch or ch.employee_id != emp.id or ch.status == "CANCELLED":
+        return go(f"/employees/{emp.id}#changes", err="Change not found")
+    f = await request.form()
+    try:
+        letter_date = date.fromisoformat(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
+    except ValueError:
+        letter_date = now_local().date()
+    kind = "promotion" if ch.kind == "PROMOTION" else "increment"
+    remarks = str(f.get("remarks") or ch.remarks or "").strip()[:1500]
+    raise_pay = Decimal(ch.new_gross or 0) != Decimal(ch.old_gross or 0)
+    parts = split_gross(Decimal(ch.new_gross), load_policy(db, emp.company_id)) if raise_pay else None
+    shown = _WithSalary(emp, parts)
+    code = "PRM" if kind == "promotion" else "INC"
+    ref = f"{emp.company.code if emp.company else 'HO'}/HR/{code}/{ch.effective_date:%Y}/{emp.employee_code}-{ch.id}"
+    base = apt.load_template(db)
+    tpl = letter_svc.template(db, kind)
+    body = letter_svc.drop_empty_remarks(tpl["body"], remarks)
+    tpl["body"] = body if raise_pay else letter_svc.drop_salary_part(body)
+    values = apt.values_for(db, shown, letter_date, emp.joined_on, ref, base)
+    amt, pct = change_svc.increase(ch)
+    money = lambda x: f"{Decimal(x or 0):,.0f}"  # noqa: E731
+    values.update(remarks=remarks, effective_date=f"{ch.effective_date:%d %B %Y}",
+                  old_designation=ch.old_designation or "-", new_designation=ch.new_designation or ch.old_designation or "-",
+                  old_grade=ch.old_grade or "-", new_grade=ch.new_grade or ch.old_grade or "-",
+                  new_department=ch.new_department or ch.old_department or "-", designation=ch.new_designation or
+                  ch.old_designation or "-", old_gross=money(ch.old_gross), new_gross=money(ch.new_gross),
+                  new_gross_words=apt.taka_words(ch.new_gross), increment_amount=money(amt), increment_percent=f"{pct:g}")
+    title = letter_svc.KINDS[kind][0]
+    pdf = apt.letter_pdf(shown, values, {**base, **tpl}, acceptance=False, title=title)
+    if f.get("save_copy"):
+        stored, size = docs.save_file(f"emp_{emp.id}", f"{kind}-{emp.employee_code}-{ch.id}.pdf", pdf)
+        db.add(EmployeeDocument(employee_id=emp.id, doc_type=kind.upper(), title=f"{title} {ref}", stored_name=stored,
+                                original_name=f"{kind}-{emp.employee_code}.pdf", size=size, uploaded_by=user["username"]))
+    audit(db, user, f"LETTER_{kind.upper()}", f"{emp.employee_code} ref {ref}", commit=False)
+    db.commit()
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{kind}-{emp.employee_code}.pdf"'})
+
+
 # ---------------------------------------------------------------- leaving the company (separation)
 def _open_sep(db, emp_id):
     return db.scalar(select(EmployeeSeparation).where(EmployeeSeparation.employee_id == emp_id,
@@ -1474,7 +1641,8 @@ def letter_template_page(request: Request, kind: str, user=Depends(page_user), d
     if kind not in letter_svc.KINDS:
         return go("/appointment-letter")
     from services import appointment as apt
-    fields = dict(apt.FIELDS, remarks="Remarks typed when making the letter", confirmation_date="Confirmation date",
+    fields = dict(apt.FIELDS, **letter_svc.CHANGE_FIELDS, remarks="Remarks typed when making the letter",
+                  confirmation_date="Confirmation date",
                   last_working_day="Last working day", notice_date="Resignation / notice date",
                   separation_type="resignation / termination ...", reason="Reason for leaving",
                   service_length="Length of service, e.g. 2 years 3 months")

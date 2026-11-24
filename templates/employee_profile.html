@@ -115,6 +115,35 @@
 <div><label>Condition</label><select name="condition">{% for c in asset_conds %}<option>{{ c }}</option>{% endfor %}</select></div>
 <div><label>Note</label><input name="note"></div>
 </div><p><button>+ Give item</button></p></form>{% endif %}</div>
+<div class="panel" id="hours"><h3>Working hours</h3>
+{% for yr in hours %}<details {{ 'open' if loop.first }} style="margin-bottom:8px"><summary><b>{{ yr.year }}</b> - {{ yr.hours }} h worked · {{ yr.present }} days present · avg {{ yr.avg }} h/day · OT {{ yr.ot_h }} h · late {{ yr.late }} · absent {{ yr.absent }} · leave {{ yr.leave }}</summary>
+<div class="table-wrap"><table class="sum-table"><tr><th>Month</th><th>Days present</th><th>Hours worked</th><th>Avg h / day</th><th>OT hours</th><th>Late days</th><th>Absent</th><th>Leave</th></tr>
+{% for x in yr.months %}<tr><td style="text-align:left">{{ month_name[x.m] }}</td><td>{{ x.present }}</td><td><b>{{ x.hours }}</b></td><td>{{ x.avg }}</td><td>{{ x.ot_h }}</td><td>{{ x.late }}</td><td>{{ x.absent }}</td><td>{{ x.leave }}</td></tr>{% endfor %}
+<tr><th style="text-align:left">Total {{ yr.year }}</th><th>{{ yr.present }}</th><th>{{ yr.hours }}</th><th>{{ yr.avg }}</th><th>{{ yr.ot_h }}</th><th>{{ yr.late }}</th><th>{{ yr.absent }}</th><th>{{ yr.leave }}</th></tr></table></div></details>
+{% else %}<p class="hint">No processed attendance yet.</p>{% endfor %}
+<p class="hint">From processed attendance (time between first and last punch, minus the unpaid break).</p></div>
+<div class="panel" id="changes"><h3>Increments &amp; promotions</h3>
+<div class="table-wrap"><table><tr><th>Effective</th><th>Type</th><th>Designation</th><th>Grade</th><th>Department</th>{% if show_salary %}<th class="num">Gross before</th><th class="num">New gross</th><th class="num">Increase</th>{% endif %}<th>Remarks</th><th>Status</th><th></th></tr>
+{% for ch in changes %}<tr><td>{{ ch.effective_date.strftime('%d/%m/%Y') }}</td><td><b>{{ change_kinds.get(ch.kind, ch.kind) }}</b></td>
+<td>{% if ch.new_designation and ch.new_designation != ch.old_designation %}{{ ch.old_designation or '-' }} → <b>{{ ch.new_designation }}</b>{% else %}{{ ch.old_designation or '' }}{% endif %}</td>
+<td>{% if ch.new_grade and ch.new_grade != ch.old_grade %}{{ ch.old_grade or '-' }} → <b>{{ ch.new_grade }}</b>{% else %}{{ ch.old_grade or '' }}{% endif %}</td>
+<td>{% if ch.new_department %}{{ ch.old_department or '-' }} → <b>{{ ch.new_department }}</b>{% else %}{{ ch.old_department or '' }}{% endif %}</td>
+{% if show_salary %}<td class="num">{{ '{:,.0f}'.format(ch.old_gross) }}</td><td class="num"><b>{{ '{:,.0f}'.format(ch.new_gross) }}</b></td>
+<td class="num">{% if ch.new_gross != ch.old_gross %}+{{ '{:,.0f}'.format(ch.new_gross - ch.old_gross) }}{% if ch.old_gross %} ({{ '%.1f'|format((ch.new_gross - ch.old_gross) * 100 / ch.old_gross) }}%){% endif %}{% endif %}</td>{% endif %}
+<td>{{ ch.remarks or '' }}</td><td><span class="tag {{ 'yes' if ch.status == 'APPLIED' else ('DRAFT' if ch.status == 'PENDING' else '') }}">{{ {'APPLIED': 'Applied', 'PENDING': 'From ' ~ ch.effective_date.strftime('%d/%m'), 'CANCELLED': 'Cancelled'}[ch.status] }}</span></td>
+<td>{% if ch.status != 'CANCELLED' and 'appointment.letter' in user.perms %}<form method="post" action="/employees/{{ e.id }}/changes/{{ ch.id }}/letter" target="_blank" style="display:inline"><input type="hidden" name="save_copy" value="1"><button class="link">{{ 'promotion' if ch.kind == 'PROMOTION' else 'increment' }} letter</button></form>{% endif %}
+{% if ch.status == 'PENDING' and 'salary.edit' in user.perms %}<form method="post" action="/employees/{{ e.id }}/changes/{{ ch.id }}/cancel" style="display:inline" onsubmit="return confirm('Cancel this change?')"><button class="link">cancel</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="11" class="hint">No increments or promotions yet.</td></tr>{% endfor %}</table></div>
+{% if 'salary.edit' in user.perms %}<form method="post" action="/employees/{{ e.id }}/changes" style="margin-top:12px"><div class="form-grid">
+<div><label>Type</label><select name="kind"><option value="INCREMENT">Increment (salary only)</option><option value="PROMOTION">Promotion (new designation / grade)</option></select></div>
+<div><label>Effective from *</label><input type="date" name="effective_date" required value="{{ today.replace(day=1) }}"></div>
+<div><label>New designation</label><input name="new_designation" value="{{ e.designation or '' }}"></div>
+<div><label>New grade</label><input name="new_grade" value="{{ e.grade or '' }}"></div>
+<div><label>New department (blank = same)</label><input name="new_department" placeholder="{{ e.department.name if e.department }}"></div>
+<div><label>Salary increase</label><div style="display:flex;gap:6px"><select name="how"><option value="AMOUNT">Tk added to gross</option><option value="PERCENT">% of gross</option><option value="GROSS">New gross (Tk)</option><option value="NONE">No change</option></select><input name="value" placeholder="e.g. 2000 or 10" style="width:110px"></div></div>
+<div style="grid-column:1/-1"><label>Remarks (printed in the letter)</label><input name="remarks" style="width:100%" placeholder="e.g. Annual increment for excellent performance"></div>
+</div><p class="hint">Current gross Tk {{ '{:,.0f}'.format(e.gross or 0) }}. The new gross is split into basic / house rent / medical / transport / food by the pay policy. A date in the future is applied automatically on that day; a date already passed is applied now (re-process the payroll of that month if it is already made).</p>
+<p><button>Save</button></p></form>{% endif %}</div>
 {% if 'employees.edit' in user.perms or sep %}
 <div class="panel" id="separation"><h3>Leaving the company {% if sep %}<span class="tag {{ 'FINAL' if sep.status == 'COMPLETED' else 'DRAFT' }}">{{ 'Left' if sep.status == 'COMPLETED' else 'In progress' }}</span>{% endif %}</h3>
 {% if sep %}<div class="kv"><div>Type</div><div>{{ sep_types.get(sep.sep_type, sep.sep_type)|title }}</div>

@@ -146,6 +146,29 @@ class EmployeeAsset(Base):
     employee = relationship("Employee")
 
 
+class EmployeeChange(Base):
+    """Increment and / or promotion: what changed, from when, and whether it is applied yet."""
+    __tablename__ = "employee_changes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(12), default="INCREMENT")   # INCREMENT / PROMOTION (promotion may raise pay)
+    effective_date: Mapped[date] = mapped_column(Date)
+    old_designation: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    new_designation: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    old_grade: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    new_grade: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    old_department: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    new_department: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    old_gross: Mapped[Decimal] = mapped_column(Money, default=0)
+    new_gross: Mapped[Decimal] = mapped_column(Money, default=0)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(10), default="PENDING")   # PENDING (future date) / APPLIED / CANCELLED
+    created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    employee = relationship("Employee")
+
+
 class EmployeeSeparation(Base):
     """Leaving the company: resignation / termination ..., notice, last working day, clearance, release."""
     __tablename__ = "employee_separations"

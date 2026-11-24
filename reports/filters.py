@@ -51,6 +51,7 @@ FILTERS: dict[str, Filter] = {f.key: f for f in [
     Filter("leave_status", "Leave status", choices=[("APPROVED", "Approved"), ("PENDING", "Waiting for approval"),
                                                     ("REJECTED", "Rejected")]),
     Filter("paid", "Paid / unpaid", choices=[("1", "Paid"), ("0", "Unpaid")]),
+    Filter("change_kind", "Type", choices=[("INCREMENT", "Increment"), ("PROMOTION", "Promotion")]),
     Filter("sep_type", "Leaving type", choices=[("RESIGNATION", "Resignation"), ("TERMINATION", "Termination"),
                                                  ("DISMISSAL", "Dismissal"), ("RETIREMENT", "Retirement"),
                                                  ("CONTRACT_END", "End of contract"), ("DISCHARGE", "Discharge"),

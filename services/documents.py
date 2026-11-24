@@ -9,7 +9,7 @@ ALLOWED = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".t
 MAX_BYTES = 20 * 1024 * 1024
 DOC_TYPES = {"EDUCATION": "Educational certificate", "NID": "NID copy", "BIRTH_CERT": "Birth certificate",
              "PASSPORT": "Passport", "CV": "CV / resume", "APPOINTMENT": "Appointment letter", "CONFIRMATION": "Confirmation letter", "RELEASE": "Release letter",
-             "EXPERIENCE": "Experience certificate",
+             "EXPERIENCE": "Experience certificate", "PROMOTION": "Promotion letter", "INCREMENT": "Increment letter",
              "MEDICAL": "Medical / prescription", "MATERNITY": "Maternity document", "OTHER": "Other"}
 MEDIA = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
          ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp", ".tif": "image/tiff", ".tiff": "image/tiff"}

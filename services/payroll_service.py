@@ -44,6 +44,8 @@ def run_payroll(db: Session, company_id: int, year: int, month: int, user: dict)
         db.delete(run)
         db.flush()
 
+    from services.changes import apply_due
+    apply_due(db)                 # salary changes due by today are on the employee before paying
     policy = load_policy(db, company_id)
     summaries = process_month(db, year, month, company_ids=[company_id], save=True)
     employees = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(list(summaries) or [0])))}

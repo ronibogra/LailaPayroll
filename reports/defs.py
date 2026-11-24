@@ -6,7 +6,7 @@ from datetime import date, time, timedelta
 from sqlalchemy import func, or_, select
 
 from models import (AttendanceLog, AuditLog, Company, DailyAttendance, Department, Device, Employee, ErrorLog, Holiday,
-                    Leave, PayrollLine, PayrollRun, Shift, EmployeeAsset, EmployeeSeparation)
+                    Leave, PayrollLine, PayrollRun, Shift, EmployeeAsset, EmployeeSeparation, EmployeeChange)
 from reports.engine import Col, Report
 from reports.filters import emp_conditions, has_emp_filter
 from timeutil import now_local
@@ -521,6 +521,40 @@ def fetch_errors(db, user, p, export):
     return rows, p.get("source", ""), len(rows)
 
 
+# ------------------------------------------------------------ increments & promotions
+CHANGE_COLS = [
+    Col("code", "Code", lambda r: r[1].employee_code, link=lambda r: emp_link(r[1]) + "#changes"),
+    Col("name", "Name", lambda r: r[1].full_name, link=lambda r: emp_link(r[1]) + "#changes"),
+    Col("company", "Company", lambda r: r[1].company.code if r[1].company else ""),
+    Col("department", "Department", lambda r: r[0].new_department or r[0].old_department),
+    Col("type", "Type", lambda r: r[0].kind.title()),
+    Col("effective", "Effective", lambda r: r[0].effective_date, kind="date"),
+    Col("old_des", "Designation before", lambda r: r[0].old_designation),
+    Col("new_des", "New designation", lambda r: r[0].new_designation or r[0].old_designation),
+    Col("old_grade", "Grade before", lambda r: r[0].old_grade, False),
+    Col("new_grade", "New grade", lambda r: r[0].new_grade or r[0].old_grade, False),
+    Col("old_gross", "Gross before", lambda r: r[0].old_gross, kind="money", perm="salary.view"),
+    Col("new_gross", "New gross", lambda r: r[0].new_gross, kind="money", perm="salary.view"),
+    Col("increase", "Increase", lambda r: r[0].new_gross - r[0].old_gross, kind="money", perm="salary.view"),
+    Col("pct", "Increase %", lambda r: round(float((r[0].new_gross - r[0].old_gross) * 100 / r[0].old_gross), 2)
+        if r[0].old_gross else 0, kind="num", perm="salary.view"),
+    Col("status", "Status", lambda r: r[0].status.title()),
+    Col("remarks", "Remarks", lambda r: r[0].remarks, False),
+    Col("by", "Entered by", lambda r: r[0].created_by, False),
+]
+
+
+def fetch_changes(db, user, p, export):
+    s, e = _dates({"start": p.get("start") or f"{now_local().year}-01-01", "end": p.get("end") or "2999-12-31"})
+    stmt = (select(EmployeeChange, Employee).join(Employee, Employee.id == EmployeeChange.employee_id)
+            .where(EmployeeChange.effective_date >= s, EmployeeChange.effective_date <= e,
+                   EmployeeChange.status != "CANCELLED", *emp_conditions(p, user)))
+    if p.get("change_kind") in ("INCREMENT", "PROMOTION"):
+        stmt = stmt.where(EmployeeChange.kind == p["change_kind"])
+    rows = db.execute(stmt.order_by(EmployeeChange.effective_date.desc())).all()
+    return rows, f"{len(rows)} increment(s) / promotion(s){_comp_name(db, _company(user, p))}", len(rows)
+
+
 # ------------------------------------------------------------ former employees (separations)
 def _sep_txt(t):
     from services.letters import SEP_TYPES
@@ -670,6 +704,10 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
            filters=EMP_F + ["asset_status", "asset_type", "asset_q"], totals=["qty", "value"],
            description="Company items given to employees - laptops, phones, SIMs, ID cards, uniforms, tools - "
                        "what is still with staff, returned, lost, and items still with people who have left."),
+    Report("changes", "Increments & promotions", "employees.view", CHANGE_COLS, fetch_changes,
+           filters=["start", "end"] + EMP_F + ["change_kind"], totals=["increase"],
+           description="Every increment and promotion: designation, grade and gross before and after, increase in Tk "
+                       "and %, effective date."),
     Report("separations", "Former employees", "employees.view", SEP_COLS, fetch_separations,
            filters=["start", "end", "company", "department", "designation", "q", "sep_type", "sep_status"],
            description="People who left (or are leaving): resignation / termination, last working day, length of "
@@ -681,4 +719,5 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
     Report("errors", "Error log", "logs.view", ERROR_COLS, fetch_errors),
 ]}
 
-CENTRE = ["punches", "first_last", "attendance", "leaves", "jobcard", "employees", "payroll", "assets", "separations"]
+CENTRE = ["punches", "first_last", "attendance", "leaves", "jobcard", "employees", "payroll", "changes", "assets",
+          "separations"]

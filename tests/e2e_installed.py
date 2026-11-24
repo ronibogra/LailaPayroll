@@ -945,6 +945,34 @@ def main():
     r = page(s, "/attendance/today", must="Today - present")
     ok('value="CAME" selected' in r.text, "Today button shows only people present")
 
+    step("increments & promotions with letters; working hours by month and year")
+    r = page(s, f"/employees/{kid}", must="Working hours")
+    ok(f"{month_name_[m]}" in r.text and "h worked" in r.text, "working hours by month / year")
+    post(s, f"/employees/{kid}/changes", {"kind": "PROMOTION", "effective_date": str(today), "new_designation": "Accountant",
+                                          "how": "NONE"}, must="needs a new designation or grade", must_not=None)
+    post(s, f"/employees/{kid}/changes", {"kind": "PROMOTION", "effective_date": str(today.replace(day=1)),
+                                          "new_designation": "Senior Accounts Officer", "new_grade": "3",
+                                          "how": "PERCENT", "value": "10", "remarks": "Excellent performance"},
+         must="Promotion saved - applied now")
+    r = page(s, f"/employees/{kid}", must="Senior Accounts Officer")
+    ok("Tk 33,000" in r.text and "+3,000" in r.text, "promotion with 10% raise must be applied (30,000 -> 33,000)")
+    cid = re.search(rf"/employees/{kid}/changes/(\d+)/letter", r.text).group(1)
+    r = s.post(BASE + f"/employees/{kid}/changes/{cid}/letter", data={"save_copy": "1"}, timeout=60)
+    ok(r.content[:4] == b"%PDF", "promotion letter")
+    nxt = (today.replace(day=28) + timedelta(days=10)).replace(day=1)
+    post(s, f"/employees/{kid}/changes", {"kind": "INCREMENT", "effective_date": str(nxt), "how": "AMOUNT", "value": "1500"},
+         must="will apply automatically")
+    r = page(s, f"/employees/{kid}")
+    ok("Tk 33,000" in r.text and "34,500" in r.text, "future increment waits for its date")
+    cid2 = re.search(rf"/employees/{kid}/changes/(\d+)/cancel", r.text).group(1)
+    r = s.post(BASE + f"/employees/{kid}/changes/{cid2}/letter", data={}, timeout=60)
+    ok(r.content[:4] == b"%PDF", "increment letter")
+    post(s, f"/employees/{kid}/changes/{cid2}/cancel", {}, must="Cancelled")
+    page(s, "/reports/changes", must="Senior Accounts Officer")
+    page(s, "/letters/promotion", must="Promotion letter")
+    ok(h.post(BASE + f"/employees/{kid}/changes", data={"kind": "INCREMENT"}, timeout=30).status_code == 403,
+       "only Admin records increments")
+
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")
     name = re.search(r"(LailaPayroll_backup_[0-9_]+_manual\.zip)", r.text).group(1)

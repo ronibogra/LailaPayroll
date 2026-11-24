@@ -33,6 +33,41 @@ Remarks: {remarks}
 
 To the best of our knowledge, {name} bears a good moral character. We wish {name} every success in the future."""),
 }
+KINDS["promotion"] = ("Promotion letter", "Promotion", """Dear {name},
+
+We are pleased to inform you that, in recognition of your performance and contribution, the management has promoted you from {old_designation} to {new_designation} with effect from {effective_date}.
+
+Your monthly gross salary is revised from Tk {old_gross} to Tk {new_gross} ({new_gross_words}), an increase of Tk {increment_amount} ({increment_percent}%), as follows:
+{salary_table}
+
+Remarks: {remarks}
+
+All other terms and conditions of your employment remain unchanged. Congratulations, and we wish you continued success.""")
+KINDS["increment"] = ("Increment letter", "Salary Increment", """Dear {name},
+
+We are pleased to inform you that the management has approved an increment in your salary with effect from {effective_date}. Your monthly gross salary is revised from Tk {old_gross} to Tk {new_gross} ({new_gross_words}), an increase of Tk {increment_amount} ({increment_percent}%), as follows:
+{salary_table}
+
+Remarks: {remarks}
+
+All other terms and conditions of your employment remain unchanged. We appreciate your contribution and hope you will continue your good work.""")
+CHANGE_FIELDS = {"old_designation": "Designation before", "new_designation": "New designation",
+                 "old_grade": "Grade before", "new_grade": "New grade", "new_department": "New department",
+                 "effective_date": "Effective date", "old_gross": "Gross before", "new_gross": "New gross",
+                 "new_gross_words": "New gross in words", "increment_amount": "Increase (Tk)",
+                 "increment_percent": "Increase (%)"}
+
+
+def drop_salary_part(body: str) -> str:
+    """Promotion without a pay rise: leave out the salary sentence and table."""
+    keep = []
+    for ln in body.split("\n"):
+        if "{old_gross}" in ln or "{new_gross}" in ln or ln.strip() == "{salary_table}":
+            continue
+        keep.append(ln)
+    return "\n".join(keep)
+
+
 SEP_TYPES = {"RESIGNATION": "resignation", "TERMINATION": "termination", "DISMISSAL": "dismissal",
              "RETIREMENT": "retirement", "CONTRACT_END": "end of contract", "DISCHARGE": "discharge",
              "DEATH": "death", "ABSCONDING": "absence without notice"}
