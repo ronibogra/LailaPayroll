@@ -25,7 +25,8 @@
   {% if 'leave.policy' in pm %}<a href="/leave-policy" class="{{ 'active' if path.startswith('/leave-policy') }}">Leave policy</a>{% endif %}
   {% if 'employees.view' in pm or 'payroll.view' in pm %}<div class="nav-label">PEOPLE &amp; PAY</div>{% endif %}
   {% if 'employees.view' in pm %}<a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>
-  <a class="sub {{ 'active' if path.startswith('/idcards') }}" href="/idcards">Print ID cards</a>{% endif %}
+  <a class="sub {{ 'active' if path.startswith('/idcards') }}" href="/idcards">Print ID cards</a>
+  <a class="sub {{ 'active' if path.startswith('/reports/separations') }}" href="/reports/separations">Former employees</a>{% endif %}
   {% if 'payroll.view' in pm %}<a href="/payroll" class="{{ 'active' if path == '/payroll' or path.startswith('/payroll/line') }}">Payroll</a>{% endif %}
   {% if 'payroll.process' in pm %}{% set ptab = request.query_params.get('tab', 'manual') %}
   <a class="sub {{ 'active' if path == '/payroll/inputs' and ptab == 'manual' }}" href="/payroll/inputs?tab=manual">Employee-wise (manual)</a>
@@ -36,7 +37,7 @@
   {% if 'payroll.edit' in pm %}<a href="/payroll/components" class="{{ 'active' if path.startswith('/payroll/components') }}">Pay components</a>{% endif %}
   {% if ['company.manage', 'policy.edit', 'holidays.manage', 'payroll.view', 'attendance.view']|select('in', pm)|list %}<a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>{% endif %}
   {% if 'logs.view' in pm or 'users.manage' in pm or 'backup.manage' in pm or 'company.manage' in pm %}<div class="nav-label">ADMIN</div>{% endif %}
-  {% if 'appointment.letter' in pm %}<a href="/appointment-letter" class="{{ 'active' if path.startswith('/appointment-letter') }}">Appointment letter</a>{% endif %}
+  {% if 'appointment.letter' in pm %}<a href="/appointment-letter" class="{{ 'active' if path.startswith('/appointment-letter') or path.startswith('/letters') }}">Letters</a>{% endif %}
   {% if 'users.manage' in pm %}<a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users &amp; roles</a>{% endif %}
   {% if 'backup.manage' in pm %}<a href="/backup" class="{{ 'active' if path.startswith('/backup') }}">Backup &amp; restore</a>{% endif %}
   {% if 'logs.view' in pm %}<a href="/errors" class="{{ 'active' if path.startswith('/errors') }}">Error log</a>

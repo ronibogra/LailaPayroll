@@ -851,6 +851,44 @@ def main():
     sx = requests.Session()
     post(sx, "/login", {"username": "12160", "password": "Staff@12160"}, must="My page")    # hand-made Staff user works
 
+    step("leaving the company: separation, clearance, release letter, history, former employees; asset transfer")
+    eid = re.search(r'/employees/(\d+)/edit">Edit', page(s, "/employees?q=12160").text).group(1)
+    r = post(s, f"/employees/{eid}/assets", {"category": "MOBILE", "name": "Office phone", "serial_no": "IMEI-CI-9"},
+             must="Office phone given")
+    aid = re.search(rf"/employees/{eid}/assets/(\d+)/transfer", r.text).group(1)
+    post(s, f"/employees/{eid}/assets/{aid}/transfer", {"to_code": "12127", "note": "handover"},
+         must="transferred to 12127")
+    r = page(s, f"/employees/{kid}#assets", must="From 12160")
+    aid2 = [x for x in re.findall(rf"/employees/{kid}/assets/(\d+)/edit", r.text)][-1]
+    post(s, f"/employees/{kid}/assets/{aid2}/edit", {"category": "MOBILE", "name": "Office phone (Samsung A15)",
+                                                     "serial_no": "IMEI-CI-9", "quantity": "1", "value": "18000",
+                                                     "issued_on": str(today), "status": "ISSUED"}, must="updated")
+    ok(c.post(BASE + f"/employees/{kid}/assets/{aid2}/edit", data={"name": "x"}, timeout=30).status_code == 403,
+       "only Admin edits assets")
+    lwd = today - timedelta(days=1)
+    post(s, f"/employees/{eid}/separation", {"sep_type": "RESIGNATION", "notice_date": str(today - timedelta(days=30)),
+                                             "last_working_day": str(lwd), "reason": "Higher study",
+                                             "remarks": "Good conduct"}, must="Separation recorded")
+    post(s, f"/employees/{eid}/separation/checklist", {"id_card": "1", "handover": "1", "final_salary": "1"},
+         must="Clearance saved")
+    r = s.post(BASE + f"/employees/{eid}/letter/release", data={"remarks": "Good conduct", "save_copy": "1"}, timeout=60)
+    ok(r.content[:4] == b"%PDF", f"release letter: {r.text[:200]}")
+    r = s.post(BASE + f"/employees/{eid}/letter/experience", data={"remarks": ""}, timeout=60)
+    ok(r.content[:4] == b"%PDF", "experience certificate")
+    r = s.post(BASE + f"/employees/{kid}/letter/confirmation", data={"confirmation_date": str(today), "save_copy": "1",
+                                                                      "remarks": "Excellent probation"}, timeout=60)
+    ok(r.content[:4] == b"%PDF", "confirmation letter")
+    page(s, f"/employees/{kid}", must="confirmed")
+    post(s, f"/employees/{eid}/separation/complete", {}, must="has left")
+    r = page(s, f"/employees/{eid}", must="Left the company")
+    ok("Release letter" in r.text and "INACTIVE" in r.text and "Higher study" in r.text, "history of a former employee")
+    r = page(s, "/reports/separations", must="Former employees")
+    ok("12160" in r.text and "Higher study" in r.text, "former employees report")
+    post(requests.Session(), "/login", {"username": "12160", "password": "Staff@12160"}, must="Wrong username or password",
+         must_not=None)                                     # their staff login is closed
+    page(s, "/letters/release", must="Release letter")
+    ok(h.get(BASE + f"/employees/{kid}", timeout=30).text.count("/letter/") == 0, "letters are Admin only")
+
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")
     name = re.search(r"(LailaPayroll_backup_[0-9_]+_manual\.zip)", r.text).group(1)

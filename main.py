@@ -22,7 +22,8 @@ from integration.employee_import import import_employees, template_bytes
 from integration.zk_adms import options_response
 from models import (Company, Department, Employee, Shift, Device, AttendanceLog, DailyAttendance, Holiday, Leave,
                     PayrollAdjustment, PayrollRun, PayrollLine, User, ErrorLog, Role, EmployeeDocument,
-                    LeaveType, SpecialHoliday, PayComponent, EmployeeComponent, EmployeeAsset)
+                    LeaveType, SpecialHoliday, PayComponent, EmployeeComponent, EmployeeAsset, EmployeeSeparation,
+                    AuditLog)
 from payroll.engine import split_gross
 from reports.excel import (salary_sheet, attendance_month, attendance_day, punches_sheet, first_last_sheet,
                            combined_salary)
@@ -32,7 +33,7 @@ from security import (hash_password, verify_password, create_token, decode_token
 from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, parse as parse_perms
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
 from services import leave as leave_svc, documents as docs, components as comp_svc, disbursement as disb
-from services import assets as asset_svc
+from services import assets as asset_svc, letters as letter_svc
 from services.errors import log_error
 from services.photos import save_photo, save_signature, photo_path, bulk_photos
 from integration import generic_import
@@ -789,6 +790,7 @@ def _idcard_design(db) -> dict:
 
 
 AUTH_SIGN_FILE = branding.BRAND_DIR / "auth_signature.png"
+LETTER_DOCS = {"APPOINTMENT", "CONFIRMATION", "RELEASE", "EXPERIENCE"}
 TPL_FILES = {"front": branding.BRAND_DIR / "idcard_front.png", "back": branding.BRAND_DIR / "idcard_back.png"}
 
 
@@ -1055,6 +1057,42 @@ def idcards_pdf(request: Request, company: str = "", department: str = "", codes
                     headers={"Content-Disposition": f'inline; filename="id-cards-{len(emps)}.pdf"'})
 
 
+def _history(db, emp, user) -> list[tuple]:
+    """Everything that happened to this employee, newest first (kept after they leave)."""
+    from services.assets import STATUS as AST
+    ev = []
+    if emp.joined_on:
+        ev.append((emp.joined_on, "🟢", f"Joined {emp.company.code if emp.company else ''} as {emp.designation or '-'}"
+                   f"{' - ' + emp.department.name if emp.department else ''}"))
+    if emp.confirmed_on:
+        ev.append((emp.confirmed_on, "✅", "Service confirmed"))
+    for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)):
+        if d.doc_type not in LETTER_DOCS or "appointment.letter" in user["perms"]:
+            ev.append((d.uploaded_at, "📄", f"{docs.DOC_TYPES.get(d.doc_type, d.doc_type)}: {d.title}"))
+    for lv in db.scalars(select(Leave).where(Leave.employee_id == emp.id)):
+        ev.append((lv.start_date, "🌴", f"{lv.leave_type} leave {lv.start_date:%d/%m/%Y} - {lv.end_date:%d/%m/%Y} "
+                                       f"({leave_svc.STATUS_LABEL.get(lv.status, lv.status).lower()})"))
+    for a in db.scalars(select(EmployeeAsset).where(EmployeeAsset.employee_id == emp.id)):
+        ev.append((a.issued_on, "💻", f"Received {a.name} {a.serial_no or ''}".strip()))
+        if a.returned_on:
+            ev.append((a.returned_on, "↩", f"{a.name}: {AST.get(a.status, a.status).lower()}"))
+    for sp in db.scalars(select(EmployeeSeparation).where(EmployeeSeparation.employee_id == emp.id)):
+        ev.append((sp.created_at, "📝", f"{letter_svc.SEP_TYPES.get(sp.sep_type, sp.sep_type).title()} recorded, last "
+                                       f"working day {sp.last_working_day:%d/%m/%Y}"
+                                       + (" (cancelled)" if sp.status == "CANCELLED" else "")))
+        if sp.completed_at:
+            ev.append((sp.last_working_day, "🔴", "Left the company"
+                       + (f" - {sp.reason}" if sp.reason else "")))
+    for lg in db.scalars(select(AuditLog).where(AuditLog.detail.like(f"{emp.employee_code}%"),
+                                                AuditLog.action.in_(("EMPLOYEE_SAVE", "SALARY_CHANGE", "PROFILE_PDF",
+                                                                     "ID_CARDS")))
+                         .order_by(AuditLog.id.desc()).limit(25)):
+        ev.append((lg.created_at, "✏", f"Profile updated by {lg.username}" if lg.action == "EMPLOYEE_SAVE"
+                   else f"{lg.action.replace('_', ' ').title()} by {lg.username}"))
+    key = lambda x: x[0] if isinstance(x[0], datetime) else datetime.combine(x[0], time.min)  # noqa: E731
+    return sorted(ev, key=key, reverse=True)[:80]
+
+
 @app.get("/employees/{emp_id}", response_class=HTMLResponse)
 def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
     """Full profile: photo, personal and job details, this month's attendance, recent punches, leave, payslips."""
@@ -1080,7 +1118,7 @@ def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db:
     show_salary = "salary.view" in user["perms"]
     documents = [d for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)
                                        .order_by(EmployeeDocument.doc_type, EmployeeDocument.uploaded_at))
-                 if d.doc_type != "APPOINTMENT" or "appointment.letter" in user["perms"]]
+                 if d.doc_type not in LETTER_DOCS or "appointment.letter" in user["perms"]]
     pays = []
     if show_salary:
         pays = db.execute(select(PayrollLine, PayrollRun).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
@@ -1092,6 +1130,9 @@ def employee_profile(request: Request, emp_id: int, user=Depends(page_user), db:
                   assets=db.scalars(select(EmployeeAsset).where(EmployeeAsset.employee_id == emp.id)
                                     .order_by(EmployeeAsset.status != "ISSUED", EmployeeAsset.issued_on.desc())).all(),
                   asset_cats=asset_svc.CATEGORIES, asset_status=asset_svc.STATUS, asset_conds=asset_svc.CONDITIONS,
+                  sep=(sep := _open_sep(db, emp.id)), sep_check=letter_svc.checklist(sep), sep_types=letter_svc.SEP_TYPES,
+                  check_items=letter_svc.CHECKLIST, letter_kinds=letter_svc.KINDS, history=_history(db, emp, user),
+                  service=letter_svc.service_length(emp.joined_on, emp.left_on or now_local().date()),
                   components=comp_svc.for_employee(emp, *comp_svc.load_all(db)) if show_salary else [],
                   calcs=comp_svc.CALCS)
 
@@ -1185,9 +1226,89 @@ async def employee_asset_return(request: Request, emp_id: int, asset_id: int, us
     return go(back, msg=f"{a.name}: {asset_svc.STATUS[a.status].lower()}")
 
 
+@app.post("/employees/{emp_id}/assets/{asset_id}/edit")
+async def employee_asset_edit(request: Request, emp_id: int, asset_id: int, user=Depends(page_user),
+                              db: Session = Depends(get_db)):
+    """Admin: correct an asset record (name, model, serial, tag, quantity, value, dates, status, note)."""
+    need(user, "assets.manage")
+    emp = _emp_or_404(db, user, emp_id)
+    a = db.get(EmployeeAsset, asset_id)
+    back = f"/employees/{emp.id}#assets"
+    if not a or a.employee_id != emp.id:
+        return go(back, err="Asset not found")
+    f = await request.form()
+    v = lambda k: str(f.get(k) or "").strip()  # noqa: E731
+    try:
+        if not v("name"):
+            raise ValueError("Item name is needed")
+        a.category = v("category") if v("category") in asset_svc.CATEGORIES else a.category
+        a.name, a.brand_model = v("name")[:150], v("brand_model")[:120] or None
+        serial = v("serial_no")[:120] or None
+        if serial and serial != a.serial_no:
+            other = db.scalar(select(EmployeeAsset).where(EmployeeAsset.serial_no == serial, EmployeeAsset.status == "ISSUED",
+                                                          EmployeeAsset.id != a.id))
+            if other:
+                raise ValueError(f"Serial {serial} is with {other.employee.employee_code} {other.employee.full_name}")
+        a.serial_no, a.asset_tag = serial, v("asset_tag")[:60] or None
+        a.quantity = max(1, int(v("quantity") or 1))
+        a.value = dec(v("value"), "Value")
+        a.issued_on = date.fromisoformat(v("issued_on")) if v("issued_on") else a.issued_on
+        a.condition_issued = v("condition")[:30] or None
+        st = v("status")
+        if st in asset_svc.STATUS:
+            a.status = st
+            if st == "ISSUED":
+                a.returned_on = a.returned_to = a.condition_returned = None
+            elif not a.returned_on:
+                a.returned_on, a.returned_to = now_local().date(), user["username"]
+        a.note = v("note")[:300] or None
+    except ValueError as exc:
+        db.rollback()
+        return go(back, err=str(exc))
+    audit(db, user, "ASSET_EDIT", f"{emp.employee_code}: {a.name} {a.serial_no or ''} -> {a.status}", commit=False)
+    db.commit()
+    return go(back, msg=f"{a.name} updated")
+
+
+@app.post("/employees/{emp_id}/assets/{asset_id}/transfer")
+async def employee_asset_transfer(request: Request, emp_id: int, asset_id: int, user=Depends(page_user),
+                                  db: Session = Depends(get_db)):
+    """Admin: move an item from this employee to another one (history is kept on both)."""
+    need(user, "assets.manage")
+    emp = _emp_or_404(db, user, emp_id)
+    a = db.get(EmployeeAsset, asset_id)
+    back = f"/employees/{emp.id}#assets"
+    if not a or a.employee_id != emp.id or a.status != "ISSUED":
+        return go(back, err="Only an item that is with this employee can be transferred")
+    f = await request.form()
+    code = str(f.get("to_code") or "").strip()
+    to = db.scalar(select(Employee).where(or_(Employee.employee_code == code, Employee.card_no == code)))
+    if not to or to.id == emp.id:
+        return go(back, err=f"Choose another employee (code {code or '-'} not found)")
+    check_company(user, to.company_id)
+    if to.employment_status != "ACTIVE":
+        return go(back, err=f"{to.employee_code} {to.full_name} is not active")
+    try:
+        when = date.fromisoformat(str(f.get("date"))) if f.get("date") else now_local().date()
+    except ValueError:
+        return go(back, err="Give a valid date")
+    note = str(f.get("note") or "").strip()[:200]
+    a.status, a.returned_on, a.returned_to = "RETURNED", when, user["username"]
+    a.condition_returned = str(f.get("condition") or "").strip()[:30] or None
+    a.note = ((a.note + " | ") if a.note else "") + f"Transferred to {to.employee_code} {to.full_name}"[:200]
+    db.add(EmployeeAsset(employee_id=to.id, category=a.category, name=a.name, brand_model=a.brand_model,
+                         serial_no=a.serial_no, asset_tag=a.asset_tag, quantity=a.quantity, value=a.value,
+                         issued_on=when, issued_by=user["username"], condition_issued=a.condition_returned,
+                         note=(f"From {emp.employee_code} {emp.full_name}" + (f" - {note}" if note else ""))[:300]))
+    audit(db, user, "ASSET_TRANSFER", f"{a.name} {a.serial_no or ''}: {emp.employee_code} -> {to.employee_code}",
+          commit=False)
+    db.commit()
+    return go(back, msg=f"{a.name} transferred to {to.employee_code} {to.full_name}")
+
+
 @app.post("/employees/{emp_id}/assets/{asset_id}/delete")
 def employee_asset_delete(emp_id: int, asset_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "employees.edit")
+    need(user, "assets.manage")
     emp = _emp_or_404(db, user, emp_id)
     a = db.get(EmployeeAsset, asset_id)
     if a and a.employee_id == emp.id:
@@ -1198,13 +1319,194 @@ def employee_asset_delete(emp_id: int, asset_id: int, user=Depends(page_user), d
     return go(f"/employees/{emp.id}#assets", msg="Entry removed")
 
 
+# ---------------------------------------------------------------- leaving the company (separation)
+def _open_sep(db, emp_id):
+    return db.scalar(select(EmployeeSeparation).where(EmployeeSeparation.employee_id == emp_id,
+                                                      EmployeeSeparation.status != "CANCELLED")
+                     .order_by(EmployeeSeparation.id.desc()).limit(1))
+
+
+@app.post("/employees/{emp_id}/separation")
+async def separation_save(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Step 1: record the resignation / termination, notice date, last working day, reason and remarks."""
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    f = await request.form()
+    back = f"/employees/{emp.id}#separation"
+    try:
+        lwd = date.fromisoformat(str(f.get("last_working_day")))
+        notice = date.fromisoformat(str(f.get("notice_date"))) if f.get("notice_date") else None
+    except ValueError:
+        return go(back, err="Give the last working day")
+    if emp.joined_on and lwd < emp.joined_on:
+        return go(back, err="Last working day is before the joining date")
+    sep = _open_sep(db, emp.id)
+    if sep and sep.status == "COMPLETED":
+        return go(back, err="This separation is already completed")
+    if not sep:
+        sep = EmployeeSeparation(employee_id=emp.id, created_by=user["username"], last_working_day=lwd)
+        db.add(sep)
+    t = str(f.get("sep_type") or "RESIGNATION")
+    sep.sep_type = t if t in letter_svc.SEP_TYPES else "RESIGNATION"
+    sep.notice_date, sep.last_working_day = notice, lwd
+    sep.reason = str(f.get("reason") or "").strip()[:300] or None
+    sep.remarks = str(f.get("remarks") or "").strip()[:2000] or None
+    audit(db, user, "SEPARATION_SAVE", f"{emp.employee_code} {sep.sep_type} last day {lwd}", commit=False)
+    db.commit()
+    return go(back, msg=f"Separation recorded - last working day {lwd:%d/%m/%Y}. Next: clearance")
+
+
+@app.post("/employees/{emp_id}/separation/checklist")
+async def separation_checklist(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    sep = _open_sep(db, emp.id)
+    if not sep or sep.status != "IN_PROGRESS":
+        return go(f"/employees/{emp.id}#separation", err="Start the separation first")
+    f = await request.form()
+    done = {k: {"by": user["username"], "on": f"{now_local():%d/%m/%Y}"} for k in letter_svc.CHECKLIST if f.get(k)}
+    old = letter_svc.checklist(sep)
+    sep.checklist_json = json.dumps({k: old.get(k, v) for k, v in done.items()})
+    audit(db, user, "SEPARATION_CLEARANCE", f"{emp.employee_code}: {', '.join(done) or 'none'}", commit=False)
+    db.commit()
+    return go(f"/employees/{emp.id}#separation", msg="Clearance saved")
+
+
+@app.post("/employees/{emp_id}/separation/complete")
+def separation_complete(emp_id: int, confirm: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
+    """Step 3: employee becomes INACTIVE from the last working day; login closed; history kept."""
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    back = f"/employees/{emp.id}#separation"
+    sep = _open_sep(db, emp.id)
+    if not sep or sep.status != "IN_PROGRESS":
+        return go(back, err="Start the separation first")
+    out = db.scalar(select(func.count(EmployeeAsset.id)).where(EmployeeAsset.employee_id == emp.id,
+                                                               EmployeeAsset.status == "ISSUED")) or 0
+    if out and confirm != "yes":
+        return go(back, err=f"{out} company item(s) are still with {emp.full_name}. Take them back (or mark lost) "
+                            "in Assets, or tick 'complete anyway'")
+    emp.employment_status, emp.left_on = "INACTIVE", sep.last_working_day
+    sep.status, sep.completed_by, sep.completed_at = "COMPLETED", user["username"], now_local()
+    for u in db.scalars(select(User).where(User.employee_id == emp.id)):
+        u.active = False if u.role == "STAFF" else u.active
+    audit(db, user, "SEPARATION_COMPLETE", f"{emp.employee_code} {sep.sep_type} left {sep.last_working_day}"
+          + (f", {out} asset(s) still out" if out else ""), commit=False)
+    db.commit()
+    return go(back, msg=f"{emp.full_name} has left (last working day {sep.last_working_day:%d/%m/%Y}). "
+                        "Process the month's payroll for the final salary.")
+
+
+@app.post("/employees/{emp_id}/separation/cancel")
+def separation_cancel(emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Resignation withdrawn / decision changed (only before it is completed)."""
+    need(user, "employees.edit")
+    emp = _emp_or_404(db, user, emp_id)
+    sep = _open_sep(db, emp.id)
+    if sep and sep.status == "IN_PROGRESS":
+        sep.status = "CANCELLED"
+        audit(db, user, "SEPARATION_CANCEL", emp.employee_code, commit=False)
+        db.commit()
+    return go(f"/employees/{emp.id}#separation", msg="Separation cancelled")
+
+
+@app.post("/employees/{emp_id}/letter/{kind}")
+async def employee_letter(request: Request, emp_id: int, kind: str, user=Depends(page_user),
+                          db: Session = Depends(get_db)):
+    """Confirmation letter, release letter, experience certificate (with remarks) - Admin."""
+    need(user, "employees.view", "appointment.letter")
+    from services import appointment as apt
+    if kind not in letter_svc.KINDS:
+        raise HTTPException(404, "Unknown letter")
+    emp = _emp_or_404(db, user, emp_id)
+    back = f"/employees/{emp.id}#letters"
+    f = await request.form()
+    try:
+        letter_date = date.fromisoformat(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
+        conf = date.fromisoformat(str(f.get("confirmation_date"))) if f.get("confirmation_date") else None
+    except ValueError:
+        return go(back, err="Give valid dates")
+    remarks = str(f.get("remarks") or "").strip()[:1500]
+    sep = _open_sep(db, emp.id)
+    if kind in ("release", "experience") and not sep:
+        return go(back, err="Record the separation first (Leaving the company)")
+    if kind == "release":
+        out = db.scalar(select(func.count(EmployeeAsset.id)).where(EmployeeAsset.employee_id == emp.id,
+                                                                   EmployeeAsset.status == "ISSUED")) or 0
+        if out and not f.get("override"):
+            return go(back, err=f"{out} company item(s) are still with {emp.full_name} - take them back first, or "
+                                "tick 'issue anyway'")
+    if kind == "confirmation":
+        conf = conf or now_local().date()
+    code = {"confirmation": "CNF", "release": "REL", "experience": "EXP"}[kind]
+    ref = str(f.get("ref") or "").strip()[:60] or \
+        f"{emp.company.code if emp.company else 'HO'}/HR/{code}/{letter_date:%Y}/{emp.employee_code}"
+    base = apt.load_template(db)
+    tpl = letter_svc.template(db, kind)
+    tpl["body"] = letter_svc.drop_empty_remarks(tpl["body"], remarks)
+    values = apt.values_for(db, emp, letter_date, emp.joined_on, ref, base)
+    lwd = sep.last_working_day if sep else emp.left_on
+    values.update(remarks=remarks, confirmation_date=f"{conf:%d %B %Y}" if conf else "",
+                  last_working_day=f"{lwd:%d %B %Y}" if lwd else "-", notice_date=(f"{sep.notice_date:%d %B %Y}"
+                                                                                    if sep and sep.notice_date else "-"),
+                  separation_type=letter_svc.SEP_TYPES.get(sep.sep_type, "separation") if sep else "-",
+                  reason=(sep.reason or "") if sep else "", service_length=letter_svc.service_length(emp.joined_on, lwd))
+    title = letter_svc.KINDS[kind][0]
+    pdf = apt.letter_pdf(emp, values, {**base, **tpl}, acceptance=False, title=title, to_block=kind != "experience")
+    if kind == "confirmation" and f.get("save_copy") != "no":
+        emp.confirmed_on = conf
+    if f.get("save_copy"):
+        stored, size = docs.save_file(f"emp_{emp.id}", f"{kind}-{emp.employee_code}.pdf", pdf)
+        db.add(EmployeeDocument(employee_id=emp.id, doc_type=kind.upper(), title=f"{title} {ref}", stored_name=stored,
+                                original_name=f"{kind}-{emp.employee_code}.pdf", size=size, uploaded_by=user["username"]))
+    audit(db, user, f"LETTER_{kind.upper()}", f"{emp.employee_code} ref {ref}" + (f" remarks: {remarks[:200]}" if remarks else ""),
+          commit=False)
+    db.commit()
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{kind}-{emp.employee_code}.pdf"'})
+
+
+@app.get("/letters/{kind}", response_class=HTMLResponse)
+def letter_template_page(request: Request, kind: str, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "appointment.letter")
+    if kind not in letter_svc.KINDS:
+        return go("/appointment-letter")
+    from services import appointment as apt
+    fields = dict(apt.FIELDS, remarks="Remarks typed when making the letter", confirmation_date="Confirmation date",
+                  last_working_day="Last working day", notice_date="Resignation / notice date",
+                  separation_type="resignation / termination ...", reason="Reason for leaving",
+                  service_length="Length of service, e.g. 2 years 3 months")
+    return render(request, "letter_template.html", user, kind=kind, kinds=letter_svc.KINDS,
+                  tpl=letter_svc.template(db, kind), fields=fields)
+
+
+@app.post("/letters/{kind}")
+async def letter_template_save(request: Request, kind: str, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "appointment.letter")
+    if kind not in letter_svc.KINDS:
+        raise HTTPException(404, "Unknown letter")
+    f = await request.form()
+    if f.get("reset"):
+        set_setting(db, f"letter.{kind}.subject", "", commit=False)
+        set_setting(db, f"letter.{kind}.body", "")
+        return go(f"/letters/{kind}", msg="Standard text restored")
+    body = str(f.get("body") or "").strip()
+    if len(body) < 20:
+        return go(f"/letters/{kind}", err="The letter text is too short")
+    set_setting(db, f"letter.{kind}.subject", str(f.get("subject") or "").strip()[:200], commit=False)
+    set_setting(db, f"letter.{kind}.body", body[:20000], commit=False)
+    audit(db, user, "LETTER_TEMPLATE", kind, commit=False)
+    db.commit()
+    return go(f"/letters/{kind}", msg=f"{letter_svc.KINDS[kind][0]} text saved")
+
+
 @app.post("/employees/{emp_id}/documents")
 async def employee_docs_upload(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "employees.edit")
     emp = _emp_or_404(db, user, emp_id)
     f = await request.form()
     doc_type = str(f.get("doc_type") or "OTHER")
-    if doc_type == "APPOINTMENT" and "appointment.letter" not in user["perms"]:
+    if doc_type in LETTER_DOCS and "appointment.letter" not in user["perms"]:
         doc_type = "OTHER"
     title = str(f.get("title") or "").strip()
     saved, errors = 0, []
@@ -1233,7 +1535,7 @@ def employee_doc_get(emp_id: int, doc_id: int, user=Depends(page_user), db: Sess
     need(user, "employees.view")
     emp = _emp_or_404(db, user, emp_id)
     d = db.get(EmployeeDocument, doc_id)
-    if d and d.doc_type == "APPOINTMENT" and "appointment.letter" not in user["perms"]:
+    if d and d.doc_type in LETTER_DOCS and "appointment.letter" not in user["perms"]:
         raise HTTPException(403, "Appointment letters can only be opened by an Admin")
     path = docs.path_of(d.stored_name) if d and d.employee_id == emp.id else None
     if not path:
@@ -1262,7 +1564,7 @@ def employee_profile_pdf(emp_id: int, user=Depends(page_user), db: Session = Dep
     emp = _emp_or_404(db, user, emp_id)
     documents = [d for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)
                                        .order_by(EmployeeDocument.uploaded_at))
-                 if d.doc_type != "APPOINTMENT" or "appointment.letter" in user["perms"]]
+                 if d.doc_type not in LETTER_DOCS or "appointment.letter" in user["perms"]]
     pdf = profile_pdf(emp, photo_path(emp.photo), leave_svc.balances(db, emp), documents,
                       show_salary="salary.view" in user["perms"],
                       components=comp_svc.for_employee(emp, *comp_svc.load_all(db)),

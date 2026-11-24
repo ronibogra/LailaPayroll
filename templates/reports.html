@@ -2,8 +2,8 @@
 {% block content %}
 <p class="hint" style="margin-top:-6px">Choose a report, set the filters and columns, then download it as Excel or PDF. Your column choice is remembered for each report.</p>
 <div class="report-cards">
-{% set icons = {'punches':'🕘','first_last':'⏱','attendance':'📅','leaves':'🌴','jobcard':'🗂','employees':'👥','payroll':'💰','assets':'💻'} %}
-{% set tint = {'punches':'c1','first_last':'c2','attendance':'c3','leaves':'c4','jobcard':'c5','employees':'c6','payroll':'c7','assets':'c1'} %}
+{% set icons = {'punches':'🕘','first_last':'⏱','attendance':'📅','leaves':'🌴','jobcard':'🗂','employees':'👥','payroll':'💰','assets':'💻','separations':'🚪'} %}
+{% set tint = {'punches':'c1','first_last':'c2','attendance':'c3','leaves':'c4','jobcard':'c5','employees':'c6','payroll':'c7','assets':'c1','separations':'c4'} %}
 {% for rep in items %}<a class="report-card {{ tint[rep.id] }}" href="/reports/{{ rep.id }}">
 <div class="ico">{{ icons[rep.id] }}</div><div><b>{{ rep.title }}</b><p>{{ rep.description }}</p>
 <span class="hint">Filters: {{ rep.filters|length }} · Columns: {{ rep.cols|length }} · Excel &amp; PDF</span></div></a>{% endfor %}

@@ -277,3 +277,11 @@ def test_split_pay_bank_and_cash():
     assert split(D("20000"), "MOBILE", "PERCENT", D("60")) == (D("12000"), D("8000"))
     assert split(D("20000"), "BANK", "", D("0")) == (D("20000"), D("0"))
     assert split(D("20000"), "CASH", "FIXED", D("5000")) == (D("0"), D("20000"))
+
+
+def test_service_length_and_remarks_line():
+    from services.letters import drop_empty_remarks, service_length
+    assert service_length(date(2024, 1, 15), date(2026, 4, 14)) == "2 years 2 months"
+    assert service_length(date(2026, 11, 1), date(2026, 11, 20)) == "20 days"
+    body = "Dear {name},\n\nRemarks: {remarks}\n\nThanks"
+    assert "Remarks" not in drop_empty_remarks(body, "") and "Remarks" in drop_empty_remarks(body, "Good work")

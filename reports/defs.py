@@ -6,7 +6,7 @@ from datetime import date, time, timedelta
 from sqlalchemy import func, or_, select
 
 from models import (AttendanceLog, AuditLog, Company, DailyAttendance, Department, Device, Employee, ErrorLog, Holiday,
-                    Leave, PayrollLine, PayrollRun, Shift, EmployeeAsset)
+                    Leave, PayrollLine, PayrollRun, Shift, EmployeeAsset, EmployeeSeparation)
 from reports.engine import Col, Report
 from reports.filters import emp_conditions, has_emp_filter
 from timeutil import now_local
@@ -518,6 +518,73 @@ def fetch_errors(db, user, p, export):
     return rows, p.get("source", ""), len(rows)
 
 
+# ------------------------------------------------------------ former employees (separations)
+def _sep_txt(t):
+    from services.letters import SEP_TYPES
+    return SEP_TYPES.get(t, t or "").title()
+
+
+def _clear(r):
+    from services.letters import CHECKLIST, checklist
+    return f"{len(checklist(r.s))}/{len(CHECKLIST)}" if r.s else ""
+
+
+class SepRow:
+    def __init__(self, e, s, out):
+        self.e, self.s, self.out = e, s, out
+
+
+SEP_COLS = [
+    Col("code", "Code", lambda r: r.e.employee_code, link=lambda r: emp_link(r.e) + "#history"),
+    Col("name", "Name", lambda r: r.e.full_name, link=lambda r: emp_link(r.e) + "#history"),
+    Col("company", "Company", lambda r: r.e.company.code if r.e.company else ""),
+    Col("department", "Department", lambda r: r.e.department.name if r.e.department else ""),
+    Col("designation", "Designation", lambda r: r.e.designation),
+    Col("joined", "Joined", lambda r: r.e.joined_on, kind="date"),
+    Col("left", "Last working day", lambda r: r.s.last_working_day if r.s else r.e.left_on, kind="date"),
+    Col("service", "Service", lambda r: __import__("services.letters", fromlist=["x"]).service_length(
+        r.e.joined_on, r.s.last_working_day if r.s else r.e.left_on)),
+    Col("type", "Type", lambda r: _sep_txt(r.s.sep_type) if r.s else "(no record)"),
+    Col("status", "Status", lambda r: {"IN_PROGRESS": "In progress", "COMPLETED": "Left"}.get(r.s.status, "")
+        if r.s else r.e.employment_status.title()),
+    Col("reason", "Reason", lambda r: r.s.reason if r.s else ""),
+    Col("remarks", "Remarks", lambda r: r.s.remarks if r.s else "", False),
+    Col("clearance", "Clearance", _clear),
+    Col("assets_out", "Assets not returned", lambda r: r.out, kind="num"),
+    Col("notice", "Notice date", lambda r: r.s.notice_date if r.s else None, False, kind="date"),
+    Col("phone", "Mobile", lambda r: r.e.phone, False), Col("nid", "NID", lambda r: r.e.nid, False),
+]
+
+
+def fetch_separations(db, user, p, export):
+    """Everyone who has left or is leaving, with the separation details (history stays on the profile)."""
+    seps = {}
+    for s_ in db.scalars(select(EmployeeSeparation).where(EmployeeSeparation.status != "CANCELLED")
+                         .order_by(EmployeeSeparation.id)):
+        seps[s_.employee_id] = s_
+    stmt = select(Employee).where(or_(Employee.employment_status != "ACTIVE", Employee.id.in_(list(seps) or [0])),
+                                  *emp_conditions({k: v for k, v in p.items() if k != "status"}, user))
+    emps = list(db.scalars(stmt))
+    out = dict(db.execute(select(EmployeeAsset.employee_id, func.count(EmployeeAsset.id))
+                          .where(EmployeeAsset.status == "ISSUED", EmployeeAsset.employee_id.in_([e.id for e in emps] or [0]))
+                          .group_by(EmployeeAsset.employee_id)).all())
+    rows = [SepRow(e, seps.get(e.id), out.get(e.id, 0)) for e in emps]
+    t = p.get("sep_type")
+    if t:
+        rows = [r for r in rows if r.s and r.s.sep_type == t]
+    st = p.get("sep_status")
+    if st == "LEAVING":
+        rows = [r for r in rows if r.s and r.s.status == "IN_PROGRESS"]
+    elif st == "LEFT":
+        rows = [r for r in rows if not r.s or r.s.status == "COMPLETED"]
+    y1, y2 = p.get("start"), p.get("end")
+    if y1 or y2:
+        a, b = _dates({"start": y1 or "1900-01-01", "end": y2 or "2999-12-31"})
+        rows = [r for r in rows if (d := (r.s.last_working_day if r.s else r.e.left_on)) and a <= d <= b]
+    rows.sort(key=lambda r: (r.s.last_working_day if r.s else r.e.left_on) or date.min, reverse=True)
+    return rows, f"{len(rows)} former / leaving employee(s){_comp_name(db, _company(user, p))}", len(rows)
+
+
 # ------------------------------------------------------------ assets with employees
 def _asset_labels():
     from services.assets import CATEGORIES, STATUS
@@ -600,6 +667,10 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
            filters=EMP_F + ["asset_status", "asset_type", "asset_q"], totals=["qty", "value"],
            description="Company items given to employees - laptops, phones, SIMs, ID cards, uniforms, tools - "
                        "what is still with staff, returned, lost, and items still with people who have left."),
+    Report("separations", "Former employees", "employees.view", SEP_COLS, fetch_separations,
+           filters=["start", "end", "company", "department", "designation", "q", "sep_type", "sep_status"],
+           description="People who left (or are leaving): resignation / termination, last working day, length of "
+                       "service, reason, clearance and company items not returned. Click a name for their full history."),
     Report("holidays", "Holidays", "attendance.view", HOLIDAY_COLS, fetch_holidays, landscape=False),
     Report("shifts", "Shifts", "attendance.view", SHIFT_COLS, fetch_shifts),
     Report("machines", "Machines", "machines.manage", DEVICE_COLS, fetch_devices),
@@ -607,4 +678,4 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
     Report("errors", "Error log", "logs.view", ERROR_COLS, fetch_errors),
 ]}
 
-CENTRE = ["punches", "first_last", "attendance", "leaves", "jobcard", "employees", "payroll", "assets"]
+CENTRE = ["punches", "first_last", "attendance", "leaves", "jobcard", "employees", "payroll", "assets", "separations"]

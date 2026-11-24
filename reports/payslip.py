@@ -46,13 +46,32 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
         c.drawString(cx, cy, f"{k}:")
         c.drawString(cx + 24 * mm, cy, str(v or "-")[:45])
     y -= 17 * mm
-    c.drawString(x0, y, f"Days in month: {l.days_in_month}   Employed: {l.employed_days}   Present: {l.present_days}   "
-                        f"Absent: {l.absent_days}   Leave: {l.paid_leave_days}   Off days: {l.offdays}   Late: {l.late_days}")
-    y -= 7 * mm
+    from reportlab.lib import colors
+    from reportlab.platypus import Table, TableStyle
 
-    c.drawString(x0, y, f"Salary structure:  Basic {_tk(l.basic)} + House rent {_tk(l.house_rent)} + Medical {_tk(l.medical)}"
-                        f" + Transport {_tk(l.transport)} + Food {_tk(l.food)} = Gross {_tk(l.gross)}")
-    y -= 7 * mm
+    def grid(head, vals, widths):
+        t = Table([head, vals], colWidths=widths, rowHeights=[4.6 * mm, 5 * mm])
+        t.setStyle(TableStyle([
+            ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 7.8), ("FONT", (0, 1), (-1, 1), "Helvetica", 8.6),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f2f5")), ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#b8bec8")),
+            ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 1)]))
+        w, h = t.wrapOn(c, x1 - x0, 20 * mm)
+        t.drawOn(c, x0, y - h + 2.5 * mm)
+        return h
+
+    full = x1 - x0
+    h = grid(["Days in month", "Employed", "Present", "Absent", "Leave", "Off days", "Late"],
+             [l.days_in_month, l.employed_days, l.present_days, l.absent_days, l.paid_leave_days, l.offdays, l.late_days],
+             [full / 7] * 7)
+    y -= h + 2.5 * mm
+    if (l.gross or 0) > 0:
+        h = grid(["Basic", "House rent", "Medical", "Transport", "Food", "Gross salary"],
+                 [_tk(l.basic), _tk(l.house_rent), _tk(l.medical), _tk(l.transport), _tk(l.food), _tk(l.gross)],
+                 [full / 6] * 6)
+        c.setFont("Helvetica-Bold", 8.6)
+        y -= h + 4.5 * mm
+    c.setFont("Helvetica", 9)
     items = []
     try:
         items = json.loads(l.items_json or "[]")
@@ -70,18 +89,20 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     earn = earn[:1] + [x for x in earn[1:] if x[1]]
     ded = [x for x in ded if x[1]] or [("-", 0)]
     mid = x0 + 92 * mm
+    rows = max(len(earn), len(ded))
+    step = 4.6 * mm
     c.setFont("Helvetica-Bold", 9)
     c.drawString(x0, y, "Earnings"); c.drawRightString(mid - 6 * mm, y, "Tk")
     c.drawString(mid, y, "Deductions"); c.drawRightString(x1, y, "Tk")
     c.line(x0, y - 1.5 * mm, x1, y - 1.5 * mm)
     c.setFont("Helvetica", 9)
     for i, (k, v) in enumerate(earn):
-        yy = y - (i + 1) * 4.6 * mm
+        yy = y - (i + 1) * step
         c.drawString(x0, yy, k); c.drawRightString(mid - 6 * mm, yy, _tk(v))
     for i, (k, v) in enumerate(ded):
-        yy = y - (i + 1) * 4.6 * mm
+        yy = y - (i + 1) * step
         c.drawString(mid, yy, k); c.drawRightString(x1, yy, _tk(v))
-    y -= (max(len(earn), len(ded)) + 1) * 4.6 * mm
+    y -= (rows + 1) * step
     c.line(x0, y + 2.5 * mm, x1, y + 2.5 * mm)
     c.setFont("Helvetica-Bold", 9)
     gross_earn = sum((v for _, v in earn), Decimal(0))
@@ -119,21 +140,46 @@ def _slip(c: canvas.Canvas, l, run, top: float) -> None:
     c.setFillColorRGB(0, 0, 0)
 
 
+def _rows(l) -> int:
+    """How many earning / deduction lines the slip will have (same rules as _slip)."""
+    try:
+        items = json.loads(l.items_json or "[]")
+    except ValueError:
+        items = []
+    earn = 1 + sum(1 for v in (l.ot_amount, l.attendance_bonus, l.other_addition) if v) + \
+        sum(1 for i in items if i["kind"] == "ADD")
+    ded = sum(1 for v in (l.absent_deduction, l.late_deduction, l.advance, l.other_deduction, l.tax, l.stamp) if v) + \
+        sum(1 for i in items if i["kind"] == "DED")
+    return max(earn, ded)
+
+
 def payslips_pdf(run, lines=None) -> bytes:
     """run=None: lines from several companies (each line's own run gives its company name)."""
     lines = sorted(lines if lines is not None else run.lines, key=lambda l: (l.department, l.employee_code))
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     W, H = A4
-    for i, l in enumerate(lines):
-        half = i % 2
-        _slip(c, l, run or l.run, H - half * H / 2)
-        if half == 0:
+    slot = 0                      # 0 = top half free, 1 = bottom half free
+    for l in lines:
+        big = _rows(l) > 8        # many additions / deductions: the slip gets a whole page
+        if big and slot == 1:
+            c.showPage()
+            slot = 0
+        _slip(c, l, run or l.run, H - slot * H / 2)
+        if big:
+            c.showPage()
+            slot = 0
+            continue
+        if slot == 0:
             c.setDash(3, 3); c.setStrokeColorRGB(0.6, 0.6, 0.6)
             c.line(8 * mm, H / 2, W - 8 * mm, H / 2)
             c.setDash(); c.setStrokeColorRGB(0, 0, 0)
-        if half == 1 or i == len(lines) - 1:
+            slot = 1
+        else:
             c.showPage()
+            slot = 0
+    if slot == 1:
+        c.showPage()
     if not lines:
         c.drawString(20 * mm, H - 20 * mm, "No payroll lines.")
         c.showPage()

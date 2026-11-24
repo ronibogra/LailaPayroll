@@ -85,6 +85,7 @@ class Employee(Base):
     birth_certificate_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
     passport_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
     ot_eligible: Mapped[bool] = mapped_column(Boolean, default=True)
+    confirmed_on: Mapped[date | None] = mapped_column(Date, nullable=True)      # service confirmed after probation
     weekly_off: Mapped[str] = mapped_column(String(20), default="")   # own weekly off day(s); "" = from shift / Settings   # officers / management: False
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     email: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -141,6 +142,25 @@ class EmployeeAsset(Base):
     returned_to: Mapped[str | None] = mapped_column(String(80), nullable=True)
     condition_returned: Mapped[str | None] = mapped_column(String(30), nullable=True)
     note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    employee = relationship("Employee")
+
+
+class EmployeeSeparation(Base):
+    """Leaving the company: resignation / termination ..., notice, last working day, clearance, release."""
+    __tablename__ = "employee_separations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    sep_type: Mapped[str] = mapped_column(String(20), default="RESIGNATION")
+    notice_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_working_day: Mapped[date] = mapped_column(Date)
+    reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checklist_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(12), default="IN_PROGRESS")   # IN_PROGRESS / COMPLETED / CANCELLED
+    created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    completed_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     employee = relationship("Employee")
 
 

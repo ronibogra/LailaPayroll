@@ -133,7 +133,8 @@ def values_for(db, e, letter_date: date, joining: date | None, ref: str, tpl: di
     }
 
 
-def letter_pdf(e, values: dict, tpl: dict, components=()) -> bytes:
+def letter_pdf(e, values: dict, tpl: dict, components=(), acceptance: bool = True, title: str = "",
+               to_block: bool = True) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_JUSTIFY
     from reportlab.lib.pagesizes import A4
@@ -189,7 +190,8 @@ def letter_pdf(e, values: dict, tpl: dict, components=()) -> bytes:
         to.append(esc(addr).replace("\n", "<br/>"))
     if values["phone"]:
         to.append(f"Mobile: {esc(values['phone'])}")
-    story.append(Paragraph("To<br/>" + "<br/>".join(to), small))
+    if to_block:
+        story.append(Paragraph("To<br/>" + "<br/>".join(to), small))
     story.append(Spacer(1, 10))
     story.append(Paragraph(f"<u>Subject: {esc(fill(tpl['subject'], values))}</u>", bold))
     story.append(Spacer(1, 4))
@@ -220,7 +222,8 @@ def letter_pdf(e, values: dict, tpl: dict, components=()) -> bytes:
               Spacer(1, 24),
               Table([["Signature: ____________________", "Date: ______________"]], colWidths=[100 * mm, 80 * mm],
                     style=[("FONT", (0, 0), (-1, -1), "Helvetica", 9.5), ("LEFTPADDING", (0, 0), (-1, -1), 0)])]
-    story.append(KeepTogether(accept))
+    if acceptance:
+        story.append(KeepTogether(accept))
 
     company_name = values["company"]
     company_addr = (e.company.address if e.company and e.company.address else BRAND.get("address")) or ""
@@ -256,6 +259,7 @@ def letter_pdf(e, values: dict, tpl: dict, components=()) -> bytes:
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=36 * mm,
-                            bottomMargin=18 * mm, title=f"Appointment letter {e.employee_code}", author=company_name)
+                            bottomMargin=18 * mm, title=f"{title or 'Appointment letter'} {e.employee_code}",
+                            author=company_name)
     doc.build(story, onFirstPage=decorate, onLaterPages=decorate)
     return buf.getvalue()

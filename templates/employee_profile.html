@@ -6,7 +6,8 @@
 <p class="hint" style="font-size:14px;margin:0 0 10px">{{ e.designation or '' }}{{ ', ' ~ e.department.name if e.department }} · <b>{{ e.company.name if e.company }}</b></p>
 <div class="kv"><div>Employee code</div><div><b>{{ e.employee_code }}</b></div><div>Card no. / machine ID</div><div>{{ e.card_no }}</div>
 <div>Status</div><div><span class="tag {{ 'yes' if e.employment_status == 'ACTIVE' else '' }}">{{ e.employment_status }}</span></div>
-<div>Joined</div><div>{{ e.joined_on.strftime('%d %b %Y') if e.joined_on else '-' }}{{ ' · left ' ~ e.left_on.strftime('%d %b %Y') if e.left_on }}</div>
+<div>Joined</div><div>{{ e.joined_on.strftime('%d %b %Y') if e.joined_on else '-' }}{{ ' · left ' ~ e.left_on.strftime('%d %b %Y') if e.left_on }} <span class="hint">({{ service }})</span></div>
+<div>Confirmed</div><div>{{ e.confirmed_on.strftime('%d %b %Y') if e.confirmed_on else 'not yet' }}</div>
 <div>Shift</div><div>{{ e.shift.code ~ ' (' ~ e.shift.start.strftime('%H:%M') ~ '-' ~ e.shift.end.strftime('%H:%M') ~ ')' if e.shift else 'GENERAL' }}</div>
 <div>Weekly off</div><div>{{ weekly_off_text(e.weekly_off) if e.weekly_off else ('shift: ' ~ weekly_off_text(e.shift.weekly_off) if e.shift and e.shift.weekly_off else 'company default') }}</div>
 <div>Mobile</div><div>{{ e.phone or '-' }}</div>
@@ -88,6 +89,17 @@
 <select name="status"><option value="RETURNED">Returned</option><option value="DAMAGED">Returned damaged</option><option value="LOST">Lost</option></select>
 <input type="date" name="returned_on" value="{{ today }}"> <select name="condition"><option value="">Condition</option>{% for c in asset_conds %}<option>{{ c }}</option>{% endfor %}</select>
 <input name="note" placeholder="Note"> <button class="sec">Save</button></form></details>{% endif %}
+{% endif %}{% if 'assets.manage' in user.perms %}
+{% if a.status == 'ISSUED' %}<details><summary class="link">transfer</summary><form method="post" action="/employees/{{ e.id }}/assets/{{ a.id }}/transfer" style="margin-top:6px">
+<input name="to_code" placeholder="To employee code" required style="width:130px"> <input type="date" name="date" value="{{ today }}"> <select name="condition"><option value="">Condition</option>{% for c in asset_conds %}<option>{{ c }}</option>{% endfor %}</select> <input name="note" placeholder="Note"> <button class="sec">Transfer</button></form></details>{% endif %}
+<details><summary class="link">edit</summary><form method="post" action="/employees/{{ e.id }}/assets/{{ a.id }}/edit" style="margin-top:6px;display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:4px;min-width:330px">
+<select name="category">{% for k, v in asset_cats.items() %}<option value="{{ k }}" {{ 'selected' if a.category == k }}>{{ v }}</option>{% endfor %}</select><input name="name" value="{{ a.name }}" required>
+<input name="brand_model" value="{{ a.brand_model or '' }}" placeholder="Brand / model"><input name="serial_no" value="{{ a.serial_no or '' }}" placeholder="Serial">
+<input name="asset_tag" value="{{ a.asset_tag or '' }}" placeholder="Asset tag"><input type="number" name="quantity" value="{{ a.quantity }}" min="1">
+<input name="value" value="{{ a.value or 0 }}"><input type="date" name="issued_on" value="{{ a.issued_on }}">
+<select name="condition"><option value="">Condition</option>{% for c in asset_conds %}<option {{ 'selected' if a.condition_issued == c }}>{{ c }}</option>{% endfor %}</select>
+<select name="status">{% for k, v in asset_status.items() %}<option value="{{ k }}" {{ 'selected' if a.status == k }}>{{ v }}</option>{% endfor %}</select>
+<input name="note" value="{{ a.note or '' }}" placeholder="Note" style="grid-column:1/-1"><button class="sec">Save</button></form></details>
 <form method="post" action="/employees/{{ e.id }}/assets/{{ a.id }}/delete" onsubmit="return confirm('Remove this entry (only if it was entered by mistake)?')" style="display:inline"><button class="link">remove</button></form>{% endif %}</td></tr>
 {% else %}<tr><td colspan="10" class="hint">No company items recorded for this employee.</td></tr>{% endfor %}</table></div>
 {% if 'employees.edit' in user.perms %}<form method="post" action="/employees/{{ e.id }}/assets" style="margin-top:12px"><div class="form-grid">
@@ -102,6 +114,57 @@
 <div><label>Condition</label><select name="condition">{% for c in asset_conds %}<option>{{ c }}</option>{% endfor %}</select></div>
 <div><label>Note</label><input name="note"></div>
 </div><p><button>+ Give item</button></p></form>{% endif %}</div>
+{% if 'employees.edit' in user.perms or sep %}
+<div class="panel" id="separation"><h3>Leaving the company {% if sep %}<span class="tag {{ 'FINAL' if sep.status == 'COMPLETED' else 'DRAFT' }}">{{ 'Left' if sep.status == 'COMPLETED' else 'In progress' }}</span>{% endif %}</h3>
+{% if sep %}<div class="kv"><div>Type</div><div>{{ sep_types.get(sep.sep_type, sep.sep_type)|title }}</div>
+<div>Notice / resignation date</div><div>{{ sep.notice_date.strftime('%d/%m/%Y') if sep.notice_date else '-' }}</div>
+<div>Last working day</div><div><b>{{ sep.last_working_day.strftime('%d/%m/%Y') }}</b></div><div>Reason</div><div>{{ sep.reason or '-' }}</div>
+<div>Remarks</div><div>{{ sep.remarks or '-' }}</div><div>Recorded</div><div>{{ sep.created_by }} {{ sep.created_at.strftime('%d/%m/%Y') }}{% if sep.completed_at %} · completed by {{ sep.completed_by }} {{ sep.completed_at.strftime('%d/%m/%Y') }}{% endif %}</div></div>{% endif %}
+{% if 'employees.edit' in user.perms and (not sep or sep.status == 'IN_PROGRESS') %}
+<h4 style="margin:12px 0 6px">1. {{ 'Change details' if sep else 'Record resignation / termination' }}</h4>
+<form method="post" action="/employees/{{ e.id }}/separation"><div class="form-grid">
+<div><label>Type</label><select name="sep_type">{% for k, v in sep_types.items() %}<option value="{{ k }}" {{ 'selected' if sep and sep.sep_type == k }}>{{ v|title }}</option>{% endfor %}</select></div>
+<div><label>Resignation / notice date</label><input type="date" name="notice_date" value="{{ sep.notice_date if sep and sep.notice_date else today }}"></div>
+<div><label>Last working day *</label><input type="date" name="last_working_day" required value="{{ sep.last_working_day if sep else '' }}"></div>
+<div><label>Reason</label><input name="reason" value="{{ sep.reason or '' if sep else '' }}" placeholder="e.g. better opportunity"></div>
+<div style="grid-column:1/-1"><label>Remarks</label><textarea name="remarks" rows="2" style="width:100%">{{ sep.remarks or '' if sep else '' }}</textarea></div>
+</div><p><button class="sec">Save</button></p></form>
+{% if sep %}<h4 style="margin:12px 0 6px">2. Clearance</h4>
+{% set out_assets = assets|selectattr('status', 'equalto', 'ISSUED')|list %}
+<p>{% if out_assets %}<span class="tag ABSENT">✗</span> Company assets: <b>{{ out_assets|length }} item(s) still with {{ e.full_name }}</b> - take them back in Assets above{% else %}<span class="tag yes">✓</span> Company assets: all returned{% endif %}</p>
+<form method="post" action="/employees/{{ e.id }}/separation/checklist">{% for k, label in check_items.items() %}<label style="display:block;color:inherit;margin:3px 0"><input type="checkbox" name="{{ k }}" value="1" {{ 'checked' if k in sep_check }}> {{ label }}{% if k in sep_check %} <span class="hint">({{ sep_check[k].by }} {{ sep_check[k].on }})</span>{% endif %}</label>{% endfor %}
+<p><button class="sec">Save clearance</button></p></form>
+<h4 style="margin:12px 0 6px">3. Complete</h4>
+<p class="hint">Makes {{ e.full_name }} inactive from the last working day, closes their staff login and keeps all history. Process that month's payroll for the final salary (it is counted up to the last working day).</p>
+<form method="post" action="/employees/{{ e.id }}/separation/complete" class="inline" onsubmit="return confirm('Complete the separation of {{ e.full_name }}?')">
+{% if out_assets %}<label style="color:inherit"><input type="checkbox" name="confirm" value="yes"> complete anyway ({{ out_assets|length }} item(s) not returned)</label>{% endif %}
+<button class="red">Complete separation</button></form>
+<form method="post" action="/employees/{{ e.id }}/separation/cancel" class="inline" style="margin-left:8px" onsubmit="return confirm('Cancel this separation (e.g. resignation withdrawn)?')"><button class="sec">Cancel separation</button></form>{% endif %}
+{% elif not sep %}<p class="hint">Not leaving.</p>{% endif %}
+</div>{% endif %}
+{% if 'appointment.letter' in user.perms %}
+<div class="panel" id="letters"><h3>Letters</h3>
+<div class="grid2">
+<form method="post" action="/employees/{{ e.id }}/letter/confirmation" target="_blank" style="border:1px solid #e3e6eb;border-radius:10px;padding:12px">
+<b>Confirmation letter</b> {% if e.confirmed_on %}<span class="tag yes">confirmed {{ e.confirmed_on.strftime('%d/%m/%Y') }}</span>{% endif %}
+<div class="form-grid" style="margin-top:6px"><div><label>Confirmed with effect from</label><input type="date" name="confirmation_date" value="{{ e.confirmed_on or today }}"></div>
+<div><label>Letter date</label><input type="date" name="letter_date" value="{{ today }}"></div></div>
+<label style="margin-top:6px">Remarks (printed in the letter, optional)</label><textarea name="remarks" rows="2" style="width:100%" placeholder="e.g. Your performance during probation has been excellent."></textarea>
+<label style="color:inherit"><input type="checkbox" name="save_copy" value="1" checked> Save a copy in Documents and mark as confirmed</label>
+<p><button>Make confirmation letter</button> <a class="btn sec" href="/letters/confirmation">Edit text</a></p></form>
+<div style="border:1px solid #e3e6eb;border-radius:10px;padding:12px">
+<b>Release letter / Experience certificate</b>
+{% if not sep %}<p class="hint">Record the separation first (Leaving the company).</p>{% else %}
+<form method="post" action="/employees/{{ e.id }}/letter/release" target="_blank">
+<div class="form-grid" style="margin-top:6px"><div><label>Letter date</label><input type="date" name="letter_date" value="{{ today }}"></div></div>
+<label style="margin-top:6px">Remarks (printed, optional)</label><textarea name="remarks" rows="2" style="width:100%">{{ sep.remarks or '' }}</textarea>
+<label style="color:inherit"><input type="checkbox" name="save_copy" value="1" checked> Save a copy in Documents</label>
+<label style="color:inherit"><input type="checkbox" name="override" value="1"> Issue even if items are not returned</label>
+<p><button>Make release letter</button> <button class="sec" formaction="/employees/{{ e.id }}/letter/experience">Experience certificate</button> <a class="btn sec" href="/letters/release">Edit texts</a></p></form>{% endif %}
+</div></div></div>{% endif %}
+<div class="panel" id="history"><h3>History</h3><div class="table-wrap" style="max-height:360px"><table>
+{% for when, ico, text in history %}<tr><td style="white-space:nowrap">{{ when.strftime('%d/%m/%Y') }}</td><td>{{ ico }}</td><td>{{ text }}</td></tr>
+{% else %}<tr><td class="hint">Nothing yet.</td></tr>{% endfor %}</table></div></div>
 <div class="panel" id="documents"><h3>Documents &amp; certificates</h3>
 <div class="table-wrap"><table><tr><th>Type</th><th>Title</th><th>File</th><th>Size</th><th>Uploaded</th><th></th></tr>
 {% for d in documents %}<tr><td>{{ doc_types.get(d.doc_type, d.doc_type) }}</td><td>{{ d.title }}</td><td><a href="/employees/{{ e.id }}/documents/{{ d.id }}" target="_blank">{{ d.original_name }}</a></td>
@@ -109,7 +172,7 @@
 <td>{% if 'employees.edit' in user.perms %}<form method="post" action="/employees/{{ e.id }}/documents/{{ d.id }}/delete" onsubmit="return confirm('Delete this document?')"><button class="link">delete</button></form>{% endif %}</td></tr>
 {% else %}<tr><td colspan="6" class="hint">No documents yet - upload educational certificates, NID copy, CV, appointment letter...</td></tr>{% endfor %}</table></div>
 {% if 'employees.edit' in user.perms %}<form method="post" action="/employees/{{ e.id }}/documents" enctype="multipart/form-data" style="margin-top:12px"><div class="form-grid">
-<div><label>Type</label><select name="doc_type">{% for k, v in doc_types.items() if k != 'APPOINTMENT' or 'appointment.letter' in user.perms %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+<div><label>Type</label><select name="doc_type">{% for k, v in doc_types.items() if k not in ('APPOINTMENT', 'CONFIRMATION', 'RELEASE', 'EXPERIENCE') or 'appointment.letter' in user.perms %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
 <div><label>Title (e.g. SSC certificate)</label><input name="title"></div>
 <div><label>Files (PDF, JPG, PNG, Word - up to 20 MB each)</label><input type="file" name="files" multiple required></div>
 </div><p><button>Upload</button></p></form>{% endif %}</div>

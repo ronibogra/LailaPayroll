@@ -1,5 +1,6 @@
 {% extends "base.html" %}{% block title %}Appointment letter{% endblock %}{% block heading %}Appointment letter template{% endblock %}
 {% block content %}
+<div class="steps"><a class="on" href="/appointment-letter">Appointment letter</a><a href="/letters/confirmation">Confirmation letter</a><a href="/letters/release">Release letter</a><a href="/letters/experience">Experience certificate</a></div>
 <div class="grid2">
 <div class="panel"><h3>Letter text</h3>
 <p class="hint">This text is filled with each employee's data automatically. Write a field in curly brackets, e.g. <b>{name}</b>. Put <b>{salary_table}</b> on its own line where the salary breakdown table should appear. The letterhead (logo, company name, address), reference no., date, "To" address, signature and acceptance parts are added automatically.</p>
