@@ -948,7 +948,7 @@ def main():
     step("increments & promotions with letters; working hours by month and year")
     r = page(s, f"/employees/{kid}", must="Working hours")
     ok(f"{month_name_[m]}" in r.text and "h worked" in r.text, "working hours by month / year")
-    post(s, f"/employees/{kid}/changes", {"kind": "PROMOTION", "effective_date": str(today), "new_designation": "Accountant",
+    post(s, f"/employees/{kid}/changes", {"kind": "PROMOTION", "effective_date": str(today), "new_designation": "Senior Accountant",
                                           "how": "NONE"}, must="needs a new designation or grade", must_not=None)
     post(s, f"/employees/{kid}/changes", {"kind": "PROMOTION", "effective_date": str(today.replace(day=1)),
                                           "new_designation": "Senior Accounts Officer", "new_grade": "3",
