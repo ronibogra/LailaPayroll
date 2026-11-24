@@ -859,7 +859,7 @@ def main():
     post(s, f"/employees/{eid}/assets/{aid}/transfer", {"to_code": "12127", "note": "handover"},
          must="transferred to 12127")
     r = page(s, f"/employees/{kid}#assets", must="From 12160")
-    aid2 = [x for x in re.findall(rf"/employees/{kid}/assets/(\d+)/edit", r.text)][-1]
+    aid2 = re.search(rf"<b>Office phone</b>.*?/employees/{kid}/assets/(\d+)/edit", r.text, re.S).group(1)
     post(s, f"/employees/{kid}/assets/{aid2}/edit", {"category": "MOBILE", "name": "Office phone (Samsung A15)",
                                                      "serial_no": "IMEI-CI-9", "quantity": "1", "value": "18000",
                                                      "issued_on": str(today), "status": "ISSUED"}, must="updated")
