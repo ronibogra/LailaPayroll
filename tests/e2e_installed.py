@@ -949,7 +949,10 @@ def main():
     r = page(s, f"/employees/{kid}", must="Working hours")
     ok(f"{month_name_[m]}" in r.text and "h worked" in r.text, "working hours by month / year")
     post(s, f"/employees/{kid}/changes", {"kind": "PROMOTION", "effective_date": str(today), "new_designation": "Senior Accountant",
-                                          "how": "NONE"}, must="needs a new designation or grade", must_not=None)
+                                          "how": "AMOUNT", "value": "100"}, must="needs a new designation or grade",
+         must_not=None)
+    post(s, f"/employees/{kid}/changes", {"kind": "INCREMENT", "effective_date": str(today), "how": "NONE"},
+         must="Nothing changes", must_not=None)
     post(s, f"/employees/{kid}/changes", {"kind": "PROMOTION", "effective_date": str(today.replace(day=1)),
                                           "new_designation": "Senior Accounts Officer", "new_grade": "3",
                                           "how": "PERCENT", "value": "10", "remarks": "Excellent performance"},
