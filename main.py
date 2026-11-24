@@ -335,7 +335,7 @@ def report_page(request: Request, rid: str, page: int = 1, user=Depends(page_use
     need(user, rep.perm)
     p = qparams(request)
     today = now_local().date()
-    if "start" in rep.filters and not p.get("start") and not p.get("month"):      # sensible default period
+    if "start" in rep.filters and not p.get("start") and not p.get("month") and rid != "separations":  # default period
         p.setdefault("start", str(today.replace(day=1)) if rid in ("attendance", "leaves", "first_last") else str(today))
         p.setdefault("end", str(today))
     if rid == "jobcard" and not p.get("month") and not p.get("start"):
