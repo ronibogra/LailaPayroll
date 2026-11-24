@@ -1,6 +1,7 @@
 """All reports (lists) of the program with their selectable columns. Screen, Excel and PDF all use these."""
 from __future__ import annotations
 
+from decimal import Decimal
 from datetime import date, time, timedelta
 
 from sqlalchemy import func, or_, select
@@ -9,7 +10,7 @@ from models import (AttendanceLog, AuditLog, Company, DailyAttendance, Departmen
                     Leave, PayrollLine, PayrollRun, Shift, EmployeeAsset, EmployeeSeparation, EmployeeChange)
 from reports.engine import Col, Report
 from reports.filters import emp_conditions, has_emp_filter
-from timeutil import now_local
+from timeutil import now_local, parse_day, parse_month
 
 EMP_F = ["company", "department", "designation", "section", "shift", "status", "q"]
 
@@ -29,9 +30,9 @@ def _company(user: dict, p: dict) -> int | None:
 
 def _dates(p: dict, default_days: int = 0) -> tuple[date, date]:
     today = now_local().date()
-    s = date.fromisoformat(p["start"]) if p.get("start") else (
-        date.fromisoformat(p["day"]) if p.get("day") else today - timedelta(days=default_days))
-    e = date.fromisoformat(p["end"]) if p.get("end") else (date.fromisoformat(p["day"]) if p.get("day") else today)
+    s = parse_day(p["start"]) if p.get("start") else (
+        parse_day(p["day"]) if p.get("day") else today - timedelta(days=default_days))
+    e = parse_day(p["end"]) if p.get("end") else (parse_day(p["day"]) if p.get("day") else today)
     if e < s:
         s, e = e, s
     if (e - s).days > 92:
@@ -244,7 +245,7 @@ def fetch_attendance(db, user, p, export):
 def _month_range(p):
     if p.get("start") or p.get("end"):
         return _dates(p)
-    y, m = (int(x) for x in (p.get("month") or f"{now_local():%Y-%m}").split("-")[:2])
+    y, m = parse_month(p.get("month"))
     first = date(y, m, 1)
     nxt = date(y + (m == 12), m % 12 + 1, 1)
     return first, nxt - timedelta(days=1)
@@ -465,8 +466,8 @@ PAY_COLS = [
 def fetch_payroll(db, user, p, export):
     """Salary lines of one or more months, one or all companies (as allowed), with filters."""
     from calendar import month_abbr
-    y1, m1 = (int(x) for x in (p.get("month") or f"{now_local():%Y-%m}").split("-")[:2])
-    y2, m2 = (int(x) for x in (p.get("month_to") or f"{y1}-{m1:02d}").split("-")[:2])
+    y1, m1 = parse_month(p.get("month"))
+    y2, m2 = parse_month(p.get("month_to")) if p.get("month_to") else (y1, m1)
     a, b = sorted((y1 * 12 + m1, y2 * 12 + m2))
     if b - a > 23:
         raise Problem("Choose at most 24 months")
@@ -552,8 +553,8 @@ def fetch_hours(db, user, p, export):
     """Per employee and month: required hours (office hours on working days) vs hours actually worked."""
     from calendar import monthrange
     from services.hours import by_employee
-    y1, m1 = (int(x) for x in (p.get("month") or f"{now_local():%Y-%m}").split("-")[:2])
-    y2, m2 = (int(x) for x in (p.get("month_to") or f"{y1}-{m1:02d}").split("-")[:2])
+    y1, m1 = parse_month(p.get("month"))
+    y2, m2 = parse_month(p.get("month_to")) if p.get("month_to") else (y1, m1)
     a, b = sorted((y1 * 12 + m1 - 1, y2 * 12 + m2 - 1))
     if b - a > 23:
         raise Problem("Choose at most 24 months")
@@ -606,6 +607,89 @@ def fetch_changes(db, user, p, export):
         stmt = stmt.where(EmployeeChange.kind == p["change_kind"])
     rows = db.execute(stmt.order_by(EmployeeChange.effective_date.desc())).all()
     return rows, f"{len(rows)} increment(s) / promotion(s){_comp_name(db, _company(user, p))}", len(rows)
+
+
+# ------------------------------------------------------------ employee increment list (month by month)
+class IncRow:
+    def __init__(self, e, year, chs, due):
+        self.e, self.year, self.due = e, year, due
+        self.all = chs                                                   # every change of this employee, oldest first
+        self.yr = [c for c in chs if c.effective_date.year == year]
+        self.month = {m: sum((c.new_gross - c.old_gross for c in self.yr if c.effective_date.month == m), Decimal(0))
+                      for m in range(1, 13)}
+        before = [c for c in chs if c.effective_date.year >= year]
+        self.start = before[0].old_gross if before else (e.gross or Decimal(0))   # gross on 1 January
+        self.total = sum(self.month.values(), Decimal(0))
+        pay = [c for c in chs if c.new_gross != c.old_gross and c.status == "APPLIED"]
+        self.last = pay[-1] if pay else None
+
+    def months_text(self):
+        from calendar import month_abbr
+        return ", ".join(f"{month_abbr[c.effective_date.month]}" + (" (P)" if c.kind == "PROMOTION" else "")
+                         + (" pending" if c.status == "PENDING" else "") for c in self.yr)
+
+
+def _mcol(m):
+    from calendar import month_abbr
+    return Col(f"m{m}", month_abbr[m], lambda r: r.month[m] or None, kind="money", perm="salary.view")
+
+
+INC_COLS = [
+    Col("code", "Code", lambda r: r.e.employee_code, link=lambda r: emp_link(r.e) + "#changes"),
+    Col("name", "Name", lambda r: r.e.full_name, link=lambda r: emp_link(r.e) + "#changes"),
+    Col("company", "Company", lambda r: r.e.company.code if r.e.company else ""),
+    Col("department", "Department", lambda r: r.e.department.name if r.e.department else ""),
+    Col("designation", "Designation", lambda r: r.e.designation),
+    Col("grade", "Grade", lambda r: r.e.grade, False),
+    Col("joined", "Joined", lambda r: r.e.joined_on, kind="date"),
+    Col("status", "Status", lambda r: r.e.employment_status.title(), False),
+    Col("start", "Gross on 1 Jan", lambda r: r.start, kind="money", perm="salary.view"),
+    *[_mcol(m) for m in range(1, 13)],
+    Col("total", "Increase in year", lambda r: r.total, kind="money", perm="salary.view"),
+    Col("pct", "Increase %", lambda r: round(float(r.total * 100 / r.start), 2) if r.start else 0, kind="num",
+        perm="salary.view"),
+    Col("end", "Gross after", lambda r: r.start + r.total, kind="money", perm="salary.view"),
+    Col("current", "Current gross", lambda r: r.e.gross, kind="money", perm="salary.view", default=False),
+    Col("count", "Changes in year", lambda r: len(r.yr), kind="num"),
+    Col("when", "Months", lambda r: r.months_text()),
+    Col("last_date", "Last increment", lambda r: r.last.effective_date if r.last else None, kind="date"),
+    Col("last_amt", "Last increase", lambda r: (r.last.new_gross - r.last.old_gross) if r.last else None,
+        kind="money", perm="salary.view"),
+    Col("next_due", "Next due", lambda r: r.due, kind="date"),
+    Col("all_count", "All increments", lambda r: len([c for c in r.all if c.new_gross != c.old_gross]), kind="num",
+        default=False),
+]
+
+
+def fetch_increment_list(db, user, p, export):
+    """Every employee (filters apply) with the increase of each month of one year, totals and next due date."""
+    from timeutil import next_due
+    today = now_local().date()
+    year = int(p["year"]) if str(p.get("year") or "").isdigit() else today.year
+    emps = list(db.scalars(select(Employee).where(*emp_conditions(p, user))
+                           .order_by(Employee.company_id, Employee.employee_code)))
+    chs: dict[int, list] = {}
+    if emps:
+        for c in db.scalars(select(EmployeeChange).where(EmployeeChange.status != "CANCELLED",
+                                                         EmployeeChange.employee_id.in_([e.id for e in emps]))
+                            .order_by(EmployeeChange.effective_date, EmployeeChange.id)):
+            chs.setdefault(c.employee_id, []).append(c)
+    rows = []
+    for e in emps:
+        lst = chs.get(e.id, [])
+        pay = [c.effective_date for c in lst if c.new_gross != c.old_gross and c.status == "APPLIED"]
+        base = max(pay) if pay else e.joined_on
+        due = next_due(base, today) if base and e.employment_status == "ACTIVE" else None
+        r = IncRow(e, year, lst, due)
+        if p.get("inc_only") and not r.yr:
+            continue
+        rows.append(r)
+    got = sum(1 for r in rows if r.yr)
+    total = sum((r.total for r in rows), Decimal(0))
+    sub_ = f"Year {year} · {len(rows)} employee(s) · {got} with an increment / promotion"
+    if "salary.view" in user.get("perms", ()):
+        sub_ += f" · monthly payroll up by Tk {total:,.0f}"
+    return rows, sub_ + _comp_name(db, _company(user, p)), len(rows)
 
 
 # ------------------------------------------------------------ former employees (separations)
@@ -765,6 +849,11 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
            filters=["start", "end"] + EMP_F + ["change_kind"], totals=["increase"],
            description="Every increment and promotion: designation, grade and gross before and after, increase in Tk "
                        "and %, effective date."),
+    Report("increment_list", "Employee increment list (month by month)", "employees.view", INC_COLS,
+           fetch_increment_list, filters=["year"] + EMP_F + ["inc_only"],
+           totals=["start"] + [f"m{m}" for m in range(1, 13)] + ["total", "end", "current", "last_amt"],
+           description="Complete list of employees with the salary increase of every month of a year (Jan-Dec), "
+                       "gross on 1 January and after, increase %, last increment and next due date."),
     Report("separations", "Former employees", "employees.view", SEP_COLS, fetch_separations,
            filters=["start", "end", "company", "department", "designation", "q", "sep_type", "sep_status"],
            description="People who left (or are leaving): resignation / termination, last working day, length of "
@@ -777,4 +866,4 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
 ]}
 
 CENTRE = ["punches", "first_last", "attendance", "hours", "leaves", "jobcard", "employees", "payroll", "changes",
-          "assets", "separations"]
+          "increment_list", "assets", "separations"]

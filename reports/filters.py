@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import or_, select
 
+from timeutil import parse_day
 from models import Company, Department, Device, Employee, Shift
 
 
@@ -19,9 +20,11 @@ class Filter:
     help: str = ""
 
 
+_YEARS = [(str(y), str(y)) for y in range(__import__("timeutil").now_local().year + 1, 2014, -1)]
+
 FILTERS: dict[str, Filter] = {f.key: f for f in [
     Filter("start", "From", "date"), Filter("end", "To", "date"),
-    Filter("month", "Month", "month"), Filter("month_to", "To month", "month"),
+    Filter("month", "Month", "month"), Filter("year", "Year", choices=_YEARS, ), Filter("month_to", "To month", "month"),
     Filter("company", "Company", options="companies"),
     Filter("department", "Department", options="departments"),
     Filter("designation", "Designation", options="designations"),
@@ -52,6 +55,7 @@ FILTERS: dict[str, Filter] = {f.key: f for f in [
                                                     ("REJECTED", "Rejected")]),
     Filter("paid", "Paid / unpaid", choices=[("1", "Paid"), ("0", "Unpaid")]),
     Filter("short_only", "Only below the required hours", "check"),
+    Filter("inc_only", "Only employees with an increment in the year", "check"),
     Filter("change_kind", "Type", choices=[("INCREMENT", "Increment"), ("PROMOTION", "Promotion")]),
     Filter("sep_type", "Leaving type", choices=[("RESIGNATION", "Resignation"), ("TERMINATION", "Termination"),
                                                  ("DISMISSAL", "Dismissal"), ("RETIREMENT", "Retirement"),
@@ -104,7 +108,6 @@ def has_emp_filter(p: dict, user: dict) -> bool:
 
 def emp_conditions(p: dict, user: dict) -> list:
     """SQL conditions on Employee for the common employee filters (and the user's company limit)."""
-    from datetime import date
     c = []
     cid = user.get("company_id") or (int(p["company"]) if str(p.get("company") or "").isdigit() else None)
     if cid:
@@ -133,9 +136,9 @@ def emp_conditions(p: dict, user: dict) -> list:
     if p.get("mobile") in ("0", "1"):
         c.append(Employee.allow_mobile == (p["mobile"] == "1"))
     if p.get("joined_from"):
-        c.append(Employee.joined_on >= date.fromisoformat(p["joined_from"]))
+        c.append(Employee.joined_on >= parse_day(p["joined_from"]))
     if p.get("joined_to"):
-        c.append(Employee.joined_on <= date.fromisoformat(p["joined_to"]))
+        c.append(Employee.joined_on <= parse_day(p["joined_to"]))
     return c
 
 

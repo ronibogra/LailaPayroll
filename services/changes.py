@@ -9,7 +9,7 @@ from sqlalchemy import select
 from models import Department, Employee, EmployeeChange
 from payroll.engine import split_gross
 from services.policy import load_policy
-from timeutil import now_local
+from timeutil import next_due, now_local
 
 KINDS = {"INCREMENT": "Increment", "PROMOTION": "Promotion"}
 
@@ -89,13 +89,7 @@ def due_list(db, days_ahead: int = 30, company_ids=None) -> list[dict]:
         base = last.get(e.id) or e.joined_on
         if not base:
             continue
-        try:
-            due = base.replace(year=base.year + 1)
-        except ValueError:          # 29 Feb
-            due = base.replace(year=base.year + 1, day=28)
-        while due + timedelta(days=366) <= today:       # several years without an increment: the latest due date
-            due = due.replace(year=due.year + 1) if not (due.month == 2 and due.day == 29) else due.replace(
-                year=due.year + 1, day=28)
+        due = next_due(base, today)
         pend = upcoming.get(e.id)
         if due <= today + timedelta(days=days_ahead) or pend:
             out.append({"e": e, "due": due, "last": last.get(e.id), "overdue": (today - due).days if due < today else 0,

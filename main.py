@@ -47,7 +47,8 @@ from services.payroll_service import run_payroll, finalize_payroll, get_run, Pay
 from services.policy import (load_policy, save_policy, policy_rows, get_setting, set_setting, weekend_set,
                              geofence)
 from services.processing import process_month, month_bounds
-from timeutil import now_local
+from timeutil import now_local, parse_day
+from timeutil import parse_month as _parse_month
 
 BASE_DIR = Path(__file__).resolve().parent
 MOBILE_COOKIE = "laila_mobile"
@@ -156,22 +157,11 @@ _MONTHS = {n.lower(): i for i, n in enumerate(month_name) if n} | {n.lower()[:3]
 
 
 def parse_month(value: str | None) -> tuple[int, int]:
-    """Accepts 2026-11, 2026/11, 11/2026, 11-2026, Nov 2026, November 2026, 2026-11-05 ... (a browser without a month
-    picker shows a plain text box, so people type it in many ways)."""
-    t = now_local()
-    v = (value or "").strip()
-    if not v:
-        return t.year, t.month
-    parts = [p for p in re.split(r"[\s/.,_-]+", v) if p]
-    nums = [int(p) for p in parts if p.isdigit()]
-    names = [_MONTHS[p.lower()] for p in parts if p.lower() in _MONTHS]
-    year = next((n for n in nums if 1900 < n < 2200), None)
-    month = names[0] if names else next((n for n in nums if 1 <= n <= 12 and n != year), None)
-    if not names and len(nums) >= 2 and nums[0] == year:
-        month = nums[1] if 1 <= nums[1] <= 12 else None
-    if year and month:
-        return year, month
-    raise HTTPException(400, f"Month '{v}' not understood - choose it in the box or type it like {t:%Y-%m}")
+    """Accepts 2026-11, 11/2026, Nov 2026, 01/11/2026 ... (see timeutil.parse_month)."""
+    try:
+        return _parse_month(value)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 def cookie_kwargs(request: Request, hours: int) -> dict:
@@ -245,6 +235,12 @@ async def _http_error(request: Request, exc: HTTPException):
                                           {"request": request, "code": exc.status_code, "detail": exc.detail},
                                           status_code=exc.status_code)
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+
+@app.exception_handler(ValueError)
+async def _value_error(request: Request, exc: ValueError):
+    """A wrongly typed value (date, number ...) shows a readable message instead of a crash."""
+    return await _http_error(request, HTTPException(400, str(exc)))
 
 
 @app.on_event("startup")
@@ -329,6 +325,14 @@ def qparams(request: Request) -> dict:
         if not vals:
             continue
         p[k] = vals if (k in FILTERS and FILTERS[k].kind == "multi") else vals[-1]
+        kind = FILTERS[k].kind if k in FILTERS else ("date" if k == "day" else "")
+        try:                                   # typed dates (01/01/2026, Nov 2026 ...) -> one form
+            if kind == "date":
+                p[k] = str(parse_day(p[k]))
+            elif kind == "month":
+                p[k] = "%04d-%02d" % _parse_month(p[k])
+        except ValueError as exc:
+            raise HTTPException(400, f"{FILTERS[k].label if k in FILTERS else k}: {exc}")
     return p
 
 
@@ -362,6 +366,8 @@ def report_page(request: Request, rid: str, page: int = 1, user=Depends(page_use
     if "start" in rep.filters and not p.get("start") and not p.get("month") and rid != "separations":  # default period
         p.setdefault("start", str(today.replace(day=1)) if rid in ("attendance", "leaves", "first_last") else str(today))
         p.setdefault("end", str(today))
+    if rid == "increment_list":
+        p.setdefault("year", str(today.year))
     if rid == "jobcard" and not p.get("month") and not p.get("start"):
         p["month"] = f"{today:%Y-%m}"
     r = report_ctx(db, user, rid, p)
@@ -612,7 +618,7 @@ def dashboard(request: Request, day: str = "", company: str = "", user=Depends(p
     from calendar import month_abbr
     from services import charts
     today = now_local().date()
-    d = date.fromisoformat(day) if day else today
+    d = parse_day(day) if day else today
     comps = visible_companies(db, user)
     cid = company_filter(user, company)
     ids = [cid] if cid else [c.id for c in comps]
@@ -1058,8 +1064,8 @@ def idcards_pdf(request: Request, company: str = "", department: str = "", codes
     if len(emps) > 1500:
         return go("/idcards", err=f"{len(emps)} cards at once is too many - print by company or department")
     try:
-        valid_d = date.fromisoformat(valid) if valid else None
-        issued_d = date.fromisoformat(issued) if issued else now_local().date()
+        valid_d = parse_day(valid) if valid else None
+        issued_d = parse_day(issued) if issued else now_local().date()
     except ValueError:
         return go("/idcards", err="Give valid dates")
     if signatory.strip():
@@ -1243,7 +1249,7 @@ async def employee_asset_add(request: Request, emp_id: int, user=Depends(page_us
     try:
         if not v("name"):
             raise ValueError("Give the item name (e.g. Dell Latitude 5420, Grameenphone SIM)")
-        issued = date.fromisoformat(v("issued_on")) if v("issued_on") else now_local().date()
+        issued = parse_day(v("issued_on")) if v("issued_on") else now_local().date()
         qty = int(v("quantity") or 1)
         if not 1 <= qty <= 10000:
             raise ValueError("Quantity must be 1 or more")
@@ -1279,7 +1285,7 @@ async def employee_asset_return(request: Request, emp_id: int, asset_id: int, us
     f = await request.form()
     status = str(f.get("status") or "RETURNED")
     try:
-        a.returned_on = date.fromisoformat(str(f.get("returned_on"))) if f.get("returned_on") else now_local().date()
+        a.returned_on = parse_day(str(f.get("returned_on"))) if f.get("returned_on") else now_local().date()
     except ValueError:
         return go(back, err="Give a valid return date")
     a.status = status if status in ("RETURNED", "LOST", "DAMAGED") else "RETURNED"
@@ -1319,7 +1325,7 @@ async def employee_asset_edit(request: Request, emp_id: int, asset_id: int, user
         a.serial_no, a.asset_tag = serial, v("asset_tag")[:60] or None
         a.quantity = max(1, int(v("quantity") or 1))
         a.value = dec(v("value"), "Value")
-        a.issued_on = date.fromisoformat(v("issued_on")) if v("issued_on") else a.issued_on
+        a.issued_on = parse_day(v("issued_on")) if v("issued_on") else a.issued_on
         a.condition_issued = v("condition")[:30] or None
         st = v("status")
         if st in asset_svc.STATUS:
@@ -1356,7 +1362,7 @@ async def employee_asset_transfer(request: Request, emp_id: int, asset_id: int, 
     if to.employment_status != "ACTIVE":
         return go(back, err=f"{to.employee_code} {to.full_name} is not active")
     try:
-        when = date.fromisoformat(str(f.get("date"))) if f.get("date") else now_local().date()
+        when = parse_day(str(f.get("date"))) if f.get("date") else now_local().date()
     except ValueError:
         return go(back, err="Give a valid date")
     note = str(f.get("note") or "").strip()[:200]
@@ -1395,7 +1401,7 @@ async def employee_change_add(request: Request, emp_id: int, user=Depends(page_u
     v = lambda k: str(f.get(k) or "").strip()  # noqa: E731
     back = f"/employees/{emp.id}#changes"
     try:
-        eff = date.fromisoformat(v("effective_date"))
+        eff = parse_day(v("effective_date"))
         kind = v("kind") if v("kind") in change_svc.KINDS else "INCREMENT"
         how = v("how") if v("how") in ("AMOUNT", "PERCENT", "GROSS") else "NONE"
         amount = dec(v("value"), "Increase") if how != "NONE" else Decimal(0)
@@ -1482,7 +1488,7 @@ async def employee_change_letter(request: Request, emp_id: int, change_id: int, 
         return go(f"/employees/{emp.id}#changes", err="Change not found")
     f = await request.form()
     try:
-        letter_date = date.fromisoformat(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
+        letter_date = parse_day(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
     except ValueError:
         letter_date = now_local().date()
     kind = "promotion" if ch.kind == "PROMOTION" else "increment"
@@ -1532,8 +1538,8 @@ async def separation_save(request: Request, emp_id: int, user=Depends(page_user)
     f = await request.form()
     back = f"/employees/{emp.id}#separation"
     try:
-        lwd = date.fromisoformat(str(f.get("last_working_day")))
-        notice = date.fromisoformat(str(f.get("notice_date"))) if f.get("notice_date") else None
+        lwd = parse_day(str(f.get("last_working_day")))
+        notice = parse_day(str(f.get("notice_date"))) if f.get("notice_date") else None
     except ValueError:
         return go(back, err="Give the last working day")
     if emp.joined_on and lwd < emp.joined_on:
@@ -1620,8 +1626,8 @@ async def employee_letter(request: Request, emp_id: int, kind: str, user=Depends
     back = f"/employees/{emp.id}#letters"
     f = await request.form()
     try:
-        letter_date = date.fromisoformat(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
-        conf = date.fromisoformat(str(f.get("confirmation_date"))) if f.get("confirmation_date") else None
+        letter_date = parse_day(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
+        conf = parse_day(str(f.get("confirmation_date"))) if f.get("confirmation_date") else None
     except ValueError:
         return go(back, err="Give valid dates")
     remarks = str(f.get("remarks") or "").strip()[:1500]
@@ -1832,8 +1838,8 @@ async def employee_appointment(request: Request, emp_id: int, user=Depends(page_
     emp = _emp_or_404(db, user, emp_id)
     f = await request.form()
     try:
-        letter_date = date.fromisoformat(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
-        joining = date.fromisoformat(str(f.get("joining_date"))) if f.get("joining_date") else emp.joined_on
+        letter_date = parse_day(str(f.get("letter_date"))) if f.get("letter_date") else now_local().date()
+        joining = parse_day(str(f.get("joining_date"))) if f.get("joining_date") else emp.joined_on
     except ValueError:
         return go(f"/employees/{emp.id}", err="Give valid dates for the letter")
     ref = str(f.get("ref") or "").strip()[:60] or \
@@ -1934,9 +1940,9 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
         e.company_id, e.employee_code, e.card_no, e.full_name = company_id, code, card, val("full_name")
         e.department, e.designation, e.section, e.grade = dept, val("designation") or None, val("section") or None, val("grade") or None
         e.shift_id = int(val("shift_id")) if val("shift_id") else None
-        e.joined_on = date.fromisoformat(val("joined_on")) if val("joined_on") else None
-        e.left_on = date.fromisoformat(val("left_on")) if val("left_on") else None
-        e.date_of_birth = date.fromisoformat(val("date_of_birth")) if val("date_of_birth") else None
+        e.joined_on = parse_day(val("joined_on")) if val("joined_on") else None
+        e.left_on = parse_day(val("left_on")) if val("left_on") else None
+        e.date_of_birth = parse_day(val("date_of_birth")) if val("date_of_birth") else None
         e.employment_status = val("employment_status") or "ACTIVE"
         if can_salary:          # salary, pay mode and OT eligibility only for roles with "salary.edit"
             e.gross = g
@@ -2196,7 +2202,7 @@ def attendance_today(company: str = "", user=Depends(page_user), db: Session = D
 def attendance_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "attendance.view")
     p = dict(request.query_params)
-    d = date.fromisoformat(p["day"]) if p.get("day") else now_local().date()
+    d = parse_day(p["day"]) if p.get("day") else now_local().date()
     p["day"] = str(d)
     r = report_ctx(db, user, "attendance", p)
     return render(request, "attendance.html", user, r=r, day=d, status=p.get("att_status", ""),
@@ -2256,7 +2262,7 @@ def attendance_manual(card_no: str = Form(...), punch_time: str = Form(...), rea
 @app.get("/attendance/day.xlsx")
 def attendance_day_xlsx(day: str, company: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "attendance.view", "reports.export")
-    d = date.fromisoformat(day)
+    d = parse_day(day)
     cid = company_filter(user, company)
     stmt = select(DailyAttendance).join(Employee).where(DailyAttendance.work_date == d)
     if cid:
@@ -2296,8 +2302,8 @@ def old_punches_link(request: Request):
 # ---------------------------------------------------------------- Punch menu
 def _dates(start: str, end: str) -> tuple[date, date]:
     today = now_local().date()
-    s_ = date.fromisoformat(start) if start else today
-    e_ = date.fromisoformat(end) if end else s_
+    s_ = parse_day(start) if start else today
+    e_ = parse_day(end) if end else s_
     if e_ < s_:
         s_, e_ = e_, s_
     if (e_ - s_).days > 92:
@@ -2367,7 +2373,7 @@ def punches_page(request: Request, page: int = 1, user=Depends(page_user), db: S
     emp = _one_employee(db, user, p.get("q", ""))
     sm = None
     if emp and "attendance.view" in user["perms"]:
-        sy, smn = (int(x) for x in p["sum_month"].split("-")) if p.get("sum_month", "")[:4].isdigit() else (s_.year, s_.month)
+        sy, smn = _parse_month(p["sum_month"]) if p.get("sum_month") else (s_.year, s_.month)
         sm = {"emp": emp, "y": sy, "m": smn, **_month_summary(db, emp, sy, smn),
               "prev": f"{(date(sy, smn, 1) - timedelta(days=1)):%Y-%m}",
               "next": f"{(date(sy, smn, 28) + timedelta(days=5)):%Y-%m}"}
@@ -2514,7 +2520,7 @@ async def leave_add(request: Request, user=Depends(page_user), db: Session = Dep
     check_company(user, emp.company_id)
     lt = db.scalar(select(LeaveType).where(LeaveType.code == str(f.get("leave_type") or "")))
     try:
-        s, e = date.fromisoformat(str(f.get("start_date"))), date.fromisoformat(str(f.get("end_date")))
+        s, e = parse_day(str(f.get("start_date"))), parse_day(str(f.get("end_date")))
         has_doc = bool(getattr(f.get("document"), "filename", ""))
         over = bool(f.get("over_balance")) and user["role"] == "ADMIN"
         days = leave_svc.validate(db, emp, lt, s, e, has_doc, ignore_balance=over)
@@ -3373,7 +3379,7 @@ def payroll_bonus(request: Request, company: str = "", month: str = "", name: st
         return go("/settings", err="Add a company first")
     first, last = month_bounds(y, m)
     try:
-        as_of_d = date.fromisoformat(as_of) if as_of else last
+        as_of_d = parse_day(as_of) if as_of else last
         pct = dec(percent, "Percent")
         minm = int(min_months or 0)
     except ValueError as exc:
@@ -3615,7 +3621,7 @@ def company_save(company_id: str = Form(""), code: str = Form(...), name: str = 
 @app.post("/settings/holidays")
 def holiday_add(day: str = Form(...), name: str = Form(...), user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "holidays.manage")
-    d = date.fromisoformat(day)
+    d = parse_day(day)
     if db.scalar(select(Holiday).where(Holiday.day == d)):
         return go("/settings", err="That date is already a holiday")
     db.add(Holiday(day=d, name=name.strip()))
@@ -3631,8 +3637,8 @@ def special_holiday_add(day: str = Form(...), day_to: str = Form(""), name: str 
     """Holiday for only some staff (one company, one department or listed employees), one day or a range."""
     need(user, "holidays.manage")
     try:
-        d1 = date.fromisoformat(day)
-        d2 = date.fromisoformat(day_to) if day_to else d1
+        d1 = parse_day(day)
+        d2 = parse_day(day_to) if day_to else d1
     except ValueError:
         return go("/settings#special", err="Give a valid date")
     if d2 < d1 or (d2 - d1).days > 60:
@@ -4158,8 +4164,8 @@ def cleanup_punch_photos(start: str = Form(""), end: str = Form(...), employee_c
     if confirm != "DELETE":
         return go("/cleanup", err="Type DELETE to confirm")
     try:
-        s = date.fromisoformat(start) if start else date(2000, 1, 1)
-        e = date.fromisoformat(end)
+        s = parse_day(start) if start else date(2000, 1, 1)
+        e = parse_day(end)
     except ValueError:
         return go("/cleanup", err="Give valid dates")
     stmt = select(AttendanceLog).where(AttendanceLog.photo.is_not(None),
@@ -4293,7 +4299,7 @@ async def _request_leave(db, emp: Employee, f, actor: str) -> tuple[bool, str]:
     try:
         if not lt or not lt.self_request:
             raise ValueError("this leave type cannot be requested here - ask HR")
-        s, e = date.fromisoformat(str(f.get("start_date"))), date.fromisoformat(str(f.get("end_date")))
+        s, e = parse_day(str(f.get("start_date"))), parse_day(str(f.get("end_date")))
         if e < now_local().date() - timedelta(days=30):
             raise ValueError("leave more than 30 days in the past must be entered by HR")
         reason = str(f.get("reason") or "").strip()

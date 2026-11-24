@@ -302,3 +302,29 @@ def test_required_vs_worked_hours():
     r = finish(acc)
     assert r["work_days"] == 4 and r["leave_days"] == 1
     assert r["required"] == 24.0 and r["worked"] == 19.3 and r["diff"] == -4.7
+
+
+def test_typed_dates_and_months():
+    from datetime import date
+
+    from timeutil import parse_day, parse_month
+    assert parse_day("01/01/2026") == date(2026, 1, 1)
+    assert parse_day("31/01/2026") == date(2026, 1, 31)
+    assert parse_day("2026-01-31") == date(2026, 1, 31)
+    assert parse_day("1 Jan 2026") == date(2026, 1, 1)
+    assert parse_month("01/01/2026") == (2026, 1)
+    assert parse_month("15/03/2026") == (2026, 3)
+    assert parse_month("Nov 2026") == (2026, 11)
+    assert parse_month("2026-11") == (2026, 11)
+    import pytest
+    with pytest.raises(ValueError):
+        parse_day("99/99/2026")
+
+
+def test_next_increment_due():
+    from datetime import date
+
+    from timeutil import next_due
+    assert next_due(date(2025, 3, 1), date(2025, 12, 1)) == date(2026, 3, 1)
+    assert next_due(date(2022, 3, 1), date(2025, 12, 1)) == date(2025, 3, 1)
+    assert next_due(date(2024, 2, 29), date(2024, 6, 1)) == date(2025, 2, 28)

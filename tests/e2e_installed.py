@@ -986,6 +986,17 @@ def main():
     ok(r.content[:4] == b"%PDF", "increment letter")
     post(s, f"/employees/{kid}/changes/{cid2}/cancel", {}, must="Cancelled")
     page(s, "/reports/changes", must="Senior Accounts Officer")
+    r = page(s, f"/reports/increment_list?year={today.year}&inc_only=1", must="Employee increment list")
+    ok("Senior Accounts Officer" in r.text and "3,000" in r.text, "increment list shows the month's increase")
+    r = page(s, f"/export/increment_list.xlsx?year={today.year}")
+    ws = load_workbook(io.BytesIO(r.content)).active
+    heads = [c.value for row in ws.iter_rows(max_row=8) for c in row if c.value]
+    ok({"Jan", "Dec", "Next due", "Increase in year"} <= set(heads), f"increment list excel columns: {heads}")
+    # dates typed by hand (a browser without a date / month picker)
+    page(s, "/reports/attendance?start=01/01/2026&end=31/01/2026", must="Daily attendance")
+    page(s, "/reports/hours?month=01/01/2026", must="2026-01")
+    r = s.get(BASE + "/reports/attendance?start=99/99/2026", timeout=30, headers={"Accept": "text/html"})
+    ok(r.status_code == 400 and "Please check" in r.text and "not understood" in r.text, "bad date: readable message")
     page(s, "/letters/promotion", must="Promotion letter")
     ok(h.post(BASE + f"/employees/{kid}/changes", data={"kind": "INCREMENT"}, timeout=30).status_code == 403,
        "only Admin records increments")
