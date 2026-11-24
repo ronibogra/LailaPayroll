@@ -67,3 +67,49 @@ def increase(ch) -> tuple[Decimal, Decimal]:
     amt = new - old
     pct = (amt * 100 / old).quantize(Decimal("0.01")) if old else Decimal(0)
     return amt, pct
+
+
+def due_list(db, days_ahead: int = 30, company_ids=None) -> list[dict]:
+    """Active staff whose yearly increment is due: 12 months after the last increment / promotion (or joining),
+    within `days_ahead` days or already overdue. Also lists changes already saved for a future date."""
+    from datetime import date, timedelta
+    today = now_local().date()
+    last: dict[int, date] = {}
+    upcoming: dict[int, EmployeeChange] = {}
+    for ch in db.scalars(select(EmployeeChange).where(EmployeeChange.status != "CANCELLED")):
+        if ch.status == "PENDING":
+            upcoming[ch.employee_id] = ch
+        if ch.new_gross and ch.new_gross != ch.old_gross:
+            last[ch.employee_id] = max(last.get(ch.employee_id, ch.effective_date), ch.effective_date)
+    stmt = select(Employee).where(Employee.employment_status == "ACTIVE")
+    if company_ids is not None:
+        stmt = stmt.where(Employee.company_id.in_(list(company_ids) or [0]))
+    out = []
+    for e in db.scalars(stmt):
+        base = last.get(e.id) or e.joined_on
+        if not base:
+            continue
+        try:
+            due = base.replace(year=base.year + 1)
+        except ValueError:          # 29 Feb
+            due = base.replace(year=base.year + 1, day=28)
+        while due + timedelta(days=366) <= today:       # several years without an increment: the latest due date
+            due = due.replace(year=due.year + 1) if not (due.month == 2 and due.day == 29) else due.replace(
+                year=due.year + 1, day=28)
+        pend = upcoming.get(e.id)
+        if due <= today + timedelta(days=days_ahead) or pend:
+            out.append({"e": e, "due": due, "last": last.get(e.id), "overdue": (today - due).days if due < today else 0,
+                        "pending": pend})
+    out.sort(key=lambda x: (x["pending"] is None and 0 or 1, x["due"]))
+    return out
+
+
+def notices_for(db, emp: Employee, days: int = 60) -> list[EmployeeChange]:
+    """Increments / promotions to show to the employee (approved in the last `days` days)."""
+    from datetime import timedelta
+    since = now_local() - timedelta(days=days)
+    return list(db.scalars(select(EmployeeChange).where(EmployeeChange.employee_id == emp.id,
+                                                        EmployeeChange.notify == True,  # noqa: E712
+                                                        EmployeeChange.status != "CANCELLED",
+                                                        EmployeeChange.created_at >= since)
+                           .order_by(EmployeeChange.effective_date.desc())))

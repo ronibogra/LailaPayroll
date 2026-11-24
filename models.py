@@ -163,6 +163,7 @@ class EmployeeChange(Base):
     new_gross: Mapped[Decimal] = mapped_column(Money, default=0)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(10), default="PENDING")   # PENDING (future date) / APPLIED / CANCELLED
+    notify: Mapped[bool] = mapped_column(Boolean, default=True)           # show a notice to the employee
     created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

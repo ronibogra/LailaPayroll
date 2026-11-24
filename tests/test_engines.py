@@ -285,3 +285,20 @@ def test_service_length_and_remarks_line():
     assert service_length(date(2026, 11, 1), date(2026, 11, 20)) == "20 days"
     body = "Dear {name},\n\nRemarks: {remarks}\n\nThanks"
     assert "Remarks" not in drop_empty_remarks(body, "") and "Remarks" in drop_empty_remarks(body, "Good work")
+
+
+def test_required_vs_worked_hours():
+    from types import SimpleNamespace as NS
+    from services.hours import add, blank, finish, shift_minutes
+    assert shift_minutes(time(9), time(18), 60, 300) == 480          # 9 h minus 1 h break
+    assert shift_minutes(time(20), time(5), 60, 300) == 480          # night shift
+    shifts = {"GENERAL": 480}
+    acc = blank()
+    day = lambda st, dt="WORKDAY", w=0: NS(status=st, day_type=dt, shift_code="GENERAL", worked_minutes=w,  # noqa: E731
+                                          ot_minutes=0, extra_ot_minutes=0, late_minutes=0)
+    for d in [day("PRESENT", w=500), day("PRESENT", w=420), day("ABSENT"), day("LEAVE_PAID"),
+              day("OFFDAY", "WEEKEND"), day("OFFDAY_WORK", "HOLIDAY", 240), day("NOT_EMPLOYED")]:
+        add(acc, d, shifts)
+    r = finish(acc)
+    assert r["work_days"] == 4 and r["leave_days"] == 1
+    assert r["required"] == 24.0 and r["worked"] == 19.3 and r["diff"] == -4.7

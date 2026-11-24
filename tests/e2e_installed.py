@@ -947,7 +947,19 @@ def main():
 
     step("increments & promotions with letters; working hours by month and year")
     r = page(s, f"/employees/{kid}", must="Working hours")
-    ok(f"{month_name_[m]}" in r.text and "h worked" in r.text, "working hours by month / year")
+    ok(f"{month_name_[m]}" in r.text and "h required" in r.text and "Achieved" in r.text,
+       "required vs worked hours by month / year")
+    r = page(s, f"/reports/hours?month={month}", must="Working hours (required vs worked)")
+    ok("Abdul Karim" in r.text, "hours report lists employees")
+    ws = load_workbook(io.BytesIO(page(s, f"/export/hours.xlsx?month={month}").content)).active
+    head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
+    ok({"Required h", "Worked h", "Difference h", "Achieved %"} <= set(head), f"hours report columns: {head}")
+    r = page(s, "/increments/due?days=30", must="Increments due")
+    ok("Ms. Karima" in r.text and "overdue" in r.text, "yearly increment due list")
+    post(s, f"/employees/{rid0}/changes", {"kind": "INCREMENT", "effective_date": str(today), "how": "AMOUNT",
+                                           "value": "1000", "notify": "1", "remarks": "Well done"}, must="applied now")
+    r = mob.get(HTTPS + "/m", verify=False, timeout=30)
+    ok("Congratulations" in r.text and "Well done" in r.text, "employee sees the increment notice on the phone")
     post(s, f"/employees/{kid}/changes", {"kind": "PROMOTION", "effective_date": str(today), "new_designation": "Senior Accountant",
                                           "how": "AMOUNT", "value": "100"}, must="needs a new designation or grade",
          must_not=None)

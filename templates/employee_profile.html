@@ -116,12 +116,13 @@
 <div><label>Note</label><input name="note"></div>
 </div><p><button>+ Give item</button></p></form>{% endif %}</div>
 <div class="panel" id="hours"><h3>Working hours</h3>
-{% for yr in hours %}<details {{ 'open' if loop.first }} style="margin-bottom:8px"><summary><b>{{ yr.year }}</b> - {{ yr.hours }} h worked · {{ yr.present }} days present · avg {{ yr.avg }} h/day · OT {{ yr.ot_h }} h · late {{ yr.late }} · absent {{ yr.absent }} · leave {{ yr.leave }}</summary>
-<div class="table-wrap"><table class="sum-table"><tr><th>Month</th><th>Days present</th><th>Hours worked</th><th>Avg h / day</th><th>OT hours</th><th>Late days</th><th>Absent</th><th>Leave</th></tr>
-{% for x in yr.months %}<tr><td style="text-align:left">{{ month_name[x.m] }}</td><td>{{ x.present }}</td><td><b>{{ x.hours }}</b></td><td>{{ x.avg }}</td><td>{{ x.ot_h }}</td><td>{{ x.late }}</td><td>{{ x.absent }}</td><td>{{ x.leave }}</td></tr>{% endfor %}
-<tr><th style="text-align:left">Total {{ yr.year }}</th><th>{{ yr.present }}</th><th>{{ yr.hours }}</th><th>{{ yr.avg }}</th><th>{{ yr.ot_h }}</th><th>{{ yr.late }}</th><th>{{ yr.absent }}</th><th>{{ yr.leave }}</th></tr></table></div></details>
+{% macro diffcell(x) %}<td style="color:{{ '#0b7a3e' if x.diff >= 0 else '#b3261e' }};font-weight:600">{{ '+' if x.diff > 0 }}{{ x.diff }}</td><td>{{ x.pct ~ '%' if x.pct is not none else '-' }}</td>{% endmacro %}
+{% for yr in hours %}<details {{ 'open' if loop.first }} style="margin-bottom:8px"><summary><b>{{ yr.year }}</b> - worked {{ yr.worked }} h of {{ yr.required }} h required ({{ yr.pct ~ '%' if yr.pct is not none else '-' }}) · {{ yr.present }} days present · OT {{ yr.ot }} h · late {{ yr.late }} · absent {{ yr.absent }} · leave {{ yr.leave }}</summary>
+<div class="table-wrap"><table class="sum-table"><tr><th>Month</th><th>Working days</th><th>Leave days</th><th>Required h</th><th>Worked h</th><th>Difference</th><th>Achieved</th><th>Days present</th><th>Avg h / day</th><th>OT h</th><th>Late</th><th>Absent</th></tr>
+{% for x in yr.months %}<tr><td style="text-align:left">{{ month_name[x.m] }}</td><td>{{ x.work_days }}</td><td>{{ x.leave_days }}</td><td>{{ x.required }}</td><td><b>{{ x.worked }}</b></td>{{ diffcell(x) }}<td>{{ x.present }}</td><td>{{ x.avg }}</td><td>{{ x.ot }}</td><td>{{ x.late }}</td><td>{{ x.absent }}</td></tr>{% endfor %}
+<tr><th style="text-align:left">Total {{ yr.year }}</th><th>{{ yr.work_days }}</th><th>{{ yr.leave_days }}</th><th>{{ yr.required }}</th><th>{{ yr.worked }}</th>{{ diffcell(yr) }}<th>{{ yr.present }}</th><th>{{ yr.avg }}</th><th>{{ yr.ot }}</th><th>{{ yr.late }}</th><th>{{ yr.absent }}</th></tr></table></div></details>
 {% else %}<p class="hint">No processed attendance yet.</p>{% endfor %}
-<p class="hint">From processed attendance (time between first and last punch, minus the unpaid break).</p></div>
+<p class="hint">Required = working days (not weekly off, holidays or approved leave) × office hours of the shift (start to end minus the unpaid break). Worked = first to last punch minus the break, also on off days worked.</p></div>
 <div class="panel" id="changes"><h3>Increments &amp; promotions</h3>
 <div class="table-wrap"><table><tr><th>Effective</th><th>Type</th><th>Designation</th><th>Grade</th><th>Department</th>{% if show_salary %}<th class="num">Gross before</th><th class="num">New gross</th><th class="num">Increase</th>{% endif %}<th>Remarks</th><th>Status</th><th></th></tr>
 {% for ch in changes %}<tr><td>{{ ch.effective_date.strftime('%d/%m/%Y') }}</td><td><b>{{ change_kinds.get(ch.kind, ch.kind) }}</b></td>
@@ -142,6 +143,7 @@
 <div><label>New department (blank = same)</label><input name="new_department" placeholder="{{ e.department.name if e.department }}"></div>
 <div><label>Salary increase</label><div style="display:flex;gap:6px"><select name="how"><option value="AMOUNT">Tk added to gross</option><option value="PERCENT">% of gross</option><option value="GROSS">New gross (Tk)</option><option value="NONE">No change</option></select><input name="value" placeholder="e.g. 2000 or 10" style="width:110px"></div></div>
 <div style="grid-column:1/-1"><label>Remarks (printed in the letter)</label><input name="remarks" style="width:100%" placeholder="e.g. Annual increment for excellent performance"></div>
+<div style="grid-column:1/-1"><label style="color:inherit"><input type="checkbox" name="notify" value="1" checked> Notify the employee (congratulations notice on My page and the phone)</label></div>
 </div><p class="hint">Current gross Tk {{ '{:,.0f}'.format(e.gross or 0) }}. The new gross is split into basic / house rent / medical / transport / food by the pay policy. A date in the future is applied automatically on that day; a date already passed is applied now (re-process the payroll of that month if it is already made).</p>
 <p><button>Save</button></p></form>{% endif %}</div>
 {% if 'employees.edit' in user.perms or sep %}

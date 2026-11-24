@@ -86,6 +86,8 @@ def render(request: Request, name: str, user: dict | None, **ctx) -> HTMLRespons
                err=request.query_params.get("err", ""))
     if user and user.get("must_change") and name != "me_password.html":
         return go("/me/password")      # the page explains why
+    if user and "salary.edit" in user["perms"] and "increments_due_count" not in ctx:
+        ctx["increments_due_count"] = _due_count(user)
     if user and {"leave.approve_dept", "leave.approve_final"} & user["perms"] and "pending_leave_count" not in ctx:
         try:
             with SessionLocal() as s:
@@ -93,6 +95,26 @@ def render(request: Request, name: str, user: dict | None, **ctx) -> HTMLRespons
         except Exception:  # noqa: BLE001 - the badge must never break a page
             ctx["pending_leave_count"] = 0
     return templates.TemplateResponse(request, name, ctx)
+
+
+_due_cache: dict = {}
+
+
+def _due_count(user) -> int:
+    """Increments due in the next 30 days (for the menu badge), refreshed at most once a minute."""
+    import time as _t
+    key = user.get("company_id") or 0
+    hit = _due_cache.get(key)
+    if hit and _t.time() - hit[0] < 60:
+        return hit[1]
+    try:
+        with SessionLocal() as s:
+            comps = [c.id for c in s.scalars(select(Company))] if not key else [key]
+            n = sum(1 for x in change_svc.due_list(s, 30, comps) if not x["pending"])
+    except Exception:  # noqa: BLE001 - the badge must never break a page
+        n = 0
+    _due_cache[key] = (_t.time(), n)
+    return n
 
 
 def dec(value: str, field: str) -> Decimal:
@@ -1060,30 +1082,27 @@ def idcards_pdf(request: Request, company: str = "", department: str = "", codes
 
 
 def _work_hours(db, emp) -> list[dict]:
-    """Working hours per month and per year from processed attendance (newest first)."""
+    """Required (office hours) vs worked hours per month and per year from processed attendance, newest first."""
+    from services import hours as hrs
+    shifts = hrs.shift_table(db)
     months: dict[tuple[int, int], dict] = {}
     for r in db.scalars(select(DailyAttendance).where(DailyAttendance.employee_id == emp.id)):
-        k = (r.work_date.year, r.work_date.month)
-        x = months.setdefault(k, {"present": 0, "late": 0, "absent": 0, "leave": 0, "min": 0, "ot": 0})
-        x["present"] += r.status in ("PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK")
-        x["late"] += (r.late_minutes or 0) > 0
-        x["absent"] += r.status == "ABSENT"
-        x["leave"] += r.status in ("LEAVE_PAID", "LEAVE_UNPAID")
-        x["min"] += r.worked_minutes or 0
-        x["ot"] += (r.ot_minutes or 0) + (r.extra_ot_minutes or 0)
+        hrs.add(months.setdefault((r.work_date.year, r.work_date.month), hrs.blank()), r, shifts)
     years: dict[int, dict] = {}
     for (y, m), x in sorted(months.items(), reverse=True):
-        yr = years.setdefault(y, {"year": y, "months": [], "present": 0, "late": 0, "absent": 0, "leave": 0,
-                                  "min": 0, "ot": 0})
-        yr["months"].append({"m": m, **x, "hours": round(x["min"] / 60, 1), "ot_h": round(x["ot"] / 60, 1),
-                             "avg": round(x["min"] / 60 / x["present"], 1) if x["present"] else 0})
-        for k in ("present", "late", "absent", "leave", "min", "ot"):
+        yr = years.setdefault(y, {"year": y, "months": [], **hrs.blank()})
+        for k in hrs.blank():
             yr[k] += x[k]
+        x = hrs.finish(dict(x))
+        yr["months"].append({"m": m, **x, "leave": x["leave_days"],
+                             "avg": round(x["worked_min"] / 60 / x["present"], 1) if x["present"] else 0})
     out = []
     for y in sorted(years, reverse=True):
-        yr = years[y]
-        yr.update(hours=round(yr["min"] / 60, 1), ot_h=round(yr["ot"] / 60, 1),
-                  avg=round(yr["min"] / 60 / yr["present"], 1) if yr["present"] else 0)
+        yr = hrs.finish(years[y])
+        yr.update(leave=yr["leave_days"], avg=round(yr["worked_min"] / 60 / yr["present"], 1) if yr["present"] else 0,
+                  hours=yr["worked"], ot_h=yr["ot"])
+        for x in yr["months"]:
+            x.update(hours=x["worked"], ot_h=x["ot"])
         out.append(yr)
     return out
 
@@ -1400,7 +1419,8 @@ async def employee_change_add(request: Request, emp_id: int, user=Depends(page_u
     ch = EmployeeChange(employee_id=emp.id, kind=kind, effective_date=eff, old_designation=emp.designation,
                         new_designation=new_des or None, old_grade=emp.grade, new_grade=new_grade or None,
                         old_department=cur_dept or None, new_department=(new_dept if new_dept != cur_dept else None) or None,
-                        old_gross=old_g, new_gross=new_g, remarks=v("remarks")[:2000] or None, created_by=user["username"])
+                        old_gross=old_g, new_gross=new_g, remarks=v("remarks")[:2000] or None, created_by=user["username"],
+                        notify=bool(f.get("notify")))
     db.add(ch)
     db.flush()
     ch.employee = emp
@@ -1414,6 +1434,15 @@ async def employee_change_add(request: Request, emp_id: int, user=Depends(page_u
     return go(back, msg=f"{change_svc.KINDS[kind]} saved - " + ("applied now. Re-process this month's payroll if "
                                                                  "it is already made." if applied else
                                                                  f"it will apply automatically on {eff:%d/%m/%Y}."))
+
+
+@app.get("/increments/due", response_class=HTMLResponse)
+def increments_due(request: Request, days: int = 30, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Notification list: yearly increments that are due soon or overdue, and changes waiting for their date."""
+    need(user, "salary.view")
+    days = max(0, min(days, 365))
+    rows = change_svc.due_list(db, days, [c.id for c in visible_companies(db, user)])
+    return render(request, "increments_due.html", user, rows=rows, days=days, today=now_local().date())
 
 
 @app.post("/employees/{emp_id}/changes/{change_id}/cancel")
@@ -3964,7 +3993,7 @@ def me_page(request: Request, user=Depends(page_user), db: Session = Depends(get
                                    .order_by(PayrollRun.year.desc(), PayrollRun.month.desc()).limit(12)).all(),
                   assets=db.scalars(select(EmployeeAsset).where(EmployeeAsset.employee_id == emp.id,
                                                                EmployeeAsset.status == "ISSUED")).all(),
-                  asset_cats=asset_svc.CATEGORIES)
+                  asset_cats=asset_svc.CATEGORIES, notices=change_svc.notices_for(db, emp))
 
 
 @app.get("/me/photo")
@@ -4195,6 +4224,7 @@ def mobile_page(request: Request, db: Session = Depends(get_db)):
                    my_leave=db.scalars(select(Leave).where(Leave.employee_id == emp.id)
                                        .order_by(Leave.start_date.desc()).limit(12)).all(),
                    labels=leave_svc.STATUS_LABEL, today=now_local().date(), tab=request.query_params.get("tab", ""),
+                   notices=change_svc.notices_for(db, emp),
                    slips=db.execute(select(PayrollLine, PayrollRun).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
                                     .where(PayrollLine.employee_id == emp.id, PayrollRun.status == "FINAL")
                                     .order_by(PayrollRun.year.desc(), PayrollRun.month.desc()).limit(12)).all())

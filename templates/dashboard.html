@@ -1,5 +1,6 @@
 {% extends "base.html" %}{% block title %}Dashboard{% endblock %}{% block heading %}Dashboard{% endblock %}
 {% block content %}
+{% if increments_due_count %}<div class="alert info">📈 {{ increments_due_count }} yearly increment(s) are due in the next 30 days or overdue. <a href="/increments/due">See who →</a></div>{% endif %}
 <div class="dash-hero">
   <div>
     <div class="hero-kicker">{{ brand.name }}</div>

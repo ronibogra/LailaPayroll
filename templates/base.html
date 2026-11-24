@@ -28,6 +28,7 @@
   {% if 'employees.view' in pm %}<a href="/employees" class="{{ 'active' if path.startswith('/employees') }}">Employees</a>
   <a class="sub {{ 'active' if path.startswith('/idcards') }}" href="/idcards">Print ID cards</a>
   <a class="sub {{ 'active' if path.startswith('/reports/separations') }}" href="/reports/separations">Former employees</a>{% endif %}
+  {% if 'salary.view' in pm %}<a href="/increments/due" class="{{ 'active' if path.startswith('/increments') }}">Increments due{% if increments_due_count %} <span class="count">{{ increments_due_count }}</span>{% endif %}</a>{% endif %}
   {% if 'payroll.view' in pm %}<a href="/payroll" class="{{ 'active' if path == '/payroll' or path.startswith('/payroll/line') }}">Payroll</a>{% endif %}
   {% if 'payroll.process' in pm %}{% set ptab = request.query_params.get('tab', 'manual') %}
   <a class="sub {{ 'active' if path == '/payroll/inputs' and ptab == 'manual' }}" href="/payroll/inputs?tab=manual">Employee-wise (manual)</a>

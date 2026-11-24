@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}Increments due{% endblock %}{% block heading %}Increments due{% endblock %}
+{% block content %}
+<div class="panel"><form class="inline" method="get"><div><label>Show increments due within</label><select name="days">{% for d in (0, 15, 30, 60, 90, 180) %}<option value="{{ d }}" {{ 'selected' if d == days }}>{{ 'overdue only' if d == 0 else d ~ ' days' }}</option>{% endfor %}</select></div><button class="sec">Show</button></form>
+<p class="hint" style="margin:8px 0 0">The yearly increment is counted 12 months after the last increment or promotion with a pay rise (or after joining if there was none). Record it on the employee's profile → Increments &amp; promotions.</p></div>
+<div class="panel"><div class="table-wrap"><table><tr><th>Employee</th><th>Company</th><th>Department</th><th>Designation</th><th>Joined</th><th>Last increment</th><th class="num">Gross</th><th>Due</th><th></th></tr>
+{% for x in rows %}{% set e = x.e %}<tr><td><a href="/employees/{{ e.id }}#changes"><b>{{ e.full_name }}</b></a> {{ e.employee_code }}</td><td>{{ e.company.code if e.company }}</td><td>{{ e.department.name if e.department }}</td><td>{{ e.designation or '' }}</td>
+<td>{{ e.joined_on.strftime('%d/%m/%Y') if e.joined_on }}</td><td>{{ x.last.strftime('%d/%m/%Y') if x.last else '-' }}</td><td class="num">{{ '{:,.0f}'.format(e.gross or 0) }}</td>
+<td>{% if x.pending %}<span class="tag yes">saved - from {{ x.pending.effective_date.strftime('%d/%m/%Y') }}</span>{% elif x.overdue %}<span class="tag ABSENT">{{ x.due.strftime('%d/%m/%Y') }} · {{ x.overdue }} days overdue</span>{% else %}<span class="tag DRAFT">{{ x.due.strftime('%d/%m/%Y') }}</span>{% endif %}</td>
+<td>{% if not x.pending and 'salary.edit' in user.perms %}<a class="btn sec" href="/employees/{{ e.id }}#changes">Give increment</a>{% endif %}</td></tr>
+{% else %}<tr><td colspan="9" class="empty">No increments due in this period.</td></tr>{% endfor %}</table></div></div>
+{% endblock %}

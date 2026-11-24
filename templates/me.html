@@ -1,5 +1,6 @@
 {% extends "base.html" %}{% block title %}My page{% endblock %}{% block heading %}My page{% endblock %}
 {% block content %}
+{% for n in notices %}<div class="alert ok">🎉 <b>Congratulations!</b> {% if n.kind == 'PROMOTION' and n.new_designation %}You are promoted to <b>{{ n.new_designation }}</b>{% if n.new_grade %} (grade {{ n.new_grade }}){% endif %}{% if n.new_gross != n.old_gross %} with a salary increment{% endif %}{% else %}Your salary increment is approved{% endif %}{% if n.new_gross != n.old_gross %}: new gross <b>Tk {{ '{:,.0f}'.format(n.new_gross) }}</b> (+Tk {{ '{:,.0f}'.format(n.new_gross - n.old_gross) }}){% endif %}, from <b>{{ n.effective_date.strftime('%d %B %Y') }}</b>.{% if n.remarks %} <i>{{ n.remarks }}</i>{% endif %}</div>{% endfor %}
 <div class="panel"><div class="profile-head">
 <img class="photo" src="/me/photo" alt="">
 <div style="flex:1"><h2>{{ e.full_name }}</h2>

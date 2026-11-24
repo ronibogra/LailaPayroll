@@ -521,6 +521,59 @@ def fetch_errors(db, user, p, export):
     return rows, p.get("source", ""), len(rows)
 
 
+# ------------------------------------------------------------ required vs worked hours
+class HoursRow:
+    def __init__(self, e, y, m, h):
+        self.e, self.y, self.m, self.h = e, y, m, h
+
+
+HOURS_COLS = [
+    Col("month", "Month", lambda r: f"{r.y}-{r.m:02d}"),
+    Col("code", "Code", lambda r: r.e.employee_code, link=lambda r: emp_link(r.e) + "#hours"),
+    Col("name", "Name", lambda r: r.e.full_name, link=lambda r: emp_link(r.e) + "#hours"),
+    Col("company", "Company", lambda r: r.e.company.code if r.e.company else ""),
+    Col("department", "Department", lambda r: r.e.department.name if r.e.department else ""),
+    Col("designation", "Designation", lambda r: r.e.designation, False),
+    Col("shift", "Shift", lambda r: r.e.shift.code if r.e.shift else "GENERAL", False),
+    Col("work_days", "Working days", lambda r: r.h["work_days"], kind="num"),
+    Col("leave_days", "Leave days", lambda r: r.h["leave_days"], kind="num"),
+    Col("required", "Required h", lambda r: r.h["required"], kind="num"),
+    Col("worked", "Worked h", lambda r: r.h["worked"], kind="num"),
+    Col("diff", "Difference h", lambda r: r.h["diff"], kind="num"),
+    Col("pct", "Achieved %", lambda r: r.h["pct"], kind="num"),
+    Col("present", "Days present", lambda r: r.h["present"], kind="num"),
+    Col("ot", "OT h", lambda r: r.h["ot"], kind="num"),
+    Col("late", "Late days", lambda r: r.h["late"], kind="num", default=False),
+    Col("absent", "Absent", lambda r: r.h["absent"], kind="num"),
+]
+
+
+def fetch_hours(db, user, p, export):
+    """Per employee and month: required hours (office hours on working days) vs hours actually worked."""
+    from calendar import monthrange
+    from services.hours import by_employee
+    y1, m1 = (int(x) for x in (p.get("month") or f"{now_local():%Y-%m}").split("-")[:2])
+    y2, m2 = (int(x) for x in (p.get("month_to") or f"{y1}-{m1:02d}").split("-")[:2])
+    a, b = sorted((y1 * 12 + m1 - 1, y2 * 12 + m2 - 1))
+    if b - a > 23:
+        raise Problem("Choose at most 24 months")
+    emps = list(db.scalars(select(Employee).where(*emp_conditions(p, user)).order_by(Employee.employee_code)))
+    rows = []
+    for k in range(a, b + 1):
+        y, m = divmod(k, 12)
+        m += 1
+        h = by_employee(db, [e.id for e in emps], date(y, m, 1), date(y, m, monthrange(y, m)[1]))
+        for e in emps:
+            if e.id in h:
+                rows.append(HoursRow(e, y, m, h[e.id]))
+    if p.get("short_only"):
+        rows = [r for r in rows if r.h["diff"] < 0]
+    req = sum(r.h["required"] for r in rows)
+    wk = sum(r.h["worked"] for r in rows)
+    sub_ = f"{len(rows)} row(s) · required {req:,.0f} h · worked {wk:,.0f} h" + (f" ({wk * 100 / req:.0f}%)" if req else "")
+    return rows, sub_ + _comp_name(db, _company(user, p)), len(rows)
+
+
 # ------------------------------------------------------------ increments & promotions
 CHANGE_COLS = [
     Col("code", "Code", lambda r: r[1].employee_code, link=lambda r: emp_link(r[1]) + "#changes"),
@@ -704,6 +757,10 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
            filters=EMP_F + ["asset_status", "asset_type", "asset_q"], totals=["qty", "value"],
            description="Company items given to employees - laptops, phones, SIMs, ID cards, uniforms, tools - "
                        "what is still with staff, returned, lost, and items still with people who have left."),
+    Report("hours", "Working hours (required vs worked)", "attendance.view", HOURS_COLS, fetch_hours,
+           filters=["month", "month_to"] + EMP_F + ["short_only"], totals=["required", "worked", "diff", "ot"],
+           description="For each employee and month: office hours required on working days (weekly offs, holidays and "
+                       "leave left out) compared with the hours actually worked - difference and % achieved."),
     Report("changes", "Increments & promotions", "employees.view", CHANGE_COLS, fetch_changes,
            filters=["start", "end"] + EMP_F + ["change_kind"], totals=["increase"],
            description="Every increment and promotion: designation, grade and gross before and after, increase in Tk "
@@ -719,5 +776,5 @@ REPORTS: dict[str, Report] = {r.id: r for r in [
     Report("errors", "Error log", "logs.view", ERROR_COLS, fetch_errors),
 ]}
 
-CENTRE = ["punches", "first_last", "attendance", "leaves", "jobcard", "employees", "payroll", "changes", "assets",
-          "separations"]
+CENTRE = ["punches", "first_last", "attendance", "hours", "leaves", "jobcard", "employees", "payroll", "changes",
+          "assets", "separations"]
