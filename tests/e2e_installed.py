@@ -954,6 +954,8 @@ def main():
     ws = load_workbook(io.BytesIO(page(s, f"/export/hours.xlsx?month={month}").content)).active
     head = [ws.cell(5, i).value for i in range(1, ws.max_column + 1)]
     ok({"Required h", "Worked h", "Difference h", "Achieved %"} <= set(head), f"hours report columns: {head}")
+    post(s, "/employees/import", files={"file": ("j.xlsx", xlsx([["employee_code", "joined_on"],
+                                                                 ["LTL-0001", "2024-01-01"]]))}, must="1 updated")
     r = page(s, "/increments/due?days=30", must="Increments due")
     ok("Ms. Karima" in r.text and "overdue" in r.text, "yearly increment due list")
     post(s, f"/employees/{rid0}/changes", {"kind": "INCREMENT", "effective_date": str(today), "how": "AMOUNT",
