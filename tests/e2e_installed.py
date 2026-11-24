@@ -911,6 +911,11 @@ def main():
     ok(pid, "mobile punch photo link")
     r = s.get(BASE + f"/punches/{pid.group(1)}/photo", timeout=30)
     ok(r.ok and r.headers["content-type"] == "image/jpeg", "punch photo")
+    r = page(s, f"/punches/photos?start={today}&end={today}", must="Md. Rahim")
+    ok(f"/punches/{pid.group(1)}/photo" in r.text, "photo gallery")
+    r = page(s, f"/punches?q=12127&start={date(y, m, 1)}&end={prev_last}", must="Weekly holidays")
+    ok("CI Holiday" in r.text and "Medical / sick leave: 2 day(s)" in r.text and "Public holidays" in r.text,
+       "employee month summary on punch records")
     page(s, "/cleanup", must="Mobile punch photos")
     post(s, "/cleanup/punch-photos", {"end": str(today), "confirm": "nope"}, must="Type DELETE", must_not=None)
     post(s, "/cleanup/punch-photos", {"end": str(today), "confirm": "DELETE"}, must="punch photo(s) deleted")

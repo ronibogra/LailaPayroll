@@ -15,7 +15,8 @@
   {% if 'punches.view' in pm or 'attendance.view' in pm or 'employees.view' in pm or 'payroll.view' in pm %}<a href="/reports" class="{{ 'active' if path.startswith('/reports') }}">📊 Reports</a>{% endif %}
   {% if 'punches.view' in pm or 'machines.manage' in pm %}<div class="nav-label">PUNCH</div>{% endif %}
   {% if 'punches.view' in pm %}<a href="/punches" class="{{ 'active' if path == '/punches' }}">Punch records</a>
-  <a href="/punches/first-last" class="{{ 'active' if path.startswith('/punches/first-last') }}">First &amp; last punch</a>{% endif %}
+  <a href="/punches/first-last" class="{{ 'active' if path.startswith('/punches/first-last') }}">First &amp; last punch</a>
+  <a href="/punches/photos" class="{{ 'active' if path.startswith('/punches/photos') }}">Mobile punch photos</a>{% endif %}
   {% if 'machines.manage' in pm %}<a href="/devices" class="{{ 'active' if path.startswith('/devices') }}">Machines</a>{% endif %}
   {% if 'attendance.view' in pm %}<div class="nav-label">ATTENDANCE</div>
   <a href="/attendance" class="{{ 'active' if path == '/attendance' }}">Daily attendance</a>

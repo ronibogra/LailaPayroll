@@ -2108,13 +2108,74 @@ def _dates(start: str, end: str) -> tuple[date, date]:
     return s_, e_
 
 
+def _month_summary(db, emp: Employee, y: int, m: int) -> dict:
+    """One employee's month: present, late, absent, weekly holidays, public holidays, leave by type."""
+    first, last = month_bounds(y, m)
+    rows = db.scalars(select(DailyAttendance).where(DailyAttendance.employee_id == emp.id,
+                                                    DailyAttendance.work_date >= first,
+                                                    DailyAttendance.work_date <= last)).all()
+    present_like = ("PRESENT", "LATE", "MISSING_OUT", "OFFDAY_WORK")
+    s = {"days": (last - first).days + 1, "processed": len(rows),
+         "present": sum(r.status in present_like for r in rows),
+         "on_time": sum(r.status == "PRESENT" for r in rows), "late": sum(r.late_minutes > 0 for r in rows),
+         "single": sum(r.status == "MISSING_OUT" for r in rows), "absent": sum(r.status == "ABSENT" for r in rows),
+         "weekend": sum(r.day_type == "WEEKEND" for r in rows),
+         "weekend_worked": sum(r.day_type == "WEEKEND" and r.status == "OFFDAY_WORK" for r in rows),
+         "holiday": sum(r.day_type == "HOLIDAY" for r in rows),
+         "holiday_worked": sum(r.day_type == "HOLIDAY" and r.status == "OFFDAY_WORK" for r in rows),
+         "leave_paid": sum(r.status == "LEAVE_PAID" for r in rows),
+         "leave_unpaid": sum(r.status == "LEAVE_UNPAID" for r in rows),
+         "not_employed": sum(r.status == "NOT_EMPLOYED" for r in rows),
+         "hours": round(sum(r.worked_minutes or 0 for r in rows) / 60, 1),
+         "ot": round(sum((r.ot_minutes or 0) + (r.extra_ot_minutes or 0) for r in rows) / 60, 1),
+         "late_min": sum(r.late_minutes or 0 for r in rows)}
+    hol_days = {r.work_date for r in rows if r.day_type == "HOLIDAY"}
+    names = {h.day: h.name for h in db.scalars(select(Holiday).where(Holiday.day >= first, Holiday.day <= last))}
+    from services.processing import holiday_applies
+    for h in db.scalars(select(SpecialHoliday).where(SpecialHoliday.day >= first, SpecialHoliday.day <= last)):
+        if holiday_applies(h, emp):
+            names.setdefault(h.day, h.name)
+    s["holiday_list"] = [(d, names.get(d, "Holiday")) for d in sorted(hol_days)]
+    by_type: dict[str, int] = {}
+    tnames = {t.code: t.name for t in leave_svc.types(db, active_only=False)}
+    for lv in db.scalars(select(Leave).where(Leave.employee_id == emp.id, Leave.status == "APPROVED",
+                                             Leave.start_date <= last, Leave.end_date >= first)):
+        n = (min(lv.end_date, last) - max(lv.start_date, first)).days + 1
+        k = tnames.get(lv.leave_type, lv.leave_type)
+        by_type[k] = by_type.get(k, 0) + n
+    s["leave_types"] = sorted(by_type.items())
+    return s
+
+
+def _one_employee(db, user, q: str) -> Employee | None:
+    q = (q or "").strip()
+    if not q:
+        return None
+    stmt = select(Employee).where(or_(Employee.employee_code == q, Employee.card_no == q))
+    e = db.scalar(stmt)
+    if not e:
+        found = db.scalars(select(Employee).where(Employee.full_name.ilike(f"%{q}%")).limit(2)).all()
+        e = found[0] if len(found) == 1 else None
+    if e and user.get("company_id") and e.company_id != user["company_id"]:
+        return None
+    return e
+
+
 @app.get("/punches", response_class=HTMLResponse)
 def punches_page(request: Request, page: int = 1, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "punches.view")
     p = dict(request.query_params)
     r = report_ctx(db, user, "punches", p)
     s_, e_ = _dates(p.get("start", ""), p.get("end", ""))
+    emp = _one_employee(db, user, p.get("q", ""))
+    sm = None
+    if emp and "attendance.view" in user["perms"]:
+        sy, smn = (int(x) for x in p["sum_month"].split("-")) if p.get("sum_month", "")[:4].isdigit() else (s_.year, s_.month)
+        sm = {"emp": emp, "y": sy, "m": smn, **_month_summary(db, emp, sy, smn),
+              "prev": f"{(date(sy, smn, 1) - timedelta(days=1)):%Y-%m}",
+              "next": f"{(date(sy, smn, 28) + timedelta(days=5)):%Y-%m}"}
     return render(request, "punches.html", user, r=r, start=s_, end=e_, company=company_filter(user, p.get("company")) or "",
+                  sm=sm,
                   q=p.get("q", ""), machine=p.get("machine", ""), source=p.get("source", ""), unknown=p.get("unknown", ""),
                   page=max(page, 1), pages=max(1, -(-r["total"] // 200)), companies=visible_companies(db, user),
                   machines=db.scalars(select(Device).order_by(Device.name)).all())
@@ -3822,6 +3883,33 @@ def staff_login_settings(enabled: str = Form(""), default_password: str = Form("
     audit(db, user, "STAFF_LOGIN_SETTINGS", f"enabled={bool(enabled)}", commit=False)
     db.commit()
     return go("/users#staff", msg="Staff login settings saved")
+
+
+@app.get("/punches/photos", response_class=HTMLResponse)
+def punch_photo_gallery(request: Request, start: str = "", end: str = "", q: str = "", company: str = "",
+                        outside: str = "", page: int = 1, user=Depends(page_user), db: Session = Depends(get_db)):
+    """All camera photos taken with mobile punches: who, when, where."""
+    need(user, "punches.view")
+    s_, e_ = _dates(start or str(now_local().date() - timedelta(days=6)), end or str(now_local().date()))
+    stmt = (select(AttendanceLog, Employee).outerjoin(Employee, Employee.card_no == AttendanceLog.card_no)
+            .where(AttendanceLog.photo.is_not(None),
+                   AttendanceLog.punch_time >= datetime.combine(s_, time.min),
+                   AttendanceLog.punch_time < datetime.combine(e_ + timedelta(days=1), time.min)))
+    cid = company_filter(user, company)
+    if cid:
+        stmt = stmt.where(Employee.company_id == cid)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(AttendanceLog.card_no == q.strip(), Employee.employee_code == q.strip(),
+                              Employee.full_name.ilike(like)))
+    if outside:
+        stmt = stmt.where(AttendanceLog.note.ilike("%OUTSIDE%"))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    per = 60
+    rows = db.execute(stmt.order_by(AttendanceLog.punch_time.desc()).offset((max(page, 1) - 1) * per).limit(per)).all()
+    return render(request, "punch_photos.html", user, rows=rows, total=total, page=max(page, 1),
+                  pages=max(1, -(-total // per)), start=s_, end=e_, q=q, company=cid or "", outside=outside,
+                  companies=visible_companies(db, user), data_dir=str(DATA_DIR))
 
 
 @app.get("/punches/{log_id}/photo")

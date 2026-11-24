@@ -9,7 +9,24 @@
 <div><label>Source</label><select name="source"><option value="">All</option>{% for s in ('ZKTECO','HIKVISION','FILE','USB','MANUAL','MOBILE') %}<option {{ 'selected' if s == source }}>{{ s }}</option>{% endfor %}</select></div>
 <div><label><input type="checkbox" name="unknown" value="1" {{ 'checked' if unknown }}> only IDs that are not employees</label></div>
 <button class="sec">Show</button>
-<a class="btn" href="/punches/first-last?{{ request.url.query }}">First &amp; last punch</a></form></div>
+<a class="btn" href="/punches/first-last?{{ request.url.query }}">First &amp; last punch</a>
+<a class="btn sec" href="/punches/photos?start={{ start }}&end={{ end }}&q={{ q|urlencode }}">📷 Mobile photos</a></form>
+<p class="hint" style="margin:8px 0 0">Type one employee's ID, code or name to see their month summary.</p></div>
+{% if sm %}{% set e = sm.emp %}
+<div class="panel" id="summary"><h3>{{ e.full_name }} ({{ e.employee_code }}) - {{ month_name[sm.m] }} {{ sm.y }}
+<span style="font-weight:400;font-size:13px;margin-left:8px"><a href="?{{ request.url.query|replace('&sum_month=', '&x=') }}&sum_month={{ sm.prev }}#summary">‹ previous</a> · <a href="?{{ request.url.query|replace('&sum_month=', '&x=') }}&sum_month={{ sm.next }}#summary">next ›</a> · <a href="/employees/{{ e.id }}">profile</a></span></h3>
+{% if not sm.processed %}<p class="hint">This month is not processed yet - Daily attendance → Process month.</p>{% else %}
+<div class="table-wrap"><table class="sum-table">
+<tr><th>Days in month</th><th>Present</th><th>On time</th><th>Late</th><th>Single punch</th><th>Absent</th><th>Weekly holidays</th><th>Public holidays</th><th>Leave (paid)</th><th>Leave (unpaid)</th><th>Hours worked</th><th>OT hours</th></tr>
+<tr><td>{{ sm.days }}{% if sm.not_employed %}<div class="hint" style="margin:0">{{ sm.not_employed }} not employed</div>{% endif %}</td>
+<td><b>{{ sm.present }}</b></td><td>{{ sm.on_time }}</td><td>{{ sm.late }}{% if sm.late_min %}<div class="hint" style="margin:0">{{ sm.late_min }} min</div>{% endif %}</td><td>{{ sm.single }}</td><td>{{ sm.absent }}</td>
+<td>{{ sm.weekend }}{% if sm.weekend_worked %}<div class="hint" style="margin:0">worked {{ sm.weekend_worked }}</div>{% endif %}</td>
+<td>{{ sm.holiday }}{% if sm.holiday_worked %}<div class="hint" style="margin:0">worked {{ sm.holiday_worked }}</div>{% endif %}</td>
+<td>{{ sm.leave_paid }}</td><td>{{ sm.leave_unpaid }}</td><td>{{ sm.hours }}</td><td>{{ sm.ot }}</td></tr></table></div>
+<div class="grid2" style="margin-top:10px">
+<div><b>Public holidays</b>{% for d, n in sm.holiday_list %}<div>{{ d.strftime('%a %d/%m') }} - {{ n }}</div>{% else %}<div class="hint">None this month</div>{% endfor %}</div>
+<div><b>Leave taken</b>{% for n, d in sm.leave_types %}<div>{{ n }}: {{ d }} day(s)</div>{% else %}<div class="hint">None this month</div>{% endfor %}</div>
+</div>{% endif %}</div>{% endif %}
 {% if 'punches.edit' in user.perms %}
 <div class="grid2">
 <div class="panel"><h3>Download from machines</h3><p class="hint">Gets new punches from every active machine now (it also runs automatically).</p>

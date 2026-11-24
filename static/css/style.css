@@ -140,3 +140,7 @@ details.tbl{margin-top:6px}details.tbl summary{cursor:pointer;color:var(--muted)
 .cam{position:relative;width:200px;height:200px;margin:10px auto;border-radius:50%;overflow:hidden;background:#1f2733;border:4px solid #00a651}
 .cam video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}.cam-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#fff;font-size:12px;padding:16px}
 .cam-msg:empty{display:none}
+.sum-table th,.sum-table td{text-align:center}.sum-table td b{font-size:16px}
+.photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.photo-card{background:#fff;border:1px solid #e3e6eb;border-radius:10px;overflow:hidden;font-size:12.5px}
+.photo-card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#eef0f3}.photo-card div{padding:7px 9px}

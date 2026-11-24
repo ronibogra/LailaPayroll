@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block title %}Mobile punch photos{% endblock %}{% block heading %}Mobile punch photos ({{ total }}){% endblock %}
+{% block content %}
+<div class="panel"><form class="inline" method="get">
+<div><label>From</label><input type="date" name="start" value="{{ start }}"></div><div><label>To</label><input type="date" name="end" value="{{ end }}"></div>
+{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == company }}>{{ c.code }}</option>{% endfor %}</select></div>{% endif %}
+<div><label>Employee (ID, code or name)</label><input name="q" value="{{ q }}"></div>
+<div><label style="color:inherit"><input type="checkbox" name="outside" value="1" {{ 'checked' if outside }}> only outside the office</label></div>
+<button class="sec">Show</button> <a class="btn sec" href="/punches?source=MOBILE&start={{ start }}&end={{ end }}">Punch list</a></form>
+<p class="hint" style="margin:8px 0 0">Click a photo to open it full size. On the server the files are in <code>{{ data_dir }}\punch_photos\&lt;year-month&gt;\</code>.{% if 'backup.manage' in user.perms %} Delete old photos: <a href="/cleanup">Storage &amp; cleanup</a>.{% endif %}</p></div>
+<div class="photo-grid">
+{% for lg, e in rows %}<div class="photo-card"><a href="/punches/{{ lg.id }}/photo" target="_blank"><img src="/punches/{{ lg.id }}/photo" loading="lazy" alt=""></a>
+<div><b>{{ e.full_name if e else lg.card_no }}</b> <span class="hint">{{ e.employee_code if e else '' }}</span><br>
+{{ lg.punch_time.strftime('%a %d/%m/%Y %I:%M %p') }}<br>
+{% if lg.latitude %}<a href="https://maps.google.com/?q={{ lg.latitude }},{{ lg.longitude }}" target="_blank">📍 map</a>{% endif %}
+{% if lg.note %}<span class="{{ 'tag ABSENT' if 'OUTSIDE' in lg.note else 'hint' }}" style="margin:0">{{ lg.note }}</span>{% endif %}</div></div>
+{% else %}<div class="empty">No mobile punch photos for these filters.</div>{% endfor %}
+</div>
+{% if pages > 1 %}<div class="pager">{% if page > 1 %}<a class="btn sec" href="?start={{ start }}&end={{ end }}&q={{ q|urlencode }}&company={{ company }}&outside={{ outside }}&page={{ page - 1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }}</span>{% if page < pages %}<a class="btn sec" href="?start={{ start }}&end={{ end }}&q={{ q|urlencode }}&company={{ company }}&outside={{ outside }}&page={{ page + 1 }}">Next ›</a>{% endif %}</div>{% endif %}
+{% endblock %}
