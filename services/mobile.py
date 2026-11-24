@@ -84,13 +84,52 @@ def login(db: Session, code: str, pin: str) -> Employee:
     return emp
 
 
+def _photo_dir():
+    from config import DATA_DIR
+    return DATA_DIR / "punch_photos"
+
+
+def photo_required(db: Session) -> bool:
+    from services.policy import get_setting
+    return (get_setting(db, "mobile_photo_required", default="1") or "1") == "1"
+
+
+def check_photo(content: bytes | None) -> bytes:
+    """The picture taken by the phone camera at the moment of punching -> small JPEG."""
+    from PIL import Image, ImageOps
+    import io as _io
+    if not content:
+        raise MobileError("A photo from the camera is required - allow the camera for this site and try again")
+    if len(content) > 4 * 1024 * 1024:
+        raise MobileError("Photo too large")
+    try:
+        im = ImageOps.exif_transpose(Image.open(_io.BytesIO(content))).convert("RGB")
+    except Exception:  # noqa: BLE001
+        raise MobileError("The camera photo could not be read - try again")
+    if im.width < 120 or im.height < 120:
+        raise MobileError("The camera photo is too small - try again")
+    im.thumbnail((640, 640))
+    buf = _io.BytesIO()
+    im.save(buf, "JPEG", quality=78)
+    return buf.getvalue()
+
+
+def save_photo(log: AttendanceLog, jpeg: bytes) -> str:
+    rel = f"{log.punch_time:%Y-%m}/{log.id}_{log.card_no}.jpg".replace("/", "/")
+    d = _photo_dir() / f"{log.punch_time:%Y-%m}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{log.id}_{log.card_no}.jpg").write_bytes(jpeg)
+    return rel
+
+
 def punch(db: Session, emp: Employee, lat: float, lon: float, accuracy: float,
-          client_ip: str | None = None) -> AttendanceLog:
+          client_ip: str | None = None, photo: bytes | None = None) -> AttendanceLog:
     if not settings.mobile_enabled:
         raise MobileError("Mobile attendance is switched off")
     if not emp.allow_mobile or emp.employment_status != "ACTIVE":
         raise MobileError("Mobile attendance is not enabled for you")
     dist, inside = check_location(db, lat, lon, accuracy)
+    jpeg = check_photo(photo) if (photo or photo_required(db)) else None
     now = now_local()
     last = db.scalar(select(AttendanceLog).where(AttendanceLog.card_no == emp.card_no)
                      .order_by(AttendanceLog.punch_time.desc()).limit(1))
@@ -102,6 +141,9 @@ def punch(db: Session, emp: Employee, lat: float, lon: float, accuracy: float,
                         + ("" if inside else " - OUTSIDE office area"),
                         client_ip=(client_ip or "")[:45] or None, created_by=emp.employee_code)
     db.add(log)
+    db.flush()
+    if jpeg:
+        log.photo = save_photo(log, jpeg)
     db.commit()
     return log
 

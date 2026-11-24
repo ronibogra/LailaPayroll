@@ -1,0 +1,22 @@
+{% extends "base.html" %}{% block title %}Storage & cleanup{% endblock %}{% block heading %}Storage &amp; cleanup{% endblock %}
+{% block content %}
+<div class="panel"><h3>Space used on the server</h3><div class="table-wrap"><table><tr><th>Folder</th><th class="num">Files</th><th class="num">Size</th></tr>
+{% for label, n, size in usage %}<tr><td>{{ label }}</td><td class="num">{{ n }}</td><td class="num">{{ '%.1f'|format(size / 1048576) }} MB</td></tr>{% endfor %}</table></div>
+<p class="hint">Make a <a href="/backup">backup</a> before deleting - deleted files cannot be brought back from the program.</p></div>
+<div class="grid2">
+<div class="panel"><h3>Delete mobile punch photos</h3>
+<p class="hint">Removes the camera photos only; the punches (time, location) stay.{% if first %} Oldest photo: {{ first.strftime('%d/%m/%Y') }}.{% endif %}</p>
+<form method="post" action="/cleanup/punch-photos"><div class="form-grid">
+<div><label>From (blank = oldest)</label><input type="date" name="start"></div>
+<div><label>To *</label><input type="date" name="end" required value="{{ today.replace(day=1) }}"></div>
+<div><label>Only this employee code (optional)</label><input name="employee_code"></div>
+<div><label>Type DELETE to confirm</label><input name="confirm" required></div>
+</div><p><button class="red">Delete punch photos</button></p></form></div>
+<div class="panel"><h3>Photos of former employees</h3>
+<p class="hint">{{ left_photos }} former employee(s) still have a photo or signature on the server.</p>
+<form method="post" action="/cleanup/left-photos"><div><label>Type DELETE to confirm</label><input name="confirm" required></div><p><button class="red">Delete their photos &amp; signatures</button></p></form>
+<p class="hint">One employee's photo: Employees → Edit → "remove current photo". Documents: delete them in the profile.</p>
+<h3 style="margin-top:16px">Mobile punch photo</h3>
+<form method="post" action="/cleanup/settings"><label style="color:inherit"><input type="checkbox" name="photo_required" value="1" {{ 'checked' if photo_required }}> A camera photo is required for every mobile punch</label><p><button class="sec">Save</button></p></form></div>
+</div>
+{% endblock %}

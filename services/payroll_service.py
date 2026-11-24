@@ -62,9 +62,13 @@ def run_payroll(db: Session, company_id: int, year: int, month: int, user: dict)
             sal = salary_of(e, policy)
             a = adjustments.get(emp_id)
             adj = None
+            month_tax = Decimal(e.monthly_tax or 0)      # employee's monthly tax unless typed for this month
             if a:
-                adj = Adjustments(a.other_addition, a.advance, a.other_deduction, a.tax, a.note or "",
+                adj = Adjustments(a.other_addition, a.advance, a.other_deduction,
+                                  a.tax if (a.tax or 0) > 0 else month_tax, a.note or "",
                                   items=json.loads(a.items_json or "[]"), overrides=json.loads(a.overrides_json or "{}"))
+            elif month_tax > 0:
+                adj = Adjustments(tax=month_tax)
             r = compute_pay(sal, att, policy, adj, comp_svc.for_employee(e, comps, per_emp))
         except (ValueError, ArithmeticError) as exc:     # one bad value must not stop everyone's payroll
             errors.append(f"{e.employee_code}: {exc}" if not str(exc).startswith(e.employee_code) else str(exc))

@@ -3,6 +3,7 @@
 <div class="panel"><form class="inline" method="get">{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == company }}>{{ c.code }}</option>{% endfor %}</select></div>{% endif %}<div><label>Date</label><input type="date" name="day" value="{{ day }}"></div>
 <div><label>Status</label><select name="att_status"><option value="">All</option>{% for s, lab in [('CAME','Present - everyone who came'),('PRESENT','On time'),('LATE','Late'),('MISSING_OUT','In only / single punch'),('ABSENT','Absent'),('LEAVE_PAID','Leave (paid)'),('LEAVE_UNPAID','Leave (unpaid)'),('OFFDAY','Off day'),('OFFDAY_WORK','Worked off day')] %}<option value="{{ s }}" {{ 'selected' if s == status }}>{{ lab }}</option>{% endfor %}</select></div>
 <button class="sec">Show</button>
+<a class="btn" href="/attendance/today{{ '?company=' ~ company if company }}" title="Refresh and show everyone present today">📅 Today - present</a>
 <a class="btn sec" href="/attendance/month.xlsx?month={{ day.strftime('%Y-%m') }}&company={{ company }}">Month Excel (job card)</a></form></div>
 {% if 'attendance.process' in user.perms %}
 <div class="grid2">

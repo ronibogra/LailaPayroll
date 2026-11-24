@@ -9,7 +9,9 @@
 ;  4. Opens the first-time setup page in the browser.
 
 #define AppName "SPhere Payroll - LAILA GROUP Attendance & Payroll"
-#define AppVersion "4.0.0"
+#ifndef AppVersion
+  #define AppVersion "4.2.0"
+#endif
 #define AppGuid "6C1E2B7A-4F3D-4E1B-9A57-1A9D2B3C4E5F"
 #define HttpPort "8585"
 #define HttpsPort "8443"

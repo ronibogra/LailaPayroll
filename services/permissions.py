@@ -10,6 +10,7 @@ PERMS: dict[str, str] = {
     "mobile.manage": "Allow mobile punch and set employees' mobile PINs (Admin)",
     "appointment.letter": "Appointment, confirmation, release letters and experience certificates (Admin)",
     "assets.manage": "Edit asset records and transfer assets to another employee (Admin)",
+    "employees.delete": "Delete employee records and their files (Admin)",
     "punches.view": "See punch records and first & last punch",
     "punches.edit": "Import punch files, manual punches, download from machines",
     "machines.manage": "Add / edit / remove machines",
@@ -37,7 +38,7 @@ PERMS: dict[str, str] = {
 GROUPS = [
     ("General", ["dashboard.view", "reports.export", "self.service"]),
     ("Employees", ["employees.view", "employees.edit", "salary.view", "salary.edit", "mobile.manage",
-                   "appointment.letter", "assets.manage"]),
+                   "appointment.letter", "assets.manage", "employees.delete"]),
     ("Punch & machines", ["punches.view", "punches.edit", "machines.manage"]),
     ("Attendance", ["attendance.view", "attendance.process", "shifts.manage", "holidays.manage"]),
     ("Leave", ["leave.manage", "leave.approve_dept", "leave.approve_final", "leave.policy"]),

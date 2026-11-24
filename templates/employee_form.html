@@ -46,6 +46,7 @@
 <div><label>{{ lbl }}</label><input name="{{ fld }}" value="{{ e[fld] if e else '' }}"></div>{% endfor %}
 <div><label>Payment mode</label><select name="payment_mode">{% for m in ('CASH','BANK','MOBILE') %}<option {{ 'selected' if e and e.payment_mode == m }}>{{ m }}</option>{% endfor %}</select></div>
 {{ f('bank_name', 'Bank / wallet (bKash, Nagad...)') }}{{ f('account_no', 'Account / wallet number') }}
+<div><label>Monthly tax / TDS (Tk, deducted every month)</label><input name="monthly_tax" value="{{ e.monthly_tax if e and e.monthly_tax else '' }}" placeholder="0"></div>
 <div><label>Split pay (part bank / wallet, rest cash)</label><div style="display:flex;gap:6px"><select name="split_mode"><option value="">No - all by pay mode</option><option value="FIXED" {{ 'selected' if e and e.split_mode == 'FIXED' }}>Fixed Tk to bank, rest cash</option><option value="PERCENT" {{ 'selected' if e and e.split_mode == 'PERCENT' }}>% to bank, rest cash</option></select>
 <input name="split_value" value="{{ e.split_value if e and e.split_mode else '' }}" placeholder="Tk or %" style="width:90px"></div></div>
 <div><input type="hidden" name="ot_field" value="1"><label><input type="checkbox" name="ot_eligible" value="1" {{ 'checked' if not e or e.ot_eligible is not false }}> Overtime applies to this employee</label></div>

@@ -50,6 +50,7 @@
 {% if show_salary %}<div>Gross salary</div><div><b>Tk {{ '{:,.0f}'.format(e.gross) }}</b></div>
 <div>Basic / house rent</div><div>{{ '{:,.0f}'.format(e.basic) }} / {{ '{:,.0f}'.format(e.house_rent) }}</div>
 <div>Medical / transport / food</div><div>{{ '{:,.0f}'.format(e.medical) }} / {{ '{:,.0f}'.format(e.transport) }} / {{ '{:,.0f}'.format(e.food) }}</div>
+{% if e.monthly_tax %}<div>Monthly tax (TDS)</div><div>Tk {{ '{:,.0f}'.format(e.monthly_tax) }}</div>{% endif %}
 <div>Payment</div><div>{{ e.payment_mode }} {{ e.bank_name or '' }} {{ e.account_no or '' }}{% if e.split_mode == 'FIXED' %} · split: Tk {{ '{:,.0f}'.format(e.split_value) }} to {{ 'bank' if e.payment_mode == 'BANK' else 'wallet' }}, rest cash{% elif e.split_mode == 'PERCENT' %} · split: {{ '%g'|format(e.split_value) }}% to {{ 'bank' if e.payment_mode == 'BANK' else 'wallet' }}, rest cash{% endif %}</div>
 {% for c in components %}<div>{{ c.name }}</div><div>{{ '+' if c.kind == 'ADD' else '-' }} {{ c.value }} <small class="hint">{{ calcs[c.calc] }}</small></div>{% endfor %}{% endif %}
 <div>Overtime</div><div>{{ 'not eligible' if e.ot_eligible is false else 'as per company policy' }}</div>
@@ -165,6 +166,13 @@
 <div class="panel" id="history"><h3>History</h3><div class="table-wrap" style="max-height:360px"><table>
 {% for when, ico, text in history %}<tr><td style="white-space:nowrap">{{ when.strftime('%d/%m/%Y') }}</td><td>{{ ico }}</td><td>{{ text }}</td></tr>
 {% else %}<tr><td class="hint">Nothing yet.</td></tr>{% endfor %}</table></div></div>
+{% if 'employees.delete' in user.perms %}
+<details class="panel" id="delete"><summary><b style="color:#b3261e">Delete this employee</b></summary>
+<p class="hint" style="margin-top:8px">Only for a record made by mistake or a duplicate. Someone who really worked here should be marked as left (Leaving the company) so their history and payslips stay. Deletes attendance, leave, documents, assets, letters, photo and draft payroll lines; finalized payroll cannot be deleted.</p>
+<form method="post" action="/employees/{{ e.id }}/delete" onsubmit="return confirm('Delete {{ e.employee_code }} {{ e.full_name }} for good?')">
+<label style="color:inherit"><input type="checkbox" name="with_punches" value="1"> Also delete their punch records (card {{ e.card_no }})</label>
+<div style="margin-top:8px"><label>Type the employee code <b>{{ e.employee_code }}</b> to confirm</label><input name="confirm" required></div>
+<p><button class="red">Delete employee</button></p></form></details>{% endif %}
 <div class="panel" id="documents"><h3>Documents &amp; certificates</h3>
 <div class="table-wrap"><table><tr><th>Type</th><th>Title</th><th>File</th><th>Size</th><th>Uploaded</th><th></th></tr>
 {% for d in documents %}<tr><td>{{ doc_types.get(d.doc_type, d.doc_type) }}</td><td>{{ d.title }}</td><td><a href="/employees/{{ e.id }}/documents/{{ d.id }}" target="_blank">{{ d.original_name }}</a></td>

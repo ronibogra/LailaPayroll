@@ -25,9 +25,11 @@
   {% elif tab != 'leave' %}
   <div class="clock" id="clock">--:--</div><div class="date" id="date"></div>
   {% if emp.allow_mobile %}
+  <div class="cam"><video id="cam" autoplay playsinline muted></video><canvas id="snap" style="display:none"></canvas>
+  <div class="cam-msg" id="camMsg">Starting camera…</div></div>
   <button class="punch-btn" id="punch">PUNCH</button>
   <div class="m-msg" id="msg"></div>
-  <div class="readonly-box" id="loc">📍 Your location is taken automatically from the phone's GPS when you press PUNCH - you can punch from anywhere. It cannot be typed or changed.</div>
+  <div class="readonly-box" id="loc">📍📷 When you press PUNCH, your photo is taken with the camera and your location from the GPS - automatically. Photos cannot be uploaded and the location cannot be typed or changed.</div>
   {% else %}<div class="alert info">Mobile punch is not enabled for you. You can still request leave.</div>{% endif %}
   <div class="panel"><h3>Today</h3><div id="list">
   {% for p in punches %}<div>{{ p.punch_time.strftime('%I:%M %p') }} <span class="tag">{{ p.source }}</span>{% if p.latitude %} <small class="hint">📍 {{ '%.5f'|format(p.latitude) }}, {{ '%.5f'|format(p.longitude) }}</small>{% endif %}</div>{% else %}<div class="hint" id="none">No punches yet today.</div>{% endfor %}
@@ -52,7 +54,7 @@
   {% endif %}
   <p style="text-align:center"><a href="/m/logout">Log out</a></p>
 {% endif %}
-<div class="product-foot"><img src="/static/img/sphere-payroll-small.png" alt="SPhere Payroll"><p class="hint">{{ settings.developer_credit }}</p></div>
+<div class="product-foot"><img src="/static/img/sphere-payroll-small.png" alt="SPhere Payroll"><p class="hint">{{ settings.developer_credit }}<br>Version {{ app_version }}</p></div>
 </div>
 {% if emp %}
 <script>
@@ -60,13 +62,35 @@ const $ = id => document.getElementById(id);
 if ($("clock")) { const tick=()=>{const n=new Date();$("clock").textContent=n.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   $("date").textContent=n.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long',year:'numeric'});}; tick(); setInterval(tick, 10000); }
 function say(text, ok){$("msg").textContent=text;$("msg").style.color=ok?"#0b5d31":"#8f1714";}
-if ($("punch")) $("punch").onclick = () => {
+let stream = null;
+async function startCam() {
+  const m = $("camMsg");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { m.textContent = "This phone/browser cannot use the camera. A camera photo is required to punch."; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "user", width: {ideal: 640}, height: {ideal: 640}}, audio: false});
+    $("cam").srcObject = stream; m.textContent = "";
+  } catch (e) { m.textContent = "Camera permission denied. Allow the camera for this site - a photo is required to punch."; }
+}
+function snap() {
+  return new Promise(res => {
+    const v = $("cam"), c = $("snap");
+    if (!stream || !v.videoWidth) { res(null); return; }
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    c.toBlob(b => res(b), "image/jpeg", 0.85);
+  });
+}
+if ($("cam")) startCam();
+if ($("punch")) $("punch").onclick = async () => {
   if (!navigator.geolocation) { say("This phone/browser cannot share location. Location is required for mobile punch."); return; }
+  const photo = await snap();
+  if (!photo) { say("Camera is not ready - allow the camera and wait for your face to show, then press PUNCH."); startCam(); return; }
   const btn = $("punch"); btn.disabled = true; say("Getting your location…", true);
   navigator.geolocation.getCurrentPosition(async pos => {
     const fd = new FormData();
     fd.append("latitude", pos.coords.latitude); fd.append("longitude", pos.coords.longitude);
     fd.append("accuracy", Math.round(pos.coords.accuracy));
+    fd.append("photo", photo, "camera.jpg");
     try {
       const r = await fetch("/m/punch", {method: "POST", body: fd, credentials: "same-origin"});
       const j = await r.json();
@@ -75,7 +99,7 @@ if ($("punch")) $("punch").onclick = () => {
       if (j.ok) { const none=$("none"); if (none) none.remove();
         $("loc").textContent = "📍 Recorded location: " + j.location + " ";
         const a=document.createElement("a"); a.href=j.map; a.target="_blank"; a.textContent="map"; $("loc").appendChild(a);
-        const d=document.createElement("div"); d.textContent = j.time + " "; const t=document.createElement("span"); t.className="tag"; t.textContent="MOBILE"; d.appendChild(t); $("list").appendChild(d); }
+        const d=document.createElement("div"); d.textContent = j.time + " "; const t=document.createElement("span"); t.className="tag"; t.textContent="MOBILE 📷"; d.appendChild(t); $("list").appendChild(d); }
     } catch (e) { say("No connection to the server. Are you on the office Wi-Fi?"); }
     btn.disabled = false;
   }, err => {

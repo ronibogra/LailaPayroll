@@ -61,6 +61,14 @@ def wait_up():
     raise AssertionError("server did not answer /health")
 
 
+def selfie() -> dict:
+    """What the phone camera sends with a mobile punch."""
+    from PIL import Image
+    b = io.BytesIO()
+    Image.new("RGB", (480, 480), (200, 170, 150)).save(b, "JPEG")
+    return {"photo": ("camera.jpg", b.getvalue(), "image/jpeg")}
+
+
 def xlsx(rows) -> bytes:
     wb = Workbook()
     for r in rows:
@@ -301,10 +309,14 @@ def main():
     ok(r.ok and "Employee ID" in r.text, f"mobile page: {r.status_code}")
     r = mob.post(HTTPS + "/m/login", data={"employee_code": "HO-0001", "pin": "4321"}, verify=False, timeout=30)
     ok("PUNCH" in r.text, "mobile login failed")
-    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.8001", "longitude": "90.4001", "accuracy": "15"},
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.8001", "longitude": "90.4001", "accuracy": "15"}, files=selfie(),
                verify=False, timeout=30)
     ok(r.json().get("ok"), f"mobile punch inside office: {r.text}")
-    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.90", "longitude": "90.40", "accuracy": "15"},
+    time.sleep(1)
+    r2 = mob.post(HTTPS + "/m/punch", data={"latitude": "23.8001", "longitude": "90.4001", "accuracy": "15"},
+                  verify=False, timeout=30)
+    ok(not r2.json().get("ok") and "photo" in r2.json()["message"].lower(), f"punch without camera photo: {r2.text}")
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.90", "longitude": "90.40", "accuracy": "15"}, files=selfie(),
                verify=False, timeout=30)
     ok(not r.json().get("ok"), "punch far away must be refused")
 
@@ -578,7 +590,8 @@ def main():
     post(s, "/settings/general", {"wd4": "1", "geofence_lat": "23.80", "geofence_lon": "90.40", "geofence_radius_m": "200",
                                   "geofence_mode": "RECORD"}, must="Saved")
     page(s, "/settings", must='value="RECORD" selected')
-    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.90", "longitude": "90.40", "accuracy": "15"}, verify=False,
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "23.90", "longitude": "90.40", "accuracy": "15"}, files=selfie(),
+                 verify=False,
                  timeout=30)
     ok(r.json()["ok"] and "OUTSIDE" in r.json()["location"] or "Already punched" in r.json()["message"],
        f"RECORD mode must keep far punches: {r.text}")
@@ -588,7 +601,8 @@ def main():
     post(s, "/settings/general", {"wd4": "1", "geofence_lat": "", "geofence_lon": "", "geofence_radius_m": "200",
                                   "geofence_mode": "ANYWHERE"}, must="Saved")
     time.sleep(1)
-    r = mob.post(HTTPS + "/m/punch", data={"latitude": "22.3569", "longitude": "91.7832", "accuracy": "20"}, verify=False,
+    r = mob.post(HTTPS + "/m/punch", data={"latitude": "22.3569", "longitude": "91.7832", "accuracy": "20"}, files=selfie(),
+                 verify=False,
                  timeout=30)
     ok(r.json()["ok"] or "Already punched" in r.json()["message"], f"ANYWHERE mode must accept any place: {r.text}")
     page(s, f"/punches?start={today}&end={today}&source=MOBILE", must="maps.google.com/?q=")
@@ -888,6 +902,43 @@ def main():
          must_not=None)                                     # their staff login is closed
     page(s, "/letters/release", must="Release letter")
     ok(h.get(BASE + f"/employees/{kid}", timeout=30).text.count("/letter/") == 0, "letters are Admin only")
+
+    step("version, monthly tax, punch photos & cleanup, delete employee, Today button")
+    ok("Version 4.2." in page(s, "/").text and requests.get(BASE + "/health", timeout=30).json()["version"].startswith("4.2."),
+       "software version must be shown")
+    r = page(s, f"/punches?start={today}&end={today}&source=MOBILE")
+    pid = re.search(r"/punches/(\d+)/photo", r.text)
+    ok(pid, "mobile punch photo link")
+    r = s.get(BASE + f"/punches/{pid.group(1)}/photo", timeout=30)
+    ok(r.ok and r.headers["content-type"] == "image/jpeg", "punch photo")
+    page(s, "/cleanup", must="Mobile punch photos")
+    post(s, "/cleanup/punch-photos", {"end": str(today), "confirm": "nope"}, must="Type DELETE", must_not=None)
+    post(s, "/cleanup/punch-photos", {"end": str(today), "confirm": "DELETE"}, must="punch photo(s) deleted")
+    ok(s.get(BASE + f"/punches/{pid.group(1)}/photo", timeout=30).status_code == 404, "photo must be gone")
+    post(s, "/cleanup/left-photos", {"confirm": "DELETE"}, must="former employees deleted")
+    post(s, "/employees/save", {"emp_id": kar, "company_id": "2", "employee_code": "LTL-0001", "card_no": "2002",
+                                "full_name": "Ms. Karima", "department": "Sewing", "gross": "13550", "auto_split": "1",
+                                "payment_mode": "BANK", "bank_name": "Dutch-Bangla Bank", "account_no": "1011100055555",
+                                "split_mode": "FIXED", "split_value": "5000", "monthly_tax": "450",
+                                "employment_status": "ACTIVE"}, files={"_": ("", b"")}, must="Monthly tax (TDS)")
+    post(s, "/payroll/inputs", {"tab": "tax", "company_id": "2", "month": month, "emp": kar, f"tax_{kar}": "",
+                                "process": "1"}, must="Draft payroll ready")
+    post(s, "/report-columns/payroll", {"col": ["code", "tax"], "back": "/reports/payroll"})
+    ws = load_workbook(io.BytesIO(page(s, f"/export/payroll.xlsx?company=2&month={month}").content)).active
+    ok(ws.cell(6, 1).value == "LTL-0001" and float(ws.cell(6, 2).value) == 450, f"monthly tax: {ws.cell(6, 2).value}")
+    post(s, "/report-columns/payroll", {"reset": "1", "back": "/reports/payroll"})
+    post(s, "/employees/import", files={"file": ("d.xlsx", xlsx([["company", "employee_code", "full_name"],
+                                                                 ["LTL", "DEL-1", "Entered by mistake"]]))},
+         must="1 added")
+    did = re.search(r'/employees/(\d+)/edit">Edit', page(s, "/employees?q=DEL-1").text).group(1)
+    post(s, f"/employees/{did}/delete", {"confirm": "wrong"}, must="Type the employee code", must_not=None)
+    post(s, f"/employees/{did}/delete", {"confirm": "DEL-1"}, must="DEL-1 Entered by mistake deleted")
+    ok(s.get(BASE + f"/employees/{did}", timeout=30, headers={"accept": "text/html"}).status_code == 404, "deleted")
+    post(s, f"/employees/{kid}/delete", {"confirm": "12127"}, must="finalized payroll", must_not=None)
+    ok(c.post(BASE + f"/employees/{kid}/delete", data={"confirm": "12127"}, timeout=30).status_code == 403,
+       "only Admin deletes employees")
+    r = page(s, "/attendance/today", must="Today - present")
+    ok('value="CAME" selected' in r.text, "Today button shows only people present")
 
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")

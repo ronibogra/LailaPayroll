@@ -91,6 +91,7 @@ EMP_COLS = [
     Col("birth_cert", "Birth certificate", lambda e: e.birth_certificate_no, False),
     Col("passport", "Passport", lambda e: e.passport_no, False),
     Col("weekly_off", "Own weekly off", lambda e: _wo(e.weekly_off), False),
+    Col("monthly_tax", "Monthly tax", lambda e: e.monthly_tax or 0, False, kind="money"),
     Col("split", "Split pay", lambda e: (f"Tk {e.split_value:,.0f} to bank, rest cash" if e.split_mode == "FIXED" else
                                          f"{e.split_value:g}% to bank, rest cash" if e.split_mode == "PERCENT" else ""),
         False),
@@ -136,6 +137,8 @@ PUNCH_COLS = [
     Col("direction", "In/Out", lambda r: r.p.direction),
     Col("source", "Source", lambda r: r.p.source),
     Col("note", "Note", lambda r: r.p.note, False),
+    Col("photo", "Photo", lambda r: "photo" if getattr(r.p, "photo", None) else "",
+        link=lambda r: f"/punches/{r.p.id}/photo" if getattr(r.p, "photo", None) else ""),
     Col("location", "Location", lambda r: f"{r.p.latitude:.5f}, {r.p.longitude:.5f}" if r.p.latitude else "",
         link=lambda r: f"https://maps.google.com/?q={r.p.latitude},{r.p.longitude}" if r.p.latitude else ""),
 ]

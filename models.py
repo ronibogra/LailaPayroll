@@ -100,6 +100,7 @@ class Employee(Base):
     # part to bank / wallet when the rest is paid in cash: "" = all by pay mode, FIXED = Tk amount, PERCENT = % of net
     split_mode: Mapped[str] = mapped_column(String(10), default="")
     split_value: Mapped[Decimal] = mapped_column(Money, default=0)
+    monthly_tax: Mapped[Decimal] = mapped_column(Money, default=0)   # income tax (TDS) deducted every month
     bank_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     account_no: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
@@ -204,6 +205,7 @@ class AttendanceLog(Base):
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
     accuracy_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
     client_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    photo: Mapped[str | None] = mapped_column(String(120), nullable=True)   # mobile punch selfie (punch_photos/...)
     note: Mapped[str | None] = mapped_column(String(250), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)

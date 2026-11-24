@@ -37,7 +37,7 @@ COLUMNS = ["company", "employee_code", "card_no", "full_name", "department", "de
            "payment_mode", "bank_name", "account_no", "status",
            "father_name", "mother_name", "spouse_name", "date_of_birth", "gender", "blood_group", "religion",
            "marital_status", "nid", "birth_certificate_no", "passport_no", "phone", "email", "emergency_contact", "present_address", "permanent_address",
-           "education", "notes", "weekly_off", "bank_part"]
+           "education", "notes", "weekly_off", "bank_part", "monthly_tax"]
 TEXT_PROFILE = ("father_name", "mother_name", "spouse_name", "gender", "blood_group", "religion", "marital_status",
                 "nid", "birth_certificate_no", "passport_no", "phone", "email", "emergency_contact", "present_address", "permanent_address", "education",
                 "notes", "designation", "section", "grade", "bank_name", "account_no")
@@ -58,7 +58,7 @@ def template_bytes() -> bytes:
     ws.append(["HO", "12127", "12127", "Md. Example", "Accounts", "Officer", "", "", "GENERAL", "2024-01-15", None,
                25000, None, None, None, None, None, "BANK", "Dutch-Bangla Bank", "1234567890", "ACTIVE",
                "Father Name", "Mother Name", "", "1990-05-01", "Male", "B+", "Islam", "Married", "", "", "", "01700000000",
-               "", "Wife: 01800000000", "Dhaka", "Bogura", "BBA", "", "Fri", ""])
+               "", "Wife: 01800000000", "Dhaka", "Bogura", "BBA", "", "Fri", "", ""])
     help_ws = wb.create_sheet("Help")
     for line in [
         "Only employee_code is required. Fill whatever else you have - you can upload again later to add more.",
@@ -70,6 +70,7 @@ def template_bytes() -> bytes:
         "payment_mode: CASH, BANK or MOBILE. status: ACTIVE or INACTIVE. Dates: YYYY-MM-DD or real Excel dates.",
         "shift_code must exist on the Shifts page (empty = GENERAL shift). Photos are added on the employee page.",
         "weekly_off: the employee's own day(s) off, e.g. Fri, or Sat,Sun, or NONE (works every day). Empty = shift / Settings.",
+        "monthly_tax: income tax (TDS) in Tk deducted every month (Payroll > Tax can change one month).",
         "bank_part: salary partly by bank / wallet, rest in cash: 5000 = Tk 5,000 to bank, 60% = 60% to bank, NONE = all by pay mode.",
         "Column names like 'Name', 'Employee ID', 'Card No', 'Joining Date', 'Mobile', 'Gross Salary' also work.",
     ]:
@@ -199,6 +200,11 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
                 if mode not in ("CASH", "BANK", "MOBILE"):
                     raise ValueError("payment_mode must be CASH, BANK or MOBILE")
                 p["payment_mode"] = mode
+            mt = _money(get("monthly_tax")) if allow_salary else None
+            if mt is not None:
+                if mt < 0:
+                    raise ValueError("monthly_tax cannot be negative")
+                p["monthly_tax"] = mt
             bp = (_text(get("bank_part")) or "").strip().replace(",", "") if allow_salary else ""
             if bp:
                 if bp.upper() in ("NONE", "NO", "0"):

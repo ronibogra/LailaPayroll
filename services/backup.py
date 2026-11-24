@@ -23,7 +23,7 @@ from config import DATA_DIR, settings
 DB_FILE = DATA_DIR / "laila_payroll.db"
 PENDING = DATA_DIR / "restore_pending.zip"
 EXTRA_FILES = ("secret.key", "settings.env", "https-cert.pem", "https-key.pem")
-EXTRA_DIRS = ("photos", "branding", "documents")
+EXTRA_DIRS = ("photos", "branding", "documents", "punch_photos")
 PREFIX = "LailaPayroll_backup_"
 APP_VERSION = "3.2.0"
 

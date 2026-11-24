@@ -8,3 +8,4 @@ build/
 dist/
 installer/Output/
 *.spec
+build_info.py

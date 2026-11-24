@@ -32,6 +32,8 @@ jobs:
 
       - name: Build LailaPayroll program (PyInstaller)
         run: |
+          "BUILD = `"$env:GITHUB_RUN_NUMBER`"`nBUILT_ON = `"$((Get-Date).ToString('yyyy-MM-dd'))`"" | Set-Content build_info.py -Encoding ascii
+          Get-Content build_info.py
           python -m PyInstaller --noconfirm --clean --onedir --noconsole --name LailaPayroll `
             --icon installer\sphere.ico `
             --add-data "templates;templates" --add-data "static;static" `
@@ -44,7 +46,7 @@ jobs:
       - name: Build installer (Inno Setup)
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q installer\LailaPayroll.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DAppVersion=4.2.$env:GITHUB_RUN_NUMBER" installer\LailaPayroll.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           Get-Item installer\Output\LailaPayroll_Setup.exe | Format-List Name, Length
 

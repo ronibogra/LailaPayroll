@@ -11,7 +11,7 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Req
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse, PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, delete
 from sqlalchemy.orm import Session
 
 from config import settings, DATA_DIR
@@ -60,7 +60,9 @@ migrate.upgrade(engine, Base.metadata)
 app = FastAPI(title=settings.app_name, version="3.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
-templates.env.globals.update(settings=settings, month_name=month_name, brand=branding.BRAND)
+from version import VERSION, BUILT_ON
+templates.env.globals.update(settings=settings, month_name=month_name, brand=branding.BRAND, app_version=VERSION,
+                             built_on=BUILT_ON)
 _state = {"setup_done": None, "started": False}
 
 
@@ -456,7 +458,7 @@ async def employees_photos(request: Request, user=Depends(page_user), db: Sessio
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "app": settings.app_name, "time": now_local().isoformat(sep=" ")}
+    return {"status": "healthy", "app": settings.app_name, "version": VERSION, "time": now_local().isoformat(sep=" ")}
 
 
 # ---------------------------------------------------------------- first-run setup wizard
@@ -1500,6 +1502,56 @@ async def letter_template_save(request: Request, kind: str, user=Depends(page_us
     return go(f"/letters/{kind}", msg=f"{letter_svc.KINDS[kind][0]} text saved")
 
 
+@app.post("/employees/{emp_id}/delete")
+def employee_delete(emp_id: int, confirm: str = Form(""), with_punches: str = Form(""), user=Depends(page_user),
+                    db: Session = Depends(get_db)):
+    """Admin: remove an employee completely (e.g. entered by mistake). People who really worked here should be
+    marked as left instead, so their history stays. Finalized payroll is never deleted."""
+    need(user, "employees.delete")
+    emp = _emp_or_404(db, user, emp_id)
+    back = f"/employees/{emp.id}#delete"
+    if confirm.strip() != emp.employee_code:
+        return go(back, err=f"Type the employee code {emp.employee_code} to confirm")
+    final = db.scalar(select(func.count(PayrollLine.id)).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
+                      .where(PayrollLine.employee_id == emp.id, PayrollRun.status == "FINAL")) or 0
+    if final:
+        return go(back, err=f"{emp.full_name} is on {final} finalized payroll(s), which are kept as financial records. "
+                            "Use 'Leaving the company' to mark them as left instead")
+    from services.photos import PHOTO_DIR
+    files = 0
+    for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)):
+        docs.delete_file(d.stored_name)
+        files += 1
+        db.delete(d)
+    for lv in db.scalars(select(Leave).where(Leave.employee_id == emp.id)):
+        if lv.document:
+            docs.delete_file(lv.document)
+        db.delete(lv)
+    for model in (DailyAttendance, EmployeeAsset, EmployeeSeparation, PayrollAdjustment, EmployeeComponent):
+        db.execute(delete(model).where(model.employee_id == emp.id))
+    db.execute(delete(PayrollLine).where(PayrollLine.employee_id == emp.id))       # draft payroll only (final checked)
+    for u in db.scalars(select(User).where(User.employee_id == emp.id)):
+        if u.role == "STAFF":
+            db.delete(u)
+        else:
+            u.employee_id = None
+    punches = 0
+    if with_punches:
+        for lg in db.scalars(select(AttendanceLog).where(AttendanceLog.card_no == emp.card_no)):
+            if lg.photo:
+                (DATA_DIR / "punch_photos" / lg.photo).unlink(missing_ok=True)
+            db.delete(lg)
+            punches += 1
+    for name in (emp.photo, emp.signature):
+        if name and "/" not in name and ".." not in name:
+            (PHOTO_DIR / name).unlink(missing_ok=True)
+    code, name = emp.employee_code, emp.full_name
+    db.delete(emp)
+    audit(db, user, "EMPLOYEE_DELETE", f"{code} {name}: {files} document(s), {punches} punch(es) deleted", commit=False)
+    db.commit()
+    return go("/employees", msg=f"{code} {name} deleted" + (f" with {punches} punch records" if punches else ""))
+
+
 @app.post("/employees/{emp_id}/documents")
 async def employee_docs_upload(request: Request, emp_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "employees.edit")
@@ -1703,6 +1755,10 @@ async def employee_save(request: Request, user=Depends(page_user), db: Session =
             if sm and e.payment_mode == "CASH":
                 raise ValueError("Split pay needs pay mode BANK or MOBILE (that part goes there, the rest is cash)")
             e.split_mode, e.split_value = sm, sv
+            mt = dec(val("monthly_tax"), "Monthly tax")
+            if mt < 0:
+                raise ValueError("Monthly tax cannot be negative")
+            e.monthly_tax = mt
         if "shifts.manage" in user["perms"] and f.get("ew_mode"):
             e.weekly_off = weekly_off_from_form(f, "ew")
         if can_salary:
@@ -1927,6 +1983,18 @@ def zk_ping():
 
 
 # ---------------------------------------------------------------- attendance
+@app.get("/attendance/today")
+def attendance_today(company: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
+    """'Today' button: refresh today's attendance, then list only the people present today."""
+    need(user, "attendance.view")
+    t = now_local().date()
+    if "attendance.process" in user["perms"]:
+        ids = [c.id for c in visible_companies(db, user)]
+        process_month(db, t.year, t.month, company_ids=ids)
+    q = f"/attendance?day={t}&att_status=CAME" + (f"&company={company}" if company else "")
+    return go(q)
+
+
 @app.get("/attendance", response_class=HTMLResponse)
 def attendance_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "attendance.view")
@@ -2964,7 +3032,8 @@ INPUT_TABS = {
                                                             ("note", "Note")],
                  "help": "Salary advances to recover and deductions like fines, loss or canteen bills."},
     "tax": {"title": "Tax", "cols": [("tax", "Income tax / TDS (Tk)")],
-            "help": "Income tax deducted at source this month."},
+            "help": "Income tax deducted at source this month. Empty = the employee's monthly tax from their profile "
+                    "(shown in grey); type an amount to use a different figure this month."},
     "other": {"title": "Other", "cols": [("other_addition", "Other addition (Tk)"), ("note", "Note")],
               "help": "Arrears, night allowance, special bonus or any other one-time payment."},
 }
@@ -3755,6 +3824,107 @@ def staff_login_settings(enabled: str = Form(""), default_password: str = Form("
     return go("/users#staff", msg="Staff login settings saved")
 
 
+@app.get("/punches/{log_id}/photo")
+def punch_photo(log_id: int, user=Depends(page_user), db: Session = Depends(get_db)):
+    """The camera photo taken with a mobile punch."""
+    need(user, "punches.view")
+    log = db.get(AttendanceLog, log_id)
+    if not log or not log.photo or ".." in log.photo:
+        raise HTTPException(404, "No photo")
+    if user.get("company_id"):
+        e = db.scalar(select(Employee).where(Employee.card_no == log.card_no))
+        check_company(user, e.company_id if e else None)
+    path = DATA_DIR / "punch_photos" / log.photo
+    if not path.exists():
+        raise HTTPException(404, "The photo was deleted")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+# ---------------------------------------------------------------- storage & cleanup (Admin)
+def _dir_size(path) -> tuple[int, int]:
+    n = size = 0
+    if path.exists():
+        for f in path.rglob("*"):
+            if f.is_file():
+                n += 1
+                size += f.stat().st_size
+    return n, size
+
+
+@app.get("/cleanup", response_class=HTMLResponse)
+def cleanup_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    folders = [("punch_photos", "Mobile punch photos"), ("photos", "Employee photos & signatures"),
+               ("documents", "Employee documents & letters"), ("backups", "Backups")]
+    usage = [(label, *_dir_size(DATA_DIR / d)) for d, label in folders]
+    first = db.scalar(select(func.min(AttendanceLog.punch_time)).where(AttendanceLog.photo.is_not(None)))
+    left_photos = db.scalar(select(func.count(Employee.id)).where(Employee.employment_status != "ACTIVE",
+                                                                  or_(Employee.photo.is_not(None),
+                                                                      Employee.signature.is_not(None)))) or 0
+    return render(request, "cleanup.html", user, usage=usage, first=first, left_photos=left_photos,
+                  photo_required=mobile.photo_required(db), today=now_local().date())
+
+
+@app.post("/cleanup/punch-photos")
+def cleanup_punch_photos(start: str = Form(""), end: str = Form(...), employee_code: str = Form(""),
+                         confirm: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
+    """Delete mobile punch photos (the punches themselves stay)."""
+    need(user, "backup.manage")
+    if confirm != "DELETE":
+        return go("/cleanup", err="Type DELETE to confirm")
+    try:
+        s = date.fromisoformat(start) if start else date(2000, 1, 1)
+        e = date.fromisoformat(end)
+    except ValueError:
+        return go("/cleanup", err="Give valid dates")
+    stmt = select(AttendanceLog).where(AttendanceLog.photo.is_not(None),
+                                       AttendanceLog.punch_time >= datetime.combine(s, time.min),
+                                       AttendanceLog.punch_time < datetime.combine(e + timedelta(days=1), time.min))
+    if employee_code.strip():
+        emp = db.scalar(select(Employee).where(Employee.employee_code == employee_code.strip()))
+        if not emp:
+            return go("/cleanup", err=f"No employee {employee_code.strip()}")
+        stmt = stmt.where(AttendanceLog.card_no == emp.card_no)
+    n = 0
+    for lg in db.scalars(stmt):
+        if ".." not in lg.photo:
+            (DATA_DIR / "punch_photos" / lg.photo).unlink(missing_ok=True)
+        lg.photo = None
+        n += 1
+    audit(db, user, "PUNCH_PHOTOS_DELETE", f"{s}..{e} {employee_code.strip() or 'all'}: {n} photo(s)", commit=False)
+    db.commit()
+    return go("/cleanup", msg=f"{n} punch photo(s) deleted - the punches are kept")
+
+
+@app.post("/cleanup/left-photos")
+def cleanup_left_photos(confirm: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
+    """Delete photos and signatures of employees who have left."""
+    need(user, "backup.manage")
+    if confirm != "DELETE":
+        return go("/cleanup", err="Type DELETE to confirm")
+    from services.photos import PHOTO_DIR
+    n = 0
+    for e in db.scalars(select(Employee).where(Employee.employment_status != "ACTIVE")):
+        for attr in ("photo", "signature"):
+            name = getattr(e, attr)
+            if name:
+                if "/" not in name and ".." not in name:
+                    (PHOTO_DIR / name).unlink(missing_ok=True)
+                setattr(e, attr, None)
+                n += 1
+    audit(db, user, "LEFT_PHOTOS_DELETE", f"{n} file(s)", commit=False)
+    db.commit()
+    return go("/cleanup", msg=f"{n} photo / signature file(s) of former employees deleted")
+
+
+@app.post("/cleanup/settings")
+def cleanup_settings(photo_required: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    set_setting(db, "mobile_photo_required", "1" if photo_required else "0")
+    audit(db, user, "SETTINGS_SAVE", f"mobile punch photo required={bool(photo_required)}")
+    return go("/cleanup", msg="Saved")
+
+
 @app.get("/m", response_class=HTMLResponse)
 def mobile_page(request: Request, db: Session = Depends(get_db)):
     if request.url.scheme != "https" and request.headers.get("x-forwarded-proto") != "https":
@@ -3800,13 +3970,15 @@ def mobile_logout():
 
 
 @app.post("/m/punch")
-def mobile_punch(request: Request, latitude: float = Form(...), longitude: float = Form(...),
-                 accuracy: float = Form(...), db: Session = Depends(get_db)):
+async def mobile_punch(request: Request, latitude: float = Form(...), longitude: float = Form(...),
+                       accuracy: float = Form(...), photo: UploadFile | None = File(None),
+                       db: Session = Depends(get_db)):
     emp = mobile_employee(request, db)
     if not emp:
         return JSONResponse({"ok": False, "message": "Please log in again"}, status_code=401)
     try:
-        log = mobile.punch(db, emp, latitude, longitude, accuracy, client_ip=request.client.host if request.client else None)
+        log = mobile.punch(db, emp, latitude, longitude, accuracy, client_ip=request.client.host if request.client else None,
+                           photo=await photo.read() if photo is not None else None)
     except mobile.MobileError as exc:
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
     return {"ok": True, "message": f"Punch recorded at {log.punch_time:%I:%M %p}", "time": f"{log.punch_time:%H:%M}",
