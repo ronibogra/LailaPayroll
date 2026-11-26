@@ -4373,8 +4373,6 @@ async def delete_centre_run(request: Request, key: str, user=Depends(page_user),
     audit(db, user, "DELETE_" + key.upper(), f"{'all matching ' + str(p) if ids is None else str(len(ids)) + ' ticked'}"
           f": {msg}", commit=False)
     db.commit()
-    if key in ("users", "companies"):
-        _state.pop("setup_done", None)
     return go(back, msg=msg) if not kept or done else go(back, err=msg)
 
 
