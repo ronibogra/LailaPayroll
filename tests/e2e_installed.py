@@ -1028,6 +1028,33 @@ def main():
     ok(h.post(BASE + "/bulk/employees", data={"ids": bids, "action": "delete", "confirm": "DELETE"},
               timeout=30).status_code == 403, "bulk delete is for Admin only")
 
+    step("HTTPS: local certificate authority, trusted chain, HTTP -> HTTPS for people, machines stay on HTTP")
+    page(s, "/https", must="Valid until")
+    der = requests.get(BASE + "/https/ca.crt", timeout=30).content           # no login needed
+    ok(der[:1] == b"\x30", "CA certificate download (DER)")
+    ok(b"certutil -addstore" in requests.get(BASE + "/https/install-ca.bat", timeout=30).content, "installer .bat")
+    import ssl as _ssl
+    import tempfile
+    ca_pem = tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False)
+    ca_pem.write(_ssl.DER_cert_to_PEM_cert(der))
+    ca_pem.close()
+    r = requests.get(HTTPS + "/health", verify=ca_pem.name, timeout=30)      # real TLS check against our CA
+    ok(r.status_code == 200, "HTTPS trusted with the installed CA (no warning)")
+    post(s, "/https/settings", {"force": "1"}, must="Open this page once over HTTPS", must_not=None)
+    sh = requests.Session()
+    sh.verify = ca_pem.name
+    r = sh.post(HTTPS + "/login", data={"username": "admin", "password": "Admin@12345"}, timeout=30)
+    ok("Dashboard" in r.text, "login over HTTPS")
+    r = sh.post(HTTPS + "/https/settings", data={"force": "1"}, timeout=30)
+    ok("now sent to HTTPS" in r.text, f"switch HTTPS on: {r.text[:300]}")
+    r = requests.get(BASE + "/employees?q=1", allow_redirects=False, timeout=30)
+    ok(r.status_code == 307 and r.headers["location"].startswith("https://") and "/employees?q=1" in r.headers["location"],
+       f"HTTP is forwarded to HTTPS: {r.status_code} {r.headers.get('location')}")
+    r = requests.get(BASE + "/iclock/cdata?SN=CI-HTTPS&options=all", allow_redirects=False, timeout=30)
+    ok(r.status_code == 200, f"machines still push over HTTP: {r.status_code}")
+    r = sh.post(HTTPS + "/https/settings", data={}, timeout=30)
+    ok(requests.get(BASE + "/login", allow_redirects=False, timeout=30).status_code == 200, "HTTPS switch off again")
+
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")
     name = re.search(r"(LailaPayroll_backup_[0-9_]+_manual\.zip)", r.text).group(1)

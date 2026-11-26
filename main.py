@@ -53,7 +53,7 @@ from timeutil import parse_month as _parse_month
 BASE_DIR = Path(__file__).resolve().parent
 MOBILE_COOKIE = "laila_mobile"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-OPEN_PATHS = ("/setup", "/static", "/iclock", "/health", "/m", "/brand")
+OPEN_PATHS = ("/setup", "/static", "/iclock", "/health", "/m", "/brand", "/https/ca")
 
 Base.metadata.create_all(bind=engine)
 migrate.upgrade(engine, Base.metadata)
@@ -194,6 +194,34 @@ def setup_done(db: Session) -> bool:
     if not _state["setup_done"]:
         _state["setup_done"] = get_setting(db, "setup_done", default="0") == "1"
     return _state["setup_done"]
+
+
+HTTPS_EXEMPT = ("/iclock", "/health", "/https/ca", "/static")   # machines push over plain HTTP
+
+
+def force_https(db=None) -> bool:
+    if "force_https" not in _state:
+        own = db is None
+        db = db or SessionLocal()
+        try:
+            _state["force_https"] = get_setting(db, "force_https", default="0") == "1"
+        finally:
+            if own:
+                db.close()
+    return _state["force_https"]
+
+
+@app.middleware("http")
+async def https_redirect(request: Request, call_next):
+    """With 'Use HTTPS' on, office PCs opening http://server:port/... are sent to https://server:https_port/...
+    ZKTeco machines keep pushing punches over HTTP (they cannot use this certificate)."""
+    if (request.url.scheme == "http" and request.headers.get("x-forwarded-proto") != "https"
+            and request.method in ("GET", "HEAD") and not request.url.path.startswith(HTTPS_EXEMPT)
+            and force_https()):
+        host = request.url.hostname or "localhost"
+        q = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(f"https://{host}:{settings.https_port}{request.url.path}{q}", status_code=307)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -4236,6 +4264,73 @@ def cleanup_settings(photo_required: str = Form(""), user=Depends(page_user), db
     set_setting(db, "mobile_photo_required", "1" if photo_required else "0")
     audit(db, user, "SETTINGS_SAVE", f"mobile punch photo required={bool(photo_required)}")
     return go("/cleanup", msg="Saved")
+
+
+# ------------------------------------------------------------ HTTPS
+@app.get("/https", response_class=HTMLResponse)
+def https_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    info = maintenance.cert_info()
+    host = request.url.hostname or maintenance.lan_ips()[0]
+    return render(request, "https.html", user, info=info, host=host, port=settings.port, https_port=settings.https_port,
+                  on_https=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https",
+                  force=force_https(db), names="\n".join(maintenance.extra_names()), ips=maintenance.lan_ips())
+
+
+@app.get("/https/ca.crt")
+def https_ca():
+    """The server's own certificate authority - install it once on each PC / phone (public, no login)."""
+    return Response(maintenance.ca_der(), media_type="application/x-x509-ca-cert",
+                    headers={"Content-Disposition": 'attachment; filename="LailaPayroll-CA.crt"'})
+
+
+@app.get("/https/install-ca.bat")
+def https_ca_bat(request: Request):
+    """One double-click for an office PC: downloads and trusts the CA (asks for Administrator)."""
+    host = request.url.hostname or maintenance.lan_ips()[0]
+    bat = ("@echo off\r\n:: SPhere Payroll - trust this server's HTTPS certificate\r\n"
+           "net session >nul 2>&1 || (powershell -Command \"Start-Process '%~f0' -Verb RunAs\" & exit /b)\r\n"
+           "powershell -Command \""
+           f"(New-Object Net.WebClient).DownloadFile('http://{host}:{settings.port}/https/ca.crt', '%TEMP%\\LailaPayroll-CA.crt')\"\r\n"
+           "certutil -addstore -f Root \"%TEMP%\\LailaPayroll-CA.crt\"\r\n"
+           f"echo.\r\necho Done. Close the browser and open https://{host}:{settings.https_port}/\r\npause\r\n")
+    return Response(bat.encode(), media_type="application/octet-stream",
+                    headers={"Content-Disposition": 'attachment; filename="Install-LailaPayroll-Certificate.bat"'})
+
+
+@app.post("/https/settings")
+def https_settings(request: Request, force: str = Form(""), names: str = Form(""), user=Depends(page_user),
+                   db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    on_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    if force and not on_https:
+        return go("/https", err=f"Open this page once over HTTPS (https://{request.url.hostname}:{settings.https_port}/https) "
+                                "and check it works before switching everyone to HTTPS")
+    clean = []
+    for n in re.split(r"[\s,;]+", names.lower()):
+        n = n.strip().strip("/").removeprefix("https://").removeprefix("http://").split(":")[0]
+        if n and re.fullmatch(r"[a-z0-9.-]{1,120}", n) and n not in clean:
+            clean.append(n)
+    old_names = maintenance.extra_names()
+    maintenance.set_extra_names(clean[:20])
+    set_setting(db, "force_https", "1" if force else "0")
+    _state["force_https"] = bool(force)
+    audit(db, user, "HTTPS_SETTINGS", f"force={bool(force)} names={','.join(clean) or '-'}")
+    if clean != old_names:
+        return go("/https", msg="Saved. The new names need a new server certificate - click 'Make new certificate & "
+                                "restart' below")
+    return go("/https", msg="Saved" + (" - office PCs are now sent to HTTPS" if force else ""))
+
+
+@app.post("/https/renew")
+def https_renew(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "backup.manage")
+    maintenance.ensure_certificate(force=True)
+    audit(db, user, "HTTPS_CERT_RENEW", ", ".join(maintenance.cert_info().get("ips", [])))
+    page = render(request, "restarting.html", None, heading="Restarting with the new certificate…",
+                  note="The new HTTPS certificate is used after the restart.", next_url="/https")
+    backups.restart_program()
+    return page
 
 
 # ------------------------------------------------------------ bulk actions (Admin)

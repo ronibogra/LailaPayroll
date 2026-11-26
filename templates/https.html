@@ -1,0 +1,38 @@
+{% extends "base.html" %}{% block title %}HTTPS{% endblock %}{% block heading %}HTTPS (secure address){% endblock %}
+{% block content %}
+<div class="panel"><h3>Addresses</h3>
+<div class="table-wrap"><table><tr><th>For</th><th>Address</th></tr>
+{% for ip in ips %}<tr><td>Office PCs &amp; phones (secure)</td><td><a href="https://{{ ip }}:{{ https_port }}/"><b>https://{{ ip }}:{{ https_port }}/</b></a></td></tr>{% endfor %}
+{% for ip in ips %}<tr><td>ZKTeco machines (ADMS push) - keep</td><td>http://{{ ip }}:{{ port }}</td></tr>{% endfor %}
+</table></div>
+<p class="hint">You are on <b>{{ 'HTTPS' if on_https else 'HTTP' }}</b> now. The machines push punches over plain HTTP - that keeps working when HTTPS is switched on for people.</p></div>
+
+<div class="grid2">
+<div class="panel"><h3>1. Remove the browser warning (once per PC / phone)</h3>
+<p class="hint">The server has its own small certificate authority. Install it once and the browser shows the padlock with no warning - also when the server's IP address changes later.</p>
+<p><b>Windows PC</b> (Chrome, Edge, Firefox):</p>
+<p><a class="btn" href="/https/install-ca.bat">Download installer (.bat)</a></p>
+<p class="hint">Double-click it and click <b>Yes</b> (it needs Administrator). Or by hand: <a href="/https/ca.crt">download the certificate</a> → double-click → <i>Install Certificate</i> → <i>Local Machine</i> → <i>Place all certificates in: Trusted Root Certification Authorities</i> → Finish. Many PCs at once: IT can push the same <code>.crt</code> with Group Policy, or run <code>certutil -addstore -f Root LailaPayroll-CA.crt</code>.</p>
+<p><b>Android phone:</b> open <code>http://{{ host }}:{{ port }}/https/ca.crt</code> in Chrome → Settings → Security → <i>Install a certificate</i> → <i>CA certificate</i> → choose the downloaded file.</p>
+<p><b>iPhone:</b> open the same link in Safari → Settings → <i>Profile downloaded</i> → Install → Settings → General → About → <i>Certificate Trust Settings</i> → turn it on.</p>
+<p class="hint">Without installing it everything still works - the browser just shows "Not secure / Your connection is not private" once; click <i>Advanced → Continue</i>.</p></div>
+
+<div class="panel"><h3>2. Use HTTPS for everyone</h3>
+<form method="post" action="/https/settings">
+<label class="chk" style="color:inherit"><input type="checkbox" name="force" value="1" {{ 'checked' if force }}> Send office PCs from <b>http://…:{{ port }}</b> to <b>https://…:{{ https_port }}</b> automatically</label>
+<p class="hint">Old bookmarks keep working - they are forwarded. Switch it on only after checking the HTTPS address opens on this PC.</p>
+<label>Extra names for the server (optional, one per line) - e.g. a DNS name like <code>payroll.lailagroup.local</code> or a second IP</label>
+<textarea name="names" rows="3">{{ names }}</textarea>
+<p><button>Save</button></p></form>
+<h3 style="margin-top:14px">Certificate</h3>
+{% if info.ok %}<div class="table-wrap"><table>
+<tr><td>Server names</td><td>{{ info.names|join(', ') }}</td></tr>
+<tr><td>IP addresses</td><td>{{ info.ips|join(', ') }}</td></tr>
+<tr><td>Valid until</td><td>{{ info.until.strftime('%d/%m/%Y') }} <span class="hint">(renewed automatically)</span></td></tr>
+<tr><td>Authority</td><td>{{ info.ca_name }}<br><span class="hint">valid until {{ info.ca_until.strftime('%d/%m/%Y') }} · fingerprint {{ info.thumb }}</span></td></tr>
+</table></div>{% endif %}
+{% if info.problem %}<p class="alert err">Needs a new certificate: {{ info.problem }}</p>{% endif %}
+<form method="post" action="/https/renew"><p><button class="sec">Make new certificate &amp; restart</button></p></form>
+<p class="hint">Done automatically when the program starts and the IP address or name changed. The program restarts in a few seconds; PCs that installed the authority need nothing new.</p></div>
+</div>
+{% endblock %}

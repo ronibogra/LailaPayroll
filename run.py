@@ -69,7 +69,7 @@ def main() -> None:
         except Exception:
             log.exception("HTTPS (mobile punch) not started")
         for ip in lan_ips():
-            log.info("Office PCs: http://%s:%s   Mobile: https://%s:%s/m", ip, settings.port, ip, settings.https_port)
+            log.info("Office PCs: http://%s:%s  (secure: https://%s:%s/)", ip, settings.port, ip, settings.https_port)
         log.info("Data folder: %s", DATA_DIR)
         await asyncio.gather(*(s.serve() for s in servers))
 
