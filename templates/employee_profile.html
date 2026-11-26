@@ -197,7 +197,7 @@
 <div class="panel" id="history"><h3>History</h3><div class="table-wrap" style="max-height:360px"><table>
 {% for when, ico, text in history %}<tr><td style="white-space:nowrap">{{ when.strftime('%d/%m/%Y') }}</td><td>{{ ico }}</td><td>{{ text }}</td></tr>
 {% else %}<tr><td class="hint">Nothing yet.</td></tr>{% endfor %}</table></div></div>
-{% if 'employees.delete' in user.perms %}
+{% if 'data.delete' in user.perms %}
 <details class="panel" id="delete"><summary><b style="color:#b3261e">Delete this employee</b></summary>
 <p class="hint" style="margin-top:8px">Only for a record made by mistake or a duplicate. Someone who really worked here should be marked as left (Leaving the company) so their history and payslips stay. Deletes attendance, leave, documents, assets, letters, photo and draft payroll lines; finalized payroll cannot be deleted.</p>
 <form method="post" action="/employees/{{ e.id }}/delete" onsubmit="return confirm('Delete {{ e.employee_code }} {{ e.full_name }} for good?')">

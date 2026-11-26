@@ -10,7 +10,6 @@ PERMS: dict[str, str] = {
     "mobile.manage": "Allow mobile punch and set employees' mobile PINs (Admin)",
     "appointment.letter": "Appointment, confirmation, release letters and experience certificates (Admin)",
     "assets.manage": "Edit asset records and transfer assets to another employee (Admin)",
-    "employees.delete": "Delete employee records and their files (Admin)",
     "punches.view": "See punch records and first & last punch",
     "punches.edit": "Import punch files, manual punches, download from machines",
     "machines.manage": "Add / edit / remove machines",
@@ -35,10 +34,13 @@ PERMS: dict[str, str] = {
     "self.service": "My page: own profile, attendance, leave requests, payslips and assets (Staff)",
 }
 
+# not a role permission: only users ticked "Super Admin" (always ADMIN role) get it
+SUPER_PERMS = {"data.delete": "Delete data - Delete centre and bulk delete (Super Admin)"}
+
 GROUPS = [
     ("General", ["dashboard.view", "reports.export", "self.service"]),
     ("Employees", ["employees.view", "employees.edit", "salary.view", "salary.edit", "mobile.manage",
-                   "appointment.letter", "assets.manage", "employees.delete"]),
+                   "appointment.letter", "assets.manage"]),
     ("Punch & machines", ["punches.view", "punches.edit", "machines.manage"]),
     ("Attendance", ["attendance.view", "attendance.process", "shifts.manage", "holidays.manage"]),
     ("Leave", ["leave.manage", "leave.approve_dept", "leave.approve_final", "leave.policy"]),

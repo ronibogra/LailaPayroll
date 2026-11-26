@@ -121,6 +121,7 @@ class EmployeeDocument(Base):
     size: Mapped[int] = mapped_column(Integer, default=0)
     uploaded_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    employee = relationship("Employee", viewonly=True)
 
 
 class EmployeeAsset(Base):
@@ -368,6 +369,7 @@ class PayrollAdjustment(Base):
     items_json: Mapped[str | None] = mapped_column(Text, nullable=True)       # one-off items [{name, kind, amount}]
     overrides_json: Mapped[str | None] = mapped_column(Text, nullable=True)   # admin edits {absent_days, ot_hours, ...}
     edited_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    employee = relationship("Employee", viewonly=True)
 
 
 class PayrollRun(Base):
@@ -461,6 +463,7 @@ class User(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     employee_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)   # Staff login: own record
     must_change: Mapped[bool] = mapped_column(Boolean, default=False)                     # change password at next login
+    super_admin: Mapped[bool] = mapped_column(Boolean, default=False)                     # may delete data (Delete centre)
 
 
 class AuditLog(Base):

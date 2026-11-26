@@ -1028,6 +1028,40 @@ def main():
     ok(h.post(BASE + "/bulk/employees", data={"ids": bids, "action": "delete", "confirm": "DELETE"},
               timeout=30).status_code == 403, "bulk delete is for Admin only")
 
+    step("Delete centre (Super Admin): every section opens, delete ticked / all matching, guards")
+    r = page(s, "/delete", must="Delete centre")
+    keys = re.findall(r'href="/delete\?s=([a-z_]+)"', r.text)
+    ok(len(keys) >= 20, f"delete centre sections: {keys}")
+    for k in keys:                                   # every section lists its items (and with a date filter)
+        page(s, f"/delete?s={k}")
+        page(s, f"/delete?s={k}&q=1&start=01/01/2026&end=31/12/2026")
+    for d, n in (("2031-01-01", "DC One"), ("2031-01-02", "DC Two")):
+        post(s, "/settings/holidays", {"day": d, "name": n}, must="Holiday added")
+    r = page(s, "/delete?s=holidays&q=DC", must="DC Two")
+    hids = re.findall(r'name="ids" value="(\d+)"', r.text)
+    ok(len(hids) == 2, f"holiday ids {hids}")
+    post(s, "/delete/holidays", {"ids": hids[:1], "scope": "selected", "q": "DC"}, must="Holidays: 1 deleted")
+    post(s, "/delete/holidays", {"scope": "all", "q": "DC"}, must="type DELETE", must_not=None)
+    post(s, "/delete/holidays", {"scope": "all", "q": "DC", "confirm": "DELETE"}, must="Holidays: 1 deleted")
+    post(s, "/employees/import", files={"file": ("dc.xlsx", xlsx([["company", "employee_code", "full_name"],
+                                                                  ["LTL", "DC-1", "Dc One"], ["LTL", "DC-2", "Dc Two"]]))},
+         must="2 added")
+    r = page(s, "/delete?s=employees&q=DC-", must="Dc Two")
+    eids = re.findall(r'name="ids" value="(\d+)"', r.text)
+    post(s, "/delete/employees", {"ids": eids, "scope": "selected", "q": "DC-"}, must="Employees: 2 deleted")
+    post(s, "/delete/users", {"scope": "all", "q": "admin", "confirm": "DELETE"}, must="you cannot delete yourself",
+         must_not=None)
+    post(s, "/users/save", {"username": "admin2", "role": "ADMIN", "password": "Admin2@12345", "active": "1"},
+         must="saved")
+    a2 = requests.Session()
+    post(a2, "/login", {"username": "admin2", "password": "Admin2@12345"}, must="Dashboard")
+    ok(a2.get(BASE + "/delete", timeout=30).status_code == 403, "an ordinary Admin cannot open the Delete centre")
+    ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "an ordinary Admin cannot use bulk delete")
+    ok(h.get(BASE + "/delete", timeout=30).status_code == 403, "HR cannot open the Delete centre")
+    post(s, "/users/save", {"username": "admin2", "role": "ADMIN", "active": "1", "super_admin": "1"}, must="saved")
+    page(a2, "/delete", must="Delete centre")
+    post(s, "/delete/users", {"scope": "all", "q": "admin2", "confirm": "DELETE"}, must="User logins: 1 deleted")
+
     step("HTTPS: local certificate authority, trusted chain, HTTP -> HTTPS for people, machines stay on HTTP")
     page(s, "/https", must="Valid until")
     der = requests.get(BASE + "/https/ca.crt", timeout=30).content           # no login needed

@@ -1,0 +1,49 @@
+{% extends "base.html" %}{% block title %}Delete centre{% endblock %}{% block heading %}Delete centre <span class="tag ABSENT">Super Admin</span>{% endblock %}
+{% block content %}
+<div class="panel"><p class="hint" style="margin:0">Pick a part of the system, tick what to delete (one, several, or all on the page) and click <b>Delete ticked</b>. Make a <a href="/backup">backup</a> first - deleted data and files cannot be brought back from the program. Everything you delete is written to the Activity log.</p></div>
+<div class="dc">
+<div class="panel dc-menu">{% for g in groups %}<div class="nav-label" style="margin-top:{{ '0' if loop.first else '10px' }}">{{ g|upper }}</div>
+{% for x in sections if x.group == g %}<a href="/delete?s={{ x.key }}" class="{{ 'on' if sec and sec.key == x.key }}">{{ x.label }}<span>{{ counts[x.key] }}</span></a>{% endfor %}{% endfor %}</div>
+<div>
+{% if not sec %}<div class="panel"><h3>Choose what to delete</h3><p class="hint">The list on the left shows every kind of data and how many items are stored. Click one to see the items.</p>
+<p class="hint">For many employees at once with one action (mark as left, delete photos, payslips of a month ...) you can also use <a href="/bulk">Bulk actions</a>.</p></div>
+{% else %}
+<div class="panel"><h3>{{ sec.label }} <span class="hint">({{ total }} item{{ 's' if total != 1 }}{% if p %} match the filter{% endif %})</span></h3>
+{% if sec.note %}<p class="hint">{{ sec.note }}</p>{% endif %}
+<form method="get" action="/delete" class="inline"><input type="hidden" name="s" value="{{ sec.key }}">
+<div><label>Search</label><input name="q" value="{{ p.q or '' }}" placeholder="{{ 'code, name, card' if sec.emp_on is not none or sec.key in ('employees','photos') else 'text' }}"></div>
+{% if sec.date_col is not none %}<div><label>From</label><input type="date" name="start" value="{{ p.start or '' }}"></div><div><label>To</label><input type="date" name="end" value="{{ p.end or '' }}"></div>{% endif %}
+{% if (sec.emp_on is not none or sec.company_col is not none) and companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if p.company == c.id|string }}>{{ c.code }}</option>{% endfor %}</select></div>{% endif %}
+<button class="sec">Filter</button>{% if p %} <a class="btn sec" href="/delete?s={{ sec.key }}">Clear</a>{% endif %}</form></div>
+
+<form method="post" action="/delete/{{ sec.key }}" id="dform" class="panel">
+{% for k, v in p.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+{% if rows %}
+<div class="table-wrap" style="max-height:520px;overflow:auto"><table><tr><th><input type="checkbox" id="all" title="Tick all on this page"></th>{% for label, fn in sec.cols %}<th>{{ label }}</th>{% endfor %}</tr>
+{% for r in rows %}<tr><td><input type="checkbox" class="pick" name="ids" value="{{ r.id }}"></td>{% for label, fn in sec.cols %}<td>{{ fn(r) if fn(r) is not none else '' }}</td>{% endfor %}</tr>{% endfor %}</table></div>
+{% if pages > 1 %}<div class="pager">{% if page > 1 %}<a class="btn sec" href="/delete?{{ qs }}&page={{ page - 1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }} (100 per page)</span>{% if page < pages %}<a class="btn sec" href="/delete?{{ qs }}&page={{ page + 1 }}">Next ›</a>{% endif %}</div>{% endif %}
+<div class="form-grid" style="margin-top:10px">
+{% if sec.key in ('employees', 'payroll', 'payslips', 'companies') %}<div class="wide"><label class="chk"><input type="checkbox" name="with_final" value="1"> including <b>finalized</b> (already paid) payroll</label></div>{% endif %}
+{% if sec.key == 'employees' %}<div class="wide"><label class="chk"><input type="checkbox" name="with_punches" value="1"> also their punch records</label></div>{% endif %}
+</div>
+<p><button class="red" name="scope" value="selected" id="delsel">{{ 'Clear' if sec.clears else 'Delete' }} ticked (<span id="cnt">0</span>)</button></p>
+<div class="dc-all"><b>Everything that matches the filter ({{ total }})</b>
+<div class="inline" style="margin-top:6px"><div><label>Type DELETE</label><input name="confirm" autocomplete="off"></div><button class="red" name="scope" value="all" id="delall">{{ 'Clear' if sec.clears else 'Delete' }} all {{ total }}</button></div></div>
+{% else %}<p class="hint">Nothing here{% if p %} for this filter{% endif %}.</p>{% endif %}
+</form>
+{% endif %}
+</div></div>
+<style>.dc{display:grid;grid-template-columns:250px 1fr;gap:16px;align-items:start}.dc-menu a{display:flex;justify-content:space-between;padding:6px 8px;border-radius:6px;color:inherit;text-decoration:none;font-size:14px}
+.dc-menu a:hover{background:#f2f4f7}.dc-menu a.on{background:#e8f0fe;font-weight:600}.dc-menu a span{color:#6b7280;font-size:12px}
+.dc-all{border-top:1px solid #e5e7eb;margin-top:14px;padding-top:10px}@media(max-width:900px){.dc{grid-template-columns:1fr}}</style>
+<script>
+(function(){var all=document.getElementById('all'),cnt=document.getElementById('cnt');
+function upd(){var n=document.querySelectorAll('.pick:checked').length;if(cnt)cnt.textContent=n;}
+if(all)all.addEventListener('change',function(){document.querySelectorAll('.pick').forEach(function(x){x.checked=all.checked});upd();});
+document.querySelectorAll('.pick').forEach(function(x){x.addEventListener('change',upd)});upd();
+var s=document.getElementById('delsel'),a=document.getElementById('delall');
+if(s)s.addEventListener('click',function(ev){var n=document.querySelectorAll('.pick:checked').length;if(!n){ev.preventDefault();alert('Tick the items to delete first');return;}
+if(!confirm('{{ ("Clear" if sec and sec.clears else "Delete") }} '+n+' item(s) from {{ (sec.label if sec else "")|replace('&','and') }}?'))ev.preventDefault();});
+if(a)a.addEventListener('click',function(ev){if(!confirm('{{ ("Clear" if sec and sec.clears else "Delete") }} ALL {{ total or 0 }} matching item(s) from {{ (sec.label if sec else "")|replace('&','and') }}?'))ev.preventDefault();});})();
+</script>
+{% endblock %}

@@ -2,7 +2,7 @@
 {% block content %}
 <div class="panel"><h3>Space used on the server</h3><div class="table-wrap"><table><tr><th>Folder</th><th class="num">Files</th><th class="num">Size</th></tr>
 {% for label, n, size in usage %}<tr><td>{{ label }}</td><td class="num">{{ n }}</td><td class="num">{{ '%.1f'|format(size / 1048576) }} MB</td></tr>{% endfor %}</table></div>
-<p class="hint">Make a <a href="/backup">backup</a> before deleting - deleted files cannot be brought back from the program.</p></div>
+<p class="hint">Deleting is for the <b>Super Admin</b>{% if 'data.delete' in user.perms %} - everything can also be deleted item by item in the <a href="/delete">Delete centre</a>{% endif %}. Make a <a href="/backup">backup</a> before deleting - deleted files cannot be brought back from the program.</p></div>
 <div class="grid2">
 <div class="panel"><h3>Delete mobile punch photos</h3>
 <p class="hint">Removes the camera photos only; the punches (time, location) stay.{% if first %} Oldest photo: {{ first.strftime('%d/%m/%Y') }}.{% endif %}</p>

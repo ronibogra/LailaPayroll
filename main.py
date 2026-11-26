@@ -30,9 +30,12 @@ from reports.excel import (salary_sheet, attendance_month, attendance_day, punch
 from reports.payslip import payslips_pdf
 from security import (hash_password, verify_password, create_token, decode_token, page_user,
                       LoginRequired, COOKIE)
-from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, parse as parse_perms
+from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, SUPER_PERMS, parse as parse_perms
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
 from services import leave as leave_svc, documents as docs, components as comp_svc, disbursement as disb
+from services.datadelete import (wipe_employee as _wipe_employee, unlink_photo as _unlink_photo,
+                                 unlink_punch_photo as _unlink_punch_photo)
+from services import datadelete as dd  # noqa: F401  (used below)
 from services import assets as asset_svc, letters as letter_svc, changes as change_svc
 from services.errors import log_error
 from services.photos import save_photo, save_signature, photo_path, bulk_photos
@@ -79,7 +82,8 @@ def need(user: dict, *perms: str) -> None:
     """Raise 403 unless the user's role has ALL the given permissions (ADMIN has every permission)."""
     missing = [p for p in perms if p not in user["perms"]]
     if missing:
-        raise HTTPException(403, "Your role does not allow this: " + ", ".join(PERMS.get(p, p) for p in missing))
+        raise HTTPException(403, "Your role does not allow this: " + ", ".join(PERMS.get(p, SUPER_PERMS.get(p, p))
+                                                                              for p in missing))
 
 
 def render(request: Request, name: str, user: dict | None, **ctx) -> HTMLResponse:
@@ -271,6 +275,16 @@ async def _value_error(request: Request, exc: ValueError):
     return await _http_error(request, HTTPException(400, str(exc)))
 
 
+def ensure_super_admin(db: Session) -> None:
+    """There is always a Super Admin: the first (oldest) active administrator, if nobody is ticked."""
+    if db.scalar(select(func.count(User.id)).where(User.super_admin == True, User.active == True,  # noqa: E712
+                                                   User.role == "ADMIN")):
+        return
+    first = db.scalar(select(User).where(User.role == "ADMIN", User.active == True).order_by(User.id))  # noqa: E712
+    if first:
+        first.super_admin = True
+
+
 @app.on_event("startup")
 def startup():
     if _state["started"]:          # two listeners (HTTP + HTTPS) share one app
@@ -291,6 +305,7 @@ def startup():
                     have = parse_perms(r.permissions)
                     r.permissions = ",".join(p for p in PERMS if (p in have or p in add) and p not in remove)
         set_setting(db, "roles_version", str(max([v for v, *_ in ROLE_MIGRATIONS] + [version])), commit=False)
+        ensure_super_admin(db)
         branding.refresh(db)
         leave_svc.seed_types(db)
         if setup_done(db) and get_setting(db, "group_companies_v1", default="") != "1":
@@ -555,7 +570,8 @@ async def setup_save(request: Request, db: Session = Depends(get_db)):
             branding.save_logo(await logo.read())
         except ValueError as exc:
             return go("/setup", err=f"Logo: {exc}")
-    db.add(User(full_name="Administrator", username=username, password_hash=hash_password(password), role="ADMIN"))
+    db.add(User(full_name="Administrator", username=username, password_hash=hash_password(password), role="ADMIN",
+                super_admin=True))
     for code, name in companies:
         db.add(Company(code=code, name=name))
     set_setting(db, "weekend_days", weekend, commit=False)
@@ -1737,7 +1753,7 @@ def employee_delete(emp_id: int, confirm: str = Form(""), with_punches: str = Fo
                     db: Session = Depends(get_db)):
     """Admin: remove an employee completely (e.g. entered by mistake). People who really worked here should be
     marked as left instead, so their history stays. Finalized payroll is never deleted."""
-    need(user, "employees.delete")
+    need(user, "data.delete")
     emp = _emp_or_404(db, user, emp_id)
     back = f"/employees/{emp.id}#delete"
     if confirm.strip() != emp.employee_code:
@@ -1751,58 +1767,6 @@ def employee_delete(emp_id: int, confirm: str = Form(""), with_punches: str = Fo
     db.commit()
     return go("/employees", msg=f"{res['code']} {res['name']} deleted" +
               (f" with {res['punches']} punch records" if res["punches"] else ""))
-
-
-def _unlink_photo(name: str | None) -> int:
-    from services.photos import PHOTO_DIR
-    if name and "/" not in name and "\\" not in name and ".." not in name:
-        (PHOTO_DIR / name).unlink(missing_ok=True)
-        return 1
-    return 0
-
-
-def _unlink_punch_photo(name: str | None) -> int:
-    if name and ".." not in name:
-        (DATA_DIR / "punch_photos" / name).unlink(missing_ok=True)
-        return 1
-    return 0
-
-
-def _wipe_employee(db: Session, emp: Employee, with_punches: bool = False, with_final: bool = False) -> dict:
-    """Remove an employee and everything stored for them. Not done (final > 0) when they are on a finalized payroll,
-    unless with_final (Admin bulk delete, payslips go too). The caller commits."""
-    res = {"code": emp.employee_code, "name": emp.full_name, "files": 0, "punches": 0, "final": 0}
-    final = db.scalar(select(func.count(PayrollLine.id)).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
-                      .where(PayrollLine.employee_id == emp.id, PayrollRun.status == "FINAL")) or 0
-    if final and not with_final:
-        res["final"] = final
-        return res
-    for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)):
-        docs.delete_file(d.stored_name)
-        res["files"] += 1
-        db.delete(d)
-    for lv in db.scalars(select(Leave).where(Leave.employee_id == emp.id)):
-        if lv.document:
-            docs.delete_file(lv.document)
-        db.delete(lv)
-    for model in (DailyAttendance, EmployeeAsset, EmployeeSeparation, PayrollAdjustment, EmployeeComponent,
-                  EmployeeChange, PayrollLine):
-        db.execute(delete(model).where(model.employee_id == emp.id))
-    for u in db.scalars(select(User).where(User.employee_id == emp.id)):
-        if u.role == "STAFF":
-            db.delete(u)
-        else:
-            u.employee_id = None
-    if with_punches and emp.card_no:
-        for lg in db.scalars(select(AttendanceLog).where(AttendanceLog.card_no == emp.card_no)):
-            _unlink_punch_photo(lg.photo)
-            db.delete(lg)
-            res["punches"] += 1
-    _unlink_photo(emp.photo)
-    _unlink_photo(emp.signature)
-    db.delete(emp)
-    db.flush()
-    return res
 
 
 @app.post("/employees/{emp_id}/documents")
@@ -3882,7 +3846,7 @@ def users_page(request: Request, role: str = "", edit: str = "", user=Depends(pa
 @app.post("/users/save")
 def user_save(username: str = Form(...), role: str = Form(...), password: str = Form(""), active: str = Form(""),
               company_id: str = Form(""), full_name: str = Form(""), employee_code: str = Form(""),
-              user=Depends(page_user),
+              super_admin: str = Form(""), user=Depends(page_user),
               db: Session = Depends(get_db)):
     need(user, "users.manage")
     if not db.scalar(select(Role).where(Role.name == role)):
@@ -3902,6 +3866,9 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
         if len(password) < 8:
             return go("/users", err="Password must be 8+ characters")
         u.password_hash = hash_password(password)
+    if u.super_admin and not user.get("super_admin"):
+        db.rollback()
+        return go("/users", err="Only a Super Admin can change a Super Admin")
     if u.role == "ADMIN" and user["role"] != "ADMIN":
         db.rollback()
         return go("/users", err="Only an administrator can change an administrator")
@@ -3909,6 +3876,14 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
         db.rollback()
         return go("/users", err="You cannot change your own role, company limit or active status")
     u.role, u.active, u.full_name = role, bool(active), full_name.strip() or u.full_name
+    if user.get("super_admin"):                  # only a Super Admin can make / remove another Super Admin
+        want = bool(super_admin) and role == "ADMIN"
+        if u.username == user["username"] and not want:
+            db.rollback()
+            return go("/users", err="You cannot remove your own Super Admin right - ask another Super Admin")
+        u.super_admin = want
+    elif role != "ADMIN":
+        u.super_admin = False
     u.company_id = int(company_id) if company_id else None
     code = employee_code.strip()
     if code:      # this login is also an employee: gives them My page (own attendance, leave, payslips)
@@ -3928,6 +3903,7 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
     elif role != "STAFF":
         u.employee_id = None
     audit(db, user, "USER_SAVE", f"{u.username} role={role} company={company_id or 'ALL'} active={bool(active)}"
+          + (" SUPER ADMIN" if u.super_admin else "")
           + (" password changed" if password else ""), commit=False)
     db.commit()
     return go("/users", msg=f"User {u.username} saved")
@@ -4210,7 +4186,7 @@ def cleanup_page(request: Request, user=Depends(page_user), db: Session = Depend
 def cleanup_punch_photos(start: str = Form(""), end: str = Form(...), employee_code: str = Form(""),
                          confirm: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
     """Delete mobile punch photos (the punches themselves stay)."""
-    need(user, "backup.manage")
+    need(user, "data.delete")
     if confirm != "DELETE":
         return go("/cleanup", err="Type DELETE to confirm")
     try:
@@ -4240,7 +4216,7 @@ def cleanup_punch_photos(start: str = Form(""), end: str = Form(...), employee_c
 @app.post("/cleanup/left-photos")
 def cleanup_left_photos(confirm: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
     """Delete photos and signatures of employees who have left."""
-    need(user, "backup.manage")
+    need(user, "data.delete")
     if confirm != "DELETE":
         return go("/cleanup", err="Type DELETE to confirm")
     from services.photos import PHOTO_DIR
@@ -4333,6 +4309,69 @@ def https_renew(request: Request, user=Depends(page_user), db: Session = Depends
     return page
 
 
+# ------------------------------------------------------------ Delete centre (Super Admin)
+def _dd_allowed(db: Session, user: dict):
+    return None if not user.get("company_id") else [c.id for c in visible_companies(db, user)]
+
+
+def _dd_params(src) -> dict:
+    return {k: str(src.get(k) or "").strip() for k in ("q", "start", "end", "company") if src.get(k)}
+
+
+@app.get("/delete", response_class=HTMLResponse)
+def delete_centre(request: Request, s: str = "", page: int = 1, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "data.delete")
+    allowed = _dd_allowed(db, user)
+    counts = {sec.key: dd.count(db, sec, None, allowed) for sec in dd.SECTIONS}
+    sec = dd.BY_KEY.get(s)
+    p = _dd_params(request.query_params)
+    ctx = {}
+    if sec:
+        try:
+            total = dd.count(db, sec, p, allowed)
+            per = 100
+            pages = max(1, -(-total // per))
+            page = min(max(page, 1), pages)
+            ctx = dict(rows=dd.rows(db, sec, p, allowed, page, per), total=total, page=page, pages=pages)
+        except ValueError as exc:
+            return go(f"/delete?s={sec.key}", err=str(exc))
+    qs = urlencode({**p, "s": s})
+    return render(request, "delete_centre.html", user, sections=dd.SECTIONS, groups=dd.GROUPS, counts=counts, sec=sec,
+                  p=p, qs=qs, companies=visible_companies(db, user), **ctx)
+
+
+@app.post("/delete/{key}")
+async def delete_centre_run(request: Request, key: str, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "data.delete")
+    sec = dd.BY_KEY.get(key)
+    if not sec:
+        raise HTTPException(404, "Unknown section")
+    f = await request.form()
+    p = _dd_params(f)
+    back = f"/delete?{urlencode({**p, 's': key})}"
+    scope = str(f.get("scope") or "selected")
+    opts = {"with_final": bool(f.get("with_final")), "with_punches": bool(f.get("with_punches")), "me": user["username"]}
+    if scope == "all":
+        if str(f.get("confirm") or "").strip() != "DELETE":
+            return go(back, err="To delete everything that matches, type DELETE in the box")
+        ids = None
+    else:
+        ids = [int(x) for x in f.getlist("ids") if str(x).isdigit()]
+        if not ids:
+            return go(back, err="Tick the items to delete first")
+    done, kept = dd.run_delete(db, sec, ids, p, opts, _dd_allowed(db, user))
+    word = "cleared" if sec.clears else "deleted"
+    msg = f"{sec.label}: {done} {word}"
+    if kept:
+        msg += f". {len(kept)} kept - " + "; ".join(kept[:8]) + (" ..." if len(kept) > 8 else "")
+    audit(db, user, "DELETE_" + key.upper(), f"{'all matching ' + str(p) if ids is None else str(len(ids)) + ' ticked'}"
+          f": {msg}", commit=False)
+    db.commit()
+    if key in ("users", "companies"):
+        _state.pop("setup_done", None)
+    return go(back, msg=msg) if not kept or done else go(back, err=msg)
+
+
 # ------------------------------------------------------------ bulk actions (Admin)
 BULK_ACTIONS = {
     "mark_left": "Mark as left (inactive)",
@@ -4370,7 +4409,7 @@ def _bulk_emps(db: Session, user: dict, p) -> list[Employee]:
 
 @app.get("/bulk", response_class=HTMLResponse)
 def bulk_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "employees.delete")
+    need(user, "data.delete")
     p = dict(request.query_params)
     searched = any(p.get(k) for k in ("company", "status", "department", "left_before", "codes", "q"))
     emps = _bulk_emps(db, user, p) if searched else []
@@ -4399,7 +4438,7 @@ def _month_range(f) -> tuple[int, int]:
 @app.post("/bulk/employees")
 async def bulk_employees(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     """Admin: one action on many selected employees."""
-    need(user, "employees.delete")
+    need(user, "data.delete")
     f = await request.form()
     back = "/bulk?" + str(f.get("back_qs") or "")
     action = str(f.get("action") or "")
@@ -4492,7 +4531,7 @@ def _ym_txt(k: int) -> str:
 @app.post("/bulk/payroll")
 async def bulk_payroll(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     """Admin: delete whole payrolls (all payslips) of a month range, one or all companies."""
-    need(user, "employees.delete", "payroll.edit")
+    need(user, "data.delete")
     f = await request.form()
     if str(f.get("confirm") or "").strip() != "DELETE":
         return go("/bulk#payroll", err="Type DELETE to confirm")
@@ -4526,7 +4565,7 @@ async def bulk_payroll(request: Request, user=Depends(page_user), db: Session = 
 @app.post("/bulk/old-data")
 async def bulk_old_data(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
     """Admin: delete old records before a date to keep the database small (make a backup first)."""
-    need(user, "employees.delete", "backup.manage")
+    need(user, "data.delete")
     f = await request.form()
     if str(f.get("confirm") or "").strip() != "DELETE":
         return go("/bulk#old", err="Type DELETE to confirm")
