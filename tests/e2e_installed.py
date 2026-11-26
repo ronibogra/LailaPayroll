@@ -1001,6 +1001,33 @@ def main():
     ok(h.post(BASE + f"/employees/{kid}/changes", data={"kind": "INCREMENT"}, timeout=30).status_code == 403,
        "only Admin records increments")
 
+    step("bulk actions (Admin): mark left, delete employees, payslips, old records")
+    post(s, "/employees/import", files={"file": ("b.xlsx", xlsx([["company", "employee_code", "full_name"],
+                                                                 ["LTL", "BULK-1", "Bulk One"], ["LTL", "BULK-2", "Bulk Two"],
+                                                                 ["LTL", "BULK-3", "Bulk Three"]]))}, must="3 added")
+    r = page(s, "/bulk?codes=BULK-1%0ABULK-2,BULK-3", must="3 found")
+    bids = re.findall(r'name="ids" value="(\d+)"', r.text)
+    ok(len(bids) == 3, f"bulk list ids: {bids}")
+    qs = "codes=BULK-1%0ABULK-2,BULK-3"
+    post(s, "/bulk/employees", {"ids": bids[:2], "action": "mark_left", "back_qs": qs},
+         must="2 employee(s) marked as left")
+    post(s, "/bulk/employees", {"ids": bids, "action": "delete", "confirm": "no", "back_qs": qs},
+         must="Type DELETE", must_not=None)
+    post(s, "/bulk/employees", {"ids": bids, "action": "photos", "confirm": "DELETE", "back_qs": qs},
+         must="0 photo / signature file(s) deleted")
+    post(s, "/bulk/employees", {"ids": bids, "action": "payslips", "confirm": "DELETE", "month_from": "2001-01",
+                                "back_qs": qs}, must="0 payslip(s) deleted")
+    post(s, "/bulk/employees", {"ids": bids, "action": "delete", "confirm": "DELETE", "back_qs": qs},
+         must="3 employee(s) deleted")
+    page(s, "/bulk?codes=BULK-1", must="0 found")
+    post(s, "/bulk/payroll", {"month_from": "2001-01", "month_to": "2001-03", "confirm": "DELETE"},
+         must="0 payroll(s) with 0 payslip(s) deleted")
+    post(s, "/bulk/old-data", {"before": "01/01/2001", "audit": "1", "errors": "1", "confirm": "DELETE"},
+         must="Before 01/01/2001")
+    ok(h.get(BASE + "/bulk", timeout=30).status_code == 403, "bulk actions are for Admin only")
+    ok(h.post(BASE + "/bulk/employees", data={"ids": bids, "action": "delete", "confirm": "DELETE"},
+              timeout=30).status_code == 403, "bulk delete is for Admin only")
+
     step("backup: make, download, upload, change data, restore, data is back")
     r = post(s, "/backup/create", must="Backup saved")
     name = re.search(r"(LailaPayroll_backup_[0-9_]+_manual\.zip)", r.text).group(1)

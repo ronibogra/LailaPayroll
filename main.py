@@ -1,7 +1,7 @@
 import io
 import re
 import json
-from calendar import month_name
+from calendar import month_abbr, month_name
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -615,7 +615,6 @@ def dashboard(request: Request, day: str = "", company: str = "", user=Depends(p
         return go("/me")
     need(user, "dashboard.view")
     from collections import Counter
-    from calendar import month_abbr
     from services import charts
     today = now_local().date()
     d = parse_day(day) if day else today
@@ -1715,44 +1714,67 @@ def employee_delete(emp_id: int, confirm: str = Form(""), with_punches: str = Fo
     back = f"/employees/{emp.id}#delete"
     if confirm.strip() != emp.employee_code:
         return go(back, err=f"Type the employee code {emp.employee_code} to confirm")
+    res = _wipe_employee(db, emp, with_punches=bool(with_punches))
+    if res["final"]:
+        return go(back, err=f"{emp.full_name} is on {res['final']} finalized payroll(s), which are kept as financial "
+                            "records. Use 'Leaving the company' to mark them as left instead")
+    audit(db, user, "EMPLOYEE_DELETE", f"{res['code']} {res['name']}: {res['files']} document(s), "
+                                       f"{res['punches']} punch(es) deleted", commit=False)
+    db.commit()
+    return go("/employees", msg=f"{res['code']} {res['name']} deleted" +
+              (f" with {res['punches']} punch records" if res["punches"] else ""))
+
+
+def _unlink_photo(name: str | None) -> int:
+    from services.photos import PHOTO_DIR
+    if name and "/" not in name and "\\" not in name and ".." not in name:
+        (PHOTO_DIR / name).unlink(missing_ok=True)
+        return 1
+    return 0
+
+
+def _unlink_punch_photo(name: str | None) -> int:
+    if name and ".." not in name:
+        (DATA_DIR / "punch_photos" / name).unlink(missing_ok=True)
+        return 1
+    return 0
+
+
+def _wipe_employee(db: Session, emp: Employee, with_punches: bool = False, with_final: bool = False) -> dict:
+    """Remove an employee and everything stored for them. Not done (final > 0) when they are on a finalized payroll,
+    unless with_final (Admin bulk delete, payslips go too). The caller commits."""
+    res = {"code": emp.employee_code, "name": emp.full_name, "files": 0, "punches": 0, "final": 0}
     final = db.scalar(select(func.count(PayrollLine.id)).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
                       .where(PayrollLine.employee_id == emp.id, PayrollRun.status == "FINAL")) or 0
-    if final:
-        return go(back, err=f"{emp.full_name} is on {final} finalized payroll(s), which are kept as financial records. "
-                            "Use 'Leaving the company' to mark them as left instead")
-    from services.photos import PHOTO_DIR
-    files = 0
+    if final and not with_final:
+        res["final"] = final
+        return res
     for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id == emp.id)):
         docs.delete_file(d.stored_name)
-        files += 1
+        res["files"] += 1
         db.delete(d)
     for lv in db.scalars(select(Leave).where(Leave.employee_id == emp.id)):
         if lv.document:
             docs.delete_file(lv.document)
         db.delete(lv)
-    for model in (DailyAttendance, EmployeeAsset, EmployeeSeparation, PayrollAdjustment, EmployeeComponent):
+    for model in (DailyAttendance, EmployeeAsset, EmployeeSeparation, PayrollAdjustment, EmployeeComponent,
+                  EmployeeChange, PayrollLine):
         db.execute(delete(model).where(model.employee_id == emp.id))
-    db.execute(delete(PayrollLine).where(PayrollLine.employee_id == emp.id))       # draft payroll only (final checked)
     for u in db.scalars(select(User).where(User.employee_id == emp.id)):
         if u.role == "STAFF":
             db.delete(u)
         else:
             u.employee_id = None
-    punches = 0
-    if with_punches:
+    if with_punches and emp.card_no:
         for lg in db.scalars(select(AttendanceLog).where(AttendanceLog.card_no == emp.card_no)):
-            if lg.photo:
-                (DATA_DIR / "punch_photos" / lg.photo).unlink(missing_ok=True)
+            _unlink_punch_photo(lg.photo)
             db.delete(lg)
-            punches += 1
-    for name in (emp.photo, emp.signature):
-        if name and "/" not in name and ".." not in name:
-            (PHOTO_DIR / name).unlink(missing_ok=True)
-    code, name = emp.employee_code, emp.full_name
+            res["punches"] += 1
+    _unlink_photo(emp.photo)
+    _unlink_photo(emp.signature)
     db.delete(emp)
-    audit(db, user, "EMPLOYEE_DELETE", f"{code} {name}: {files} document(s), {punches} punch(es) deleted", commit=False)
-    db.commit()
-    return go("/employees", msg=f"{code} {name} deleted" + (f" with {punches} punch records" if punches else ""))
+    db.flush()
+    return res
 
 
 @app.post("/employees/{emp_id}/documents")
@@ -4214,6 +4236,235 @@ def cleanup_settings(photo_required: str = Form(""), user=Depends(page_user), db
     set_setting(db, "mobile_photo_required", "1" if photo_required else "0")
     audit(db, user, "SETTINGS_SAVE", f"mobile punch photo required={bool(photo_required)}")
     return go("/cleanup", msg="Saved")
+
+
+# ------------------------------------------------------------ bulk actions (Admin)
+BULK_ACTIONS = {
+    "mark_left": "Mark as left (inactive)",
+    "photos": "Delete profile photos & signatures",
+    "punch_photos": "Delete mobile punch photos (punches stay)",
+    "documents": "Delete uploaded documents & saved letters",
+    "payslips": "Delete payslips (salary lines) of a month range",
+    "punches": "Delete punch records & processed attendance",
+    "delete": "Delete the employees completely",
+}
+
+
+def _bulk_emps(db: Session, user: dict, p) -> list[Employee]:
+    stmt = select(Employee).order_by(Employee.company_id, Employee.employee_code)
+    cids = [c.id for c in visible_companies(db, user)]
+    stmt = stmt.where(Employee.company_id.in_(cids or [0]))
+    if str(p.get("company") or "").isdigit():
+        stmt = stmt.where(Employee.company_id == int(p["company"]))
+    if p.get("status") in ("ACTIVE", "INACTIVE"):
+        stmt = stmt.where(Employee.employment_status == p["status"]) if p["status"] == "ACTIVE" else \
+            stmt.where(Employee.employment_status != "ACTIVE")
+    if str(p.get("department") or "").isdigit():
+        stmt = stmt.where(Employee.department_id == int(p["department"]))
+    if p.get("left_before"):
+        stmt = stmt.where(Employee.employment_status != "ACTIVE", Employee.left_on.is_not(None),
+                          Employee.left_on < parse_day(p["left_before"]))
+    codes = [c for c in re.split(r"[\s,;]+", str(p.get("codes") or "")) if c]
+    if codes:
+        stmt = stmt.where(or_(Employee.employee_code.in_(codes), Employee.card_no.in_(codes)))
+    if p.get("q"):
+        q = f"%{str(p['q']).strip()}%"
+        stmt = stmt.where(or_(Employee.employee_code.ilike(q), Employee.full_name.ilike(q), Employee.card_no.ilike(q)))
+    return list(db.scalars(stmt.limit(3000)))
+
+
+@app.get("/bulk", response_class=HTMLResponse)
+def bulk_page(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    need(user, "employees.delete")
+    p = dict(request.query_params)
+    searched = any(p.get(k) for k in ("company", "status", "department", "left_before", "codes", "q"))
+    emps = _bulk_emps(db, user, p) if searched else []
+    final_ids = set()
+    if emps:
+        final_ids = set(db.scalars(select(PayrollLine.employee_id).join(PayrollRun, PayrollRun.id == PayrollLine.run_id)
+                                   .where(PayrollRun.status == "FINAL",
+                                          PayrollLine.employee_id.in_([e.id for e in emps]))))
+    first_punch = db.scalar(select(func.min(AttendanceLog.punch_time)))
+    runs = db.execute(select(PayrollRun.year, PayrollRun.month, func.count(PayrollRun.id))
+                      .group_by(PayrollRun.year, PayrollRun.month)
+                      .order_by(PayrollRun.year.desc(), PayrollRun.month.desc()).limit(36)).all()
+    return render(request, "bulk.html", user, p=p, searched=searched, emps=emps, final_ids=final_ids,
+                  actions=BULK_ACTIONS, companies=visible_companies(db, user),
+                  departments=db.scalars(select(Department).order_by(Department.name)).all(),
+                  first_punch=first_punch, runs=runs, today=now_local().date())
+
+
+def _month_range(f) -> tuple[int, int]:
+    y1, m1 = parse_month(str(f.get("month_from") or ""))
+    y2, m2 = parse_month(str(f.get("month_to") or "")) if f.get("month_to") else (y1, m1)
+    a, b = sorted((y1 * 12 + m1, y2 * 12 + m2))
+    return a, b
+
+
+@app.post("/bulk/employees")
+async def bulk_employees(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Admin: one action on many selected employees."""
+    need(user, "employees.delete")
+    f = await request.form()
+    back = "/bulk?" + str(f.get("back_qs") or "")
+    action = str(f.get("action") or "")
+    if action not in BULK_ACTIONS:
+        return go(back, err="Choose what to do")
+    ids = [int(x) for x in f.getlist("ids") if str(x).isdigit()]
+    emps = [e for e in db.scalars(select(Employee).where(Employee.id.in_(ids or [0])))]
+    allowed = {c.id for c in visible_companies(db, user)}
+    emps = [e for e in emps if e.company_id in allowed]
+    if not emps:
+        return go(back, err="Tick at least one employee")
+    if action != "mark_left" and str(f.get("confirm") or "").strip() != "DELETE":
+        return go(back, err="Type DELETE to confirm")
+    with_final = bool(f.get("with_final"))
+    if action in ("payslips", "delete") and with_final:
+        need(user, "payroll.edit")
+    n, skipped = 0, []
+    if action == "mark_left":
+        when = parse_day(str(f.get("left_on"))) if f.get("left_on") else now_local().date()
+        for e in emps:
+            if e.employment_status == "ACTIVE":
+                e.employment_status, e.left_on, n = "INACTIVE", e.left_on or when, n + 1
+        msg = f"{n} employee(s) marked as left on {when:%d/%m/%Y}"
+    elif action == "photos":
+        for e in emps:
+            n += _unlink_photo(e.photo) + _unlink_photo(e.signature)
+            e.photo = e.signature = None
+        msg = f"{n} photo / signature file(s) deleted"
+    elif action == "punch_photos":
+        cards = [e.card_no for e in emps if e.card_no]
+        for lg in db.scalars(select(AttendanceLog).where(AttendanceLog.card_no.in_(cards or ["-"]),
+                                                         AttendanceLog.photo.is_not(None))):
+            n += _unlink_punch_photo(lg.photo)
+            lg.photo = None
+        msg = f"{n} mobile punch photo(s) deleted - the punches are kept"
+    elif action == "documents":
+        for d in db.scalars(select(EmployeeDocument).where(EmployeeDocument.employee_id.in_([e.id for e in emps]))):
+            docs.delete_file(d.stored_name)
+            db.delete(d)
+            n += 1
+        msg = f"{n} document(s) deleted"
+    elif action == "payslips":
+        a, b = _month_range(f)
+        runs = {r.id: r for r in db.scalars(select(PayrollRun).where(
+            (PayrollRun.year * 12 + PayrollRun.month).between(a, b)))}
+        for ln in db.scalars(select(PayrollLine).where(PayrollLine.run_id.in_(list(runs) or [0]),
+                                                       PayrollLine.employee_id.in_([e.id for e in emps]))):
+            if runs[ln.run_id].status == "FINAL" and not with_final:
+                skipped.append(ln.employee_id)
+                continue
+            db.delete(ln)
+            n += 1
+        db.flush()
+        for r in runs.values():                         # a payroll with nobody left on it goes too
+            if not db.scalar(select(func.count(PayrollLine.id)).where(PayrollLine.run_id == r.id)):
+                db.delete(r)
+        msg = f"{n} payslip(s) deleted ({_ym_txt(a)} - {_ym_txt(b)})"
+        if skipped:
+            msg += f"; {len(skipped)} finalized payslip(s) kept - tick 'including finalized' to delete them too"
+    elif action == "punches":
+        cards = [e.card_no for e in emps if e.card_no]
+        for lg in db.scalars(select(AttendanceLog).where(AttendanceLog.card_no.in_(cards or ["-"]))):
+            _unlink_punch_photo(lg.photo)
+            db.delete(lg)
+            n += 1
+        db.execute(delete(DailyAttendance).where(DailyAttendance.employee_id.in_([e.id for e in emps])))
+        msg = f"{n} punch record(s) and the processed attendance deleted"
+    else:                                               # delete
+        punches = bool(f.get("with_punches"))
+        for e in emps:
+            res = _wipe_employee(db, e, with_punches=punches, with_final=with_final)
+            if res["final"]:
+                skipped.append(f"{res['code']}")
+            else:
+                n += 1
+        msg = f"{n} employee(s) deleted"
+        if skipped:
+            msg += (f"; {len(skipped)} kept because they are on a finalized payroll ({', '.join(skipped[:15])}"
+                    f"{' ...' if len(skipped) > 15 else ''}) - mark them as left, or tick 'including finalized payslips'")
+    audit(db, user, "BULK_" + action.upper(), f"{len(emps)} selected: {msg}", commit=False)
+    db.commit()
+    return go(back, msg=msg)
+
+
+def _ym_txt(k: int) -> str:
+    y, m = divmod(k - 1, 12)
+    return f"{month_abbr[m + 1]} {y}"
+
+
+@app.post("/bulk/payroll")
+async def bulk_payroll(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Admin: delete whole payrolls (all payslips) of a month range, one or all companies."""
+    need(user, "employees.delete", "payroll.edit")
+    f = await request.form()
+    if str(f.get("confirm") or "").strip() != "DELETE":
+        return go("/bulk#payroll", err="Type DELETE to confirm")
+    a, b = _month_range(f)
+    allowed = [c.id for c in visible_companies(db, user)]
+    stmt = select(PayrollRun).where((PayrollRun.year * 12 + PayrollRun.month).between(a, b),
+                                    PayrollRun.company_id.in_(allowed or [0]))
+    if str(f.get("company") or "").isdigit():
+        stmt = stmt.where(PayrollRun.company_id == int(f["company"]))
+    n = kept = lines = 0
+    for r in db.scalars(stmt):
+        if r.status == "FINAL" and not f.get("with_final"):
+            kept += 1
+            continue
+        lines += len(r.lines)
+        if f.get("with_inputs"):
+            db.execute(delete(PayrollAdjustment).where(PayrollAdjustment.year == r.year,
+                                                       PayrollAdjustment.month == r.month,
+                                                       PayrollAdjustment.employee_id.in_(
+                                                           select(Employee.id).where(Employee.company_id == r.company_id))))
+        db.delete(r)
+        n += 1
+    msg = f"{n} payroll(s) with {lines} payslip(s) deleted ({_ym_txt(a)} - {_ym_txt(b)})"
+    if kept:
+        msg += f"; {kept} finalized payroll(s) kept - tick 'including finalized' to delete them"
+    audit(db, user, "BULK_PAYROLL_DELETE", msg, commit=False)
+    db.commit()
+    return go("/bulk#payroll", msg=msg)
+
+
+@app.post("/bulk/old-data")
+async def bulk_old_data(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Admin: delete old records before a date to keep the database small (make a backup first)."""
+    need(user, "employees.delete", "backup.manage")
+    f = await request.form()
+    if str(f.get("confirm") or "").strip() != "DELETE":
+        return go("/bulk#old", err="Type DELETE to confirm")
+    try:
+        before = parse_day(str(f.get("before") or ""))
+    except ValueError as exc:
+        return go("/bulk#old", err=str(exc))
+    if before > now_local().date() - timedelta(days=31):
+        return go("/bulk#old", err="Choose a date at least one month back")
+    cut = datetime.combine(before, time.min)
+    done = []
+    if f.get("punches"):
+        n = 0
+        for lg in db.scalars(select(AttendanceLog).where(AttendanceLog.punch_time < cut)):
+            _unlink_punch_photo(lg.photo)
+            db.delete(lg)
+            n += 1
+        done.append(f"{n} punch record(s)")
+    if f.get("attendance"):
+        n = db.execute(delete(DailyAttendance).where(DailyAttendance.work_date < before)).rowcount
+        done.append(f"{n} processed attendance day(s)")
+    if f.get("audit"):
+        n = db.execute(delete(AuditLog).where(AuditLog.created_at < cut)).rowcount
+        done.append(f"{n} activity log line(s)")
+    if f.get("errors"):
+        n = db.execute(delete(ErrorLog).where(ErrorLog.created_at < cut)).rowcount
+        done.append(f"{n} error log line(s)")
+    if not done:
+        return go("/bulk#old", err="Tick what to delete")
+    msg = f"Before {before:%d/%m/%Y}: " + ", ".join(done) + " deleted"
+    audit(db, user, "BULK_OLD_DATA_DELETE", msg, commit=False)
+    db.commit()
+    return go("/bulk#old", msg=msg)
 
 
 @app.get("/m", response_class=HTMLResponse)

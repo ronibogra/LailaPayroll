@@ -1,0 +1,82 @@
+{% extends "base.html" %}{% block title %}Bulk actions{% endblock %}{% block heading %}Bulk actions <span class="hint">(Admin only)</span>{% endblock %}
+{% block content %}
+<div class="panel"><p class="hint" style="margin:0">Work on many employees at once. <b>Make a <a href="/backup">backup</a> first</b> - deleted data and files cannot be brought back from the program. Every bulk action is written to the Activity log.</p></div>
+
+<div class="panel" id="pick"><h3>1. Find the employees</h3>
+<form method="get" action="/bulk#list"><div class="form-grid">
+{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All companies</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if p.company == c.id|string }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>{% endif %}
+<div><label>Status</label><select name="status"><option value="">All</option><option value="ACTIVE" {{ 'selected' if p.status == 'ACTIVE' }}>Active</option><option value="INACTIVE" {{ 'selected' if p.status == 'INACTIVE' }}>Left / inactive</option></select></div>
+<div><label>Department</label><select name="department"><option value="">All</option>{% for d in departments %}<option value="{{ d.id }}" {{ 'selected' if p.department == d.id|string }}>{{ d.name }}</option>{% endfor %}</select></div>
+<div><label>Left before (former staff)</label><input type="date" name="left_before" value="{{ p.left_before or '' }}"></div>
+<div><label>Search code, card or name</label><input name="q" value="{{ p.q or '' }}"></div>
+<div class="wide"><label>Or paste employee codes / card numbers (from Excel - one per line, or separated by commas)</label><textarea name="codes" rows="2">{{ p.codes or '' }}</textarea></div>
+</div><p><button class="sec">Show employees</button> <a class="btn sec" href="/bulk">Clear</a></p></form></div>
+
+{% if searched %}
+<form method="post" action="/bulk/employees" id="list">
+<input type="hidden" name="back_qs" value="{{ request.url.query }}">
+<div class="panel"><h3>2. Tick the employees ({{ emps|length }} found{% if emps|length >= 3000 %}, first 3000{% endif %})</h3>
+{% if emps %}
+<p><label class="chk"><input type="checkbox" id="all" checked> <b>Select all</b></label> <span class="hint" id="cnt"></span></p>
+<div class="table-wrap" style="max-height:420px;overflow:auto"><table><tr><th></th><th>Code</th><th>Name</th><th>Company</th><th>Department</th><th>Status</th><th>Joined</th><th>Left</th><th>Photo</th><th>Finalized payroll</th></tr>
+{% for e in emps %}<tr><td><input type="checkbox" class="pick" name="ids" value="{{ e.id }}" checked></td><td><a href="/employees/{{ e.id }}">{{ e.employee_code }}</a></td><td>{{ e.full_name }}</td><td>{{ e.company.code if e.company }}</td><td>{{ e.department.name if e.department }}</td>
+<td>{{ 'Active' if e.employment_status == 'ACTIVE' else 'Left' }}</td><td>{{ e.joined_on.strftime('%d/%m/%Y') if e.joined_on }}</td><td>{{ e.left_on.strftime('%d/%m/%Y') if e.left_on }}</td><td>{{ '✓' if e.photo }}</td><td>{{ 'Yes' if e.id in final_ids }}</td></tr>{% endfor %}</table></div>
+{% else %}<p class="hint">Nobody matches - change the search above.</p>{% endif %}</div>
+{% if emps %}
+<div class="panel"><h3>3. What to do with the ticked employees</h3>
+<div class="form-grid">
+<div class="wide"><label>Action</label><select name="action" id="act" required><option value="">- choose -</option>{% for k, l in actions.items() %}<option value="{{ k }}">{{ l }}</option>{% endfor %}</select></div>
+<div class="opt" data-for="mark_left"><label>Left on (blank = today)</label><input type="date" name="left_on"></div>
+<div class="opt" data-for="payslips"><label>From month</label><input type="month" name="month_from" value="{{ today.strftime('%Y-%m') }}"></div>
+<div class="opt" data-for="payslips"><label>To month</label><input type="month" name="month_to" value="{{ today.strftime('%Y-%m') }}"></div>
+<div class="opt" data-for="payslips delete"><label class="chk"><input type="checkbox" name="with_final" value="1"> including <b>finalized</b> payslips (salary already paid)</label></div>
+<div class="opt" data-for="delete"><label class="chk"><input type="checkbox" name="with_punches" value="1"> also delete their punch records</label></div>
+<div class="opt" data-for="photos punch_photos documents payslips punches delete"><label>Type DELETE to confirm</label><input name="confirm" autocomplete="off"></div>
+</div>
+<p class="hint" id="warn"></p>
+<p><button class="red" id="go">Do it for the ticked employees</button></p>
+<p class="hint">People who really worked here are better <b>marked as left</b> - their history, letters and payslips stay. Delete completely only records entered by mistake or very old data. Employees on a finalized payroll are kept unless you tick "including finalized payslips".</p></div>
+{% endif %}
+</form>
+{% endif %}
+
+<div class="grid2">
+{% if 'payroll.edit' in user.perms %}
+<div class="panel" id="payroll"><h3>Delete payrolls / payslips by month</h3>
+<p class="hint">Removes the whole salary sheet of the chosen months (every payslip in it). Draft payrolls can also simply be processed again.</p>
+<form method="post" action="/bulk/payroll"><div class="form-grid">
+{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All companies</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.code }}</option>{% endfor %}</select></div>{% endif %}
+<div><label>From month</label><input type="month" name="month_from" required></div>
+<div><label>To month</label><input type="month" name="month_to"></div>
+<div class="wide"><label class="chk"><input type="checkbox" name="with_final" value="1"> including <b>finalized</b> payrolls</label>
+<label class="chk"><input type="checkbox" name="with_inputs" value="1"> also the advances / deductions / tax entered for those months</label></div>
+<div><label>Type DELETE to confirm</label><input name="confirm" required autocomplete="off"></div>
+</div><p><button class="red">Delete payrolls</button></p></form>
+{% if runs %}<p class="hint">Payrolls on the server: {% for y, m, n in runs %}{{ '%04d-%02d'|format(y, m) }} ({{ n }}){{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}</div>
+{% endif %}
+{% if 'backup.manage' in user.perms %}
+<div class="panel" id="old"><h3>Delete old records</h3>
+<p class="hint">Keeps the database small. Everything <b>before</b> the date is removed for all employees.{% if first_punch %} Oldest punch: {{ first_punch.strftime('%d/%m/%Y') }}.{% endif %}</p>
+<form method="post" action="/bulk/old-data"><div class="form-grid">
+<div><label>Before</label><input type="date" name="before" required></div>
+<div class="wide"><label class="chk"><input type="checkbox" name="punches" value="1"> Punch records (with their mobile photos)</label>
+<label class="chk"><input type="checkbox" name="attendance" value="1"> Processed daily attendance</label>
+<label class="chk"><input type="checkbox" name="audit" value="1"> Activity log</label>
+<label class="chk"><input type="checkbox" name="errors" value="1"> Error log</label></div>
+<div><label>Type DELETE to confirm</label><input name="confirm" required autocomplete="off"></div>
+</div><p><button class="red">Delete old records</button></p></form>
+<p class="hint">Only photos by date, or photos of former staff: <a href="/cleanup">Storage &amp; cleanup</a>.</p></div>
+{% endif %}
+</div>
+<script>
+(function(){var all=document.getElementById('all'),cnt=document.getElementById('cnt'),act=document.getElementById('act');
+function count(){var p=document.querySelectorAll('.pick'),n=0;p.forEach(function(x){if(x.checked)n++});if(cnt)cnt.textContent=n+' of '+p.length+' ticked';}
+if(all){all.addEventListener('change',function(){document.querySelectorAll('.pick').forEach(function(x){x.checked=all.checked});count();});
+document.querySelectorAll('.pick').forEach(function(x){x.addEventListener('change',count)});count();}
+function opts(){var v=act?act.value:'';document.querySelectorAll('.opt').forEach(function(o){o.style.display=(' '+o.dataset.for+' ').indexOf(' '+v+' ')>=0?'':'none'});
+var w=document.getElementById('warn');if(w)w.textContent=v==='delete'?'Removes the employees with their documents, leave, assets, attendance and draft payslips. Cannot be undone.':'';}
+if(act){act.addEventListener('change',opts);opts();}
+var f=document.getElementById('list');if(f)f.addEventListener('submit',function(ev){var n=document.querySelectorAll('.pick:checked').length;
+if(act.value&&act.value!=='mark_left'&&!confirm((act.options[act.selectedIndex].text)+' for '+n+' employee(s)?'))ev.preventDefault();});})();
+</script>
+{% endblock %}
