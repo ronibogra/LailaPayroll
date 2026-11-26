@@ -9,7 +9,7 @@
 <div><label>Linked employee (Employee ID, optional)</label><input name="employee_code" value="{{ linked_code }}" placeholder="for My page - e.g. 12127"></div>
 <div><label>{{ 'New password (blank = keep current)' if eu else 'Password (8+ characters)' }}</label><input name="password" type="password" autocomplete="new-password"></div>
 <div><label><input type="checkbox" name="active" value="1" {{ 'checked' if not eu or eu.active }}> Active (untick to block login)</label></div>
-{% if user.super_admin %}<div><label><input type="checkbox" name="super_admin" value="1" {{ 'checked' if eu and eu.super_admin }}> <b>Super Admin</b> - may delete data (needs role ADMIN)</label></div>{% endif %}</div>
+{% if user.super_admin %}<div><input type="hidden" name="super_admin_shown" value="1"><label><input type="checkbox" name="super_admin" value="1" {{ 'checked' if eu and eu.super_admin }}> <b>Super Admin</b> - may delete data (needs role ADMIN)</label></div>{% endif %}</div>
 <p><button>Save user</button>{% if eu %} <a class="btn sec" href="/users">Cancel</a>{% endif %}</p></form>
 <p class="hint">Click <b>Edit</b> next to a user below to change their name, role, company access or password, or to block them. A user limited to one company only sees that company's staff, punches and payroll.</p></div>
 <div class="panel"><h3>{{ 'Edit role ' ~ edit_role.name if edit_role else 'New role' }}</h3>

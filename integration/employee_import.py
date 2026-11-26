@@ -10,7 +10,7 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from models import Company, Employee, Department, Shift
+from models import Company, Employee, Department, Shift, User
 from payroll.engine import split_gross
 from services.policy import load_policy
 
@@ -120,13 +120,27 @@ def _header(h) -> str:
     return k.replace(" ", "_")
 
 
+_NOISE = {"laila", "group", "ltd", "limited", "the", "factory", "company", "co", "plc", "pvt", "private", "bd",
+          "bangladesh", "and", "&"}
+
+
+def company_key(text: str) -> str:
+    """'Laila Laundry' and 'Laundry Factory' -> 'laundry'; 'LAILA STYLES' / 'Laila Styles Ltd.' -> 'styles'."""
+    import re
+    words = [w for w in re.split(r"[^a-z0-9]+", (text or "").lower()) if w and w not in _NOISE]
+    return " ".join(words)
+
+
+ROUNDING_TK = 5      # basic..food may differ from gross by a few Taka (rounding in Excel): fixed in house rent
+
+
 def import_employees(db: Session, content: bytes, only_company_id: int | None = None, allow_salary: bool = True) -> dict:
     """only_company_id: set for users limited to one company - other companies' rows are refused."""
     try:
         ws = load_workbook(io.BytesIO(content), data_only=True).worksheets[0]
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"cannot read the Excel file ({exc}). Save it as .xlsx and try again")
-    rows = ws.iter_rows(values_only=True)
+    rows = iter(list(ws.iter_rows(values_only=True)))
     header = [_header(h) for h in next(rows, [])]
     if "employee_code" not in header:
         raise ValueError("no employee_code column. Download the template to see the column names")
@@ -137,6 +151,10 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
     for c in all_companies:
         companies[c.code.lower()] = c
         companies[c.name.lower()] = c
+    loose: dict[str, list] = {}                 # names written a little differently (Laila Laundry = Laundry Factory)
+    for c in all_companies:
+        for k in {company_key(c.name), company_key(c.code)} - {""}:
+            loose.setdefault(k, []).append(c)
     default_company = (db.get(Company, only_company_id) if only_company_id
                        else (all_companies[0] if len(all_companies) == 1 else None))
     policies = {}
@@ -145,7 +163,11 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
     existing = {e.employee_code: e for e in db.scalars(select(Employee))}
     cards = {e.card_no: e.employee_code for e in existing.values()}
 
-    parsed, errors = [], []
+    rows = list(rows)
+    ci = idx.get("employee_code")
+    codes_in_file = {_text(r[ci]) for r in rows if ci is not None and ci < len(r) and _text(r[ci])}
+    renamed_from: set[str] = set()
+    parsed, errors, notes = [], [], {"renamed": [], "rounded": 0}
     for n, row in enumerate(rows, start=2):
         get = lambda c: row[idx[c]] if c in idx and idx[c] < len(row) else None  # noqa: E731, B023
         code = _text(get("employee_code"))
@@ -156,6 +178,8 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
             cname = _text(get("company"))
             if cname:
                 comp = companies.get(cname.lower())
+                if comp is None and len(loose.get(company_key(cname), [])) == 1:
+                    comp = loose[company_key(cname)][0]
                 if comp is None:
                     raise ValueError(f"unknown company {cname!r} - add it under Settings > Companies "
                                      f"(known: {', '.join(c.code for c in all_companies)})")
@@ -169,11 +193,29 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
             if old and only_company_id and old.company_id != only_company_id:
                 raise ValueError("this employee belongs to another company")
             card = _text(get("card_no")) or (old.card_no if old else code)
-            if cards.get(card, code) != code:
-                raise ValueError(f"card_no {card} already belongs to {cards[card]}")
+            holder = cards.get(card, code)
+            rename = None
+            if holder != code:
+                # The card's owner has another code - usually a record made earlier with the machine ID as its
+                # code (e.g. 12101). Same card = same person: give that record the new code (punches stay).
+                if (old is None and holder in existing and holder not in codes_in_file
+                        and holder not in renamed_from):
+                    rename = holder
+                    old = existing[holder]
+                    if not cname:
+                        comp = old.company
+                else:
+                    who = existing.get(holder)
+                    raise ValueError(f"card_no {card} already belongs to employee {holder}"
+                                     + (f" ({who.full_name})" if who else "")
+                                     + (" - both codes are in the file" if holder in codes_in_file else
+                                        " - change one of the card numbers"))
             cards[card] = code
             p = {"company_id": comp.id, "employee_code": code, "card_no": card,
                  "full_name": _text(get("full_name")) or (old.full_name if old else code)}
+            if rename:
+                p["_rename_from"] = rename
+                renamed_from.add(rename)
             if comp.id not in policies:
                 policies[comp.id] = load_policy(db, comp.id)
             gross = _money(get("gross")) if allow_salary else None
@@ -185,7 +227,11 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
                 elif any(v is None for v in parts.values()):
                     raise ValueError("when basic is filled, house_rent, medical, transport and food are required")
                 elif sum(parts.values()) != gross:
-                    raise ValueError(f"basic..food add up to {sum(parts.values())}, not gross {gross}")
+                    diff = sum(parts.values()) - gross
+                    if abs(diff) > ROUNDING_TK or parts["house_rent"] - diff < 0:
+                        raise ValueError(f"basic..food add up to {sum(parts.values())}, not gross {gross}")
+                    parts["house_rent"] -= diff          # Excel rounding: keep gross and basic, fix house rent
+                    notes["rounded"] += 1
                 p["gross"] = gross
                 p.update(parts)
             elif not old:
@@ -249,6 +295,16 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
     added = updated = 0
     for p in parsed:
         dname = p.pop("dept_name", None)
+        old_code = p.pop("_rename_from", None)
+        if old_code and old_code in existing:
+            e = existing.pop(old_code)
+            new_code = p["employee_code"]
+            for u in db.scalars(select(User).where(User.employee_id == e.id, User.username == old_code)):
+                if not db.scalar(select(User).where(User.username == new_code)):
+                    u.username = new_code            # staff login follows the new Employee ID
+            e.employee_code = new_code
+            existing[new_code] = e
+            notes["renamed"].append(f"{old_code}->{new_code}")
         e = existing.get(p["employee_code"])
         if e is None:
             e = Employee(employee_code=p["employee_code"], employment_status="ACTIVE", payment_mode="CASH")
@@ -267,4 +323,4 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
         for k, v in p.items():
             setattr(e, k, v)
     db.commit()
-    return {"added": added, "updated": updated}
+    return {"added": added, "updated": updated, **notes}

@@ -1028,6 +1028,19 @@ def main():
     ok(h.post(BASE + "/bulk/employees", data={"ids": bids, "action": "delete", "confirm": "DELETE"},
               timeout=30).status_code == 403, "bulk delete is for Admin only")
 
+    step("employee import: new Employee ID for a card already on file, company names, 1 Tk rounding")
+    post(s, "/employees/import", files={"file": ("m.xlsx", xlsx([["company", "employee_code", "full_name"],
+                                                                 ["LTL", "77001", "Machine User"]]))}, must="1 added")
+    r = post(s, "/employees/import", files={"file": ("n.xlsx", xlsx([
+        ["company", "employee_code", "card_no", "full_name", "gross", "basic", "house_rent", "medical", "transport", "food"],
+        ["Laila Laundry", "88001", "77001", "Renamed Person", 225000, 148367, 74184, 750, 450, 1250]]))},
+        must="got their new Employee ID")
+    ok("77001->88001" in r.text and "house rent" in r.text, f"rename + rounding message: {r.text[:400]}")
+    r = page(s, "/employees?q=88001", must="Renamed Person")
+    ok("LAUNDRY" in r.text, "'Laila Laundry' matched the Laundry Factory company")
+    post(s, "/employees/import", files={"file": ("x.xlsx", xlsx([["company", "employee_code"], ["Laila Design", "88002"]]))},
+         must="unknown company", must_not=None)
+
     step("Delete centre (Super Admin): every section opens, delete ticked / all matching, guards")
     r = page(s, "/delete", must="Delete centre")
     keys = re.findall(r'href="/delete\?s=([a-z_]+)"', r.text)
@@ -1058,7 +1071,8 @@ def main():
     ok(a2.get(BASE + "/delete", timeout=30).status_code == 403, "an ordinary Admin cannot open the Delete centre")
     ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "an ordinary Admin cannot use bulk delete")
     ok(h.get(BASE + "/delete", timeout=30).status_code == 403, "HR cannot open the Delete centre")
-    post(s, "/users/save", {"username": "admin2", "role": "ADMIN", "active": "1", "super_admin": "1"}, must="saved")
+    post(s, "/users/save", {"username": "admin2", "role": "ADMIN", "active": "1", "super_admin": "1",
+                              "super_admin_shown": "1"}, must="saved")
     page(a2, "/delete", must="Delete centre")
     post(s, "/delete/users", {"scope": "all", "q": "admin2", "confirm": "DELETE"}, must="User logins: 1 deleted")
 

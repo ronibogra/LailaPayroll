@@ -830,7 +830,13 @@ async def employees_import(file: UploadFile = File(...), user=Depends(page_user)
                   username=user["username"])
         return go("/employees", err=str(exc)[:1500])
     audit(db, user, "EMPLOYEE_IMPORT", f"{file.filename}: {result}")
-    return go("/employees", msg=f"Import done: {result['added']} added, {result['updated']} updated")
+    msg = f"Import done: {result['added']} added, {result['updated']} updated"
+    if result.get("renamed"):
+        msg += (f". {len(result['renamed'])} existing record(s) got their new Employee ID (same card no., punches "
+                f"kept): " + ", ".join(result["renamed"][:20]) + (" ..." if len(result["renamed"]) > 20 else ""))
+    if result.get("rounded"):
+        msg += f". {result['rounded']} row(s): small (up to 5 Tk) difference put in house rent so gross stays as written"
+    return go("/employees", msg=msg)
 
 
 PROFILE_FIELDS = ("father_name", "mother_name", "spouse_name", "gender", "blood_group", "religion", "marital_status",
@@ -3846,7 +3852,7 @@ def users_page(request: Request, role: str = "", edit: str = "", user=Depends(pa
 @app.post("/users/save")
 def user_save(username: str = Form(...), role: str = Form(...), password: str = Form(""), active: str = Form(""),
               company_id: str = Form(""), full_name: str = Form(""), employee_code: str = Form(""),
-              super_admin: str = Form(""), user=Depends(page_user),
+              super_admin: str = Form(""), super_admin_shown: str = Form(""), user=Depends(page_user),
               db: Session = Depends(get_db)):
     need(user, "users.manage")
     if not db.scalar(select(Role).where(Role.name == role)):
@@ -3876,7 +3882,7 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
         db.rollback()
         return go("/users", err="You cannot change your own role, company limit or active status")
     u.role, u.active, u.full_name = role, bool(active), full_name.strip() or u.full_name
-    if user.get("super_admin"):                  # only a Super Admin can make / remove another Super Admin
+    if user.get("super_admin") and super_admin_shown:   # only a Super Admin can make / remove another one
         want = bool(super_admin) and role == "ADMIN"
         if u.username == user["username"] and not want:
             db.rollback()
