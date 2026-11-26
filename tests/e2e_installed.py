@@ -1035,7 +1035,7 @@ def main():
         ["company", "employee_code", "card_no", "full_name", "gross", "basic", "house_rent", "medical", "transport", "food"],
         ["Laila Laundry", "88001", "77001", "Renamed Person", 225000, 148367, 74184, 750, 450, 1250]]))},
         must="got their new Employee ID")
-    ok("77001->88001" in r.text and "house rent" in r.text, f"rename + rounding message: {r.text[:400]}")
+    ok("77001 → 88001" in r.text and "house rent" in r.text, f"rename + rounding message: {r.text[:400]}")
     r = page(s, "/employees?q=88001", must="Renamed Person")
     ok("LAUNDRY" in r.text, "'Laila Laundry' matched the Laundry Factory company")
     post(s, "/employees/import", files={"file": ("x.xlsx", xlsx([["company", "employee_code"], ["Laila Design", "88002"]]))},

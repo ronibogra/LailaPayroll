@@ -304,7 +304,7 @@ def import_employees(db: Session, content: bytes, only_company_id: int | None = 
                     u.username = new_code            # staff login follows the new Employee ID
             e.employee_code = new_code
             existing[new_code] = e
-            notes["renamed"].append(f"{old_code}->{new_code}")
+            notes["renamed"].append(f"{old_code} → {new_code}")
         e = existing.get(p["employee_code"])
         if e is None:
             e = Employee(employee_code=p["employee_code"], employment_status="ACTIVE", payment_mode="CASH")
