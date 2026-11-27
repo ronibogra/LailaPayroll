@@ -1075,7 +1075,7 @@ def main():
     ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "an ordinary Admin cannot use bulk delete")
     ok(h.get(BASE + "/delete", timeout=30).status_code == 403, "HR cannot open the Delete centre")
     post(a2, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1"},
-         must="cannot change your own role", must_not=None)
+         must="Only a Super Admin can make a Super Admin", must_not=None)
     post(s, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1"}, must="saved")
     post(s, "/roles/save", {"name": "SUPPER_ADMIN", "label": "x"}, must="built-in SUPER_ADMIN", must_not=None)
     r = page(a2, "/delete", must="Punch records")
