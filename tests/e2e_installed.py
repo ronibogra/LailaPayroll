@@ -1136,10 +1136,13 @@ def main():
     import os
     import sqlite3
     dbf = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "LailaPayroll", "laila_payroll.db")
-    with sqlite3.connect(dbf) as con:
-        con.execute("INSERT INTO roles (name, label, permissions, builtin) VALUES ('SUPPER_ADMIN', 'my own', "
-                    "'dashboard.view,users.manage', 0)")
-        con.execute("UPDATE users SET role='SUPPER_ADMIN', super_admin=0 WHERE username='roni'")
+    con = sqlite3.connect(dbf)
+    con.execute("INSERT INTO roles (name, label, permissions, builtin) VALUES ('SUPPER_ADMIN', 'my own', "
+                "'dashboard.view,users.manage', 0)")
+    con.execute("UPDATE users SET role='SUPPER_ADMIN', super_admin=0 WHERE username='roni'")
+    con.commit()
+    con.close()                      # Windows: an open file cannot be replaced by the restore
+    del con
     r = post(s, "/backup/create", must="Backup saved")
     name = re.search(r"(LailaPayroll_backup_[0-9_]+_manual\.zip)", r.text).group(1)
     zdata = page(s, f"/backup/download/{name}").content
