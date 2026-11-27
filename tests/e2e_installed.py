@@ -1068,12 +1068,16 @@ def main():
          must="saved")
     a2 = requests.Session()
     post(a2, "/login", {"username": "admin2", "password": "Admin2@12345"}, must="Dashboard")
-    ok(a2.get(BASE + "/delete", timeout=30).status_code == 403, "an ordinary Admin cannot open the Delete centre")
+    r = page(a2, "/delete", must="Only a Super Admin can delete data")
+    ok("Super Admin now: <b>admin</b>" in r.text and 'name="ids"' not in r.text, "ordinary Admin sees who can delete")
+    ok(a2.post(BASE + "/delete/holidays", data={"scope": "all", "confirm": "DELETE"}, timeout=30).status_code == 403,
+       "an ordinary Admin cannot delete")
     ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "an ordinary Admin cannot use bulk delete")
     ok(h.get(BASE + "/delete", timeout=30).status_code == 403, "HR cannot open the Delete centre")
     post(s, "/users/save", {"username": "admin2", "role": "ADMIN", "active": "1", "super_admin": "1",
                               "super_admin_shown": "1"}, must="saved")
-    page(a2, "/delete", must="Delete centre")
+    r = page(a2, "/delete", must="Punch records")
+    ok("Only a Super Admin" not in r.text, "Super Admin sees the Delete centre")
     post(s, "/delete/users", {"scope": "all", "q": "admin2", "confirm": "DELETE"}, must="User logins: 1 deleted")
 
     step("HTTPS: local certificate authority, trusted chain, HTTP -> HTTPS for people, machines stay on HTTP")

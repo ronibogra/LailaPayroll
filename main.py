@@ -4326,7 +4326,13 @@ def _dd_params(src) -> dict:
 
 @app.get("/delete", response_class=HTMLResponse)
 def delete_centre(request: Request, s: str = "", page: int = 1, user=Depends(page_user), db: Session = Depends(get_db)):
-    need(user, "data.delete")
+    if "data.delete" not in user["perms"]:
+        if user["role"] != "ADMIN":
+            need(user, "data.delete")
+        supers = db.scalars(select(User).where(User.super_admin == True, User.active == True)  # noqa: E712
+                            .order_by(User.username)).all()
+        return render(request, "delete_centre.html", user, not_super=True, supers=supers, sections=[], groups=[],
+                      counts={}, sec=None, p={}, qs="", companies=[])
     allowed = _dd_allowed(db, user)
     counts = {sec.key: dd.count(db, sec, None, allowed) for sec in dd.SECTIONS}
     sec = dd.BY_KEY.get(s)

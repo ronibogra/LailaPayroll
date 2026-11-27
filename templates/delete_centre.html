@@ -1,5 +1,10 @@
 {% extends "base.html" %}{% block title %}Delete centre{% endblock %}{% block heading %}Delete centre <span class="tag ABSENT">Super Admin</span>{% endblock %}
 {% block content %}
+{% if not_super %}<div class="panel"><h3>Only a Super Admin can delete data</h3>
+<p>Your login <b>{{ user.username }}</b> is an Administrator but not a <b>Super Admin</b>.</p>
+<p>Super Admin now: {% for u in supers %}<b>{{ u.username }}</b>{{ ', ' if not loop.last }}{% else %}<i>nobody</i>{% endfor %}.</p>
+<p class="hint">Log in as {{ 'that user' if supers|length == 1 else 'one of them' }}, or ask them to open <b>Users &amp; roles</b> → <b>Edit</b> next to <b>{{ user.username }}</b> → tick <b>Super Admin</b> → Save. Then log out and in again.</p></div>
+{% else %}
 <div class="panel"><p class="hint" style="margin:0">Pick a part of the system, tick what to delete (one, several, or all on the page) and click <b>Delete ticked</b>. Make a <a href="/backup">backup</a> first - deleted data and files cannot be brought back from the program. Everything you delete is written to the Activity log.</p></div>
 <div class="dc">
 <div class="panel dc-menu">{% for g in groups %}<div class="nav-label" style="margin-top:{{ '0' if loop.first else '10px' }}">{{ g|upper }}</div>
@@ -33,6 +38,7 @@
 </form>
 {% endif %}
 </div></div>
+{% endif %}
 <style>.dc{display:grid;grid-template-columns:250px 1fr;gap:16px;align-items:start}.dc-menu a{display:flex;justify-content:space-between;padding:6px 8px;border-radius:6px;color:inherit;text-decoration:none;font-size:14px}
 .dc-menu a:hover{background:#f2f4f7}.dc-menu a.on{background:#e8f0fe;font-weight:600}.dc-menu a span{color:#6b7280;font-size:12px}
 .dc-all{border-top:1px solid #e5e7eb;margin-top:14px;padding-top:10px}@media(max-width:900px){.dc{grid-template-columns:1fr}}</style>

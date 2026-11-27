@@ -40,8 +40,8 @@
   {% if ['company.manage', 'policy.edit', 'holidays.manage', 'payroll.view', 'attendance.view']|select('in', pm)|list %}<a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>{% endif %}
   {% if 'logs.view' in pm or 'users.manage' in pm or 'backup.manage' in pm or 'company.manage' in pm %}<div class="nav-label">ADMIN</div>{% endif %}
   {% if 'appointment.letter' in pm %}<a href="/appointment-letter" class="{{ 'active' if path.startswith('/appointment-letter') or path.startswith('/letters') }}">Letters</a>{% endif %}
-  {% if 'data.delete' in pm %}<a href="/delete" class="{{ 'active' if path.startswith('/delete') }}">Delete centre</a>
-  <a href="/bulk" class="{{ 'active' if path.startswith('/bulk') }}">Bulk actions</a>{% endif %}
+  {% if 'data.delete' in pm or user.role == 'ADMIN' %}<a href="/delete" class="{{ 'active' if path.startswith('/delete') }}">Delete centre</a>{% endif %}
+  {% if 'data.delete' in pm %}<a href="/bulk" class="{{ 'active' if path.startswith('/bulk') }}">Bulk actions</a>{% endif %}
   {% if 'users.manage' in pm %}<a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users &amp; roles</a>{% endif %}
   {% if 'backup.manage' in pm %}<a href="/backup" class="{{ 'active' if path.startswith('/backup') }}">Backup &amp; restore</a>
   <a href="/cleanup" class="{{ 'active' if path.startswith('/cleanup') }}">Storage &amp; cleanup</a>
