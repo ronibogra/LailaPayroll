@@ -3896,6 +3896,7 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
         db.rollback()
         return go("/users", err="You cannot change your own role, company limit or active status")
     u.role, u.active, u.full_name = role, bool(active), full_name.strip() or u.full_name
+    u.company_id = int(company_id) if company_id else None
     code = employee_code.strip()
     if code:      # this login is also an employee: gives them My page (own attendance, leave, payslips)
         emp = db.scalar(select(Employee).where(or_(Employee.employee_code == code, Employee.card_no == code)))
@@ -3914,7 +3915,6 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
     elif role != "STAFF":
         u.employee_id = None
     audit(db, user, "USER_SAVE", f"{u.username} role={role} company={company_id or 'ALL'} active={bool(active)}"
-
           + (" password changed" if password else ""), commit=False)
     db.commit()
     return go("/users", msg=f"User {u.username} saved")
