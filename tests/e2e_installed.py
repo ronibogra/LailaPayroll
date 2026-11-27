@@ -1013,32 +1013,26 @@ def main():
     ok(h.post(BASE + f"/employees/{kid}/changes", data={"kind": "INCREMENT"}, timeout=30).status_code == 403,
        "only Admin records increments")
 
-    step("bulk actions (Admin): mark left, delete employees, payslips, old records")
+    step("many employees at once: mark as left on the Employees page, delete a pasted group in the Delete centre")
     post(s, "/employees/import", files={"file": ("b.xlsx", xlsx([["company", "employee_code", "full_name"],
                                                                  ["LTL", "BULK-1", "Bulk One"], ["LTL", "BULK-2", "Bulk Two"],
                                                                  ["LTL", "BULK-3", "Bulk Three"]]))}, must="3 added")
-    r = page(s, "/bulk?codes=BULK-1%0ABULK-2,BULK-3", must="3 found")
-    bids = re.findall(r'name="ids" value="(\d+)"', r.text)
-    ok(len(bids) == 3, f"bulk list ids: {bids}")
-    qs = "codes=BULK-1%0ABULK-2,BULK-3"
-    post(s, "/bulk/employees", {"ids": bids[:2], "action": "mark_left", "back_qs": qs},
-         must="2 employee(s) marked as left")
-    post(s, "/bulk/employees", {"ids": bids, "action": "delete", "confirm": "no", "back_qs": qs},
-         must="Type DELETE", must_not=None)
-    post(s, "/bulk/employees", {"ids": bids, "action": "photos", "confirm": "DELETE", "back_qs": qs},
-         must="0 photo / signature file(s) deleted")
-    post(s, "/bulk/employees", {"ids": bids, "action": "payslips", "confirm": "DELETE", "month_from": "2001-01",
-                                "back_qs": qs}, must="0 payslip(s) deleted")
-    post(s, "/bulk/employees", {"ids": bids, "action": "delete", "confirm": "DELETE", "back_qs": qs},
-         must="3 employee(s) deleted")
-    page(s, "/bulk?codes=BULK-1", must="0 found")
-    post(s, "/bulk/payroll", {"month_from": "2001-01", "month_to": "2001-03", "confirm": "DELETE"},
-         must="0 payroll(s) with 0 payslip(s) deleted")
-    post(s, "/bulk/old-data", {"before": "01/01/2001", "audit": "1", "errors": "1", "confirm": "DELETE"},
-         must="Before 01/01/2001")
-    ok(h.get(BASE + "/bulk", timeout=30).status_code == 403, "bulk actions are for Admin only")
-    ok(h.post(BASE + "/bulk/employees", data={"ids": bids, "action": "delete", "confirm": "DELETE"},
-              timeout=30).status_code == 403, "bulk delete is for Admin only")
+    r = page(s, "/employees?q=BULK-", must="Mark as left - many at once")
+    bids = re.findall(r'form="statusform" name="ids" value="(\d+)"', r.text)
+    ok(len(bids) == 3, f"tick boxes on the Employees page: {bids}")
+    post(s, "/employees/status", {"ids": bids[:2], "action": "LEFT", "left_on": "2026-10-31", "back_qs": "q=BULK-"},
+         must="2 employee(s) marked as left on 31/10/2026")
+    post(h, "/employees/status", {"codes": "BULK-1", "action": "ACTIVE"}, must="1 employee(s) are active again")
+    r = page(s, "/bulk")
+    ok("/delete" in r.url and "Bulk actions moved" in r.text, "old Bulk address goes to the Delete centre")
+    r = page(s, "/delete?s=employees&codes=BULK-1%0ABULK-2,BULK-3", must="Bulk Three")
+    ok("(3 items match the filter)" in r.text, "pasted Employee IDs filter the Delete centre")
+    post(s, "/delete/employees", {"scope": "all", "codes": "BULK-1\nBULK-2,BULK-3", "confirm": "DELETE"},
+         must="Employees: 3 deleted")
+    post(s, "/delete/punches", {"scope": "all", "start": "01/01/2001", "end": "31/12/2001", "confirm": "DELETE"},
+         must="Punch records: 0 deleted")
+    ok(h.post(BASE + "/delete/employees", data={"scope": "all", "codes": "BULK-1", "confirm": "DELETE"},
+              timeout=30).status_code == 403, "HR cannot delete")
 
     step("employee import: new Employee ID for a card already on file, company names, 1 Tk rounding")
     post(s, "/employees/import", files={"file": ("m.xlsx", xlsx([["company", "employee_code", "full_name"],

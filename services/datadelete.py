@@ -371,9 +371,11 @@ def query(sec: Section, p: dict, allowed_companies: list[int] | None = None):
     if sec.where is not None:
         stmt = stmt.where(sec.where)
     joined = False
+    import re
+    codes = [c for c in re.split(r"[\s,;]+", str(p.get("codes") or "")) if c]
     q = str(p.get("q") or "").strip()
     company = int(p["company"]) if str(p.get("company") or "").isdigit() else None
-    if sec.emp_on is not None and (q or company or allowed_companies is not None):
+    if sec.emp_on is not None and (q or company or codes or allowed_companies is not None):
         stmt = stmt.outerjoin(EMP, sec.emp_on)
         joined = True
     if q:
@@ -383,6 +385,11 @@ def query(sec: Section, p: dict, allowed_companies: list[int] | None = None):
             conds += [EMP.employee_code.ilike(like), EMP.full_name.ilike(like), EMP.card_no.ilike(like)]
         if conds:
             stmt = stmt.where(or_(*conds))
+    if codes:                                   # a hand-picked group: Employee IDs / card numbers pasted from Excel
+        if sec.model is Employee:
+            stmt = stmt.where(or_(Employee.employee_code.in_(codes), Employee.card_no.in_(codes)))
+        elif joined:
+            stmt = stmt.where(or_(EMP.employee_code.in_(codes), EMP.card_no.in_(codes)))
     ccol = sec.company_col if sec.company_col is not None else (EMP.company_id if joined else None)
     if ccol is not None:
         if company:

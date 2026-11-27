@@ -11,7 +11,7 @@
 {% for x in sections if x.group == g %}<a href="/delete?s={{ x.key }}" class="{{ 'on' if sec and sec.key == x.key }}">{{ x.label }}<span>{{ counts[x.key] }}</span></a>{% endfor %}{% endfor %}</div>
 <div>
 {% if not sec %}<div class="panel"><h3>Choose what to delete</h3><p class="hint">The list on the left shows every kind of data and how many items are stored. Click one to see the items.</p>
-<p class="hint">For many employees at once with one action (mark as left, delete photos, payslips of a month ...) you can also use <a href="/bulk">Bulk actions</a>.</p></div>
+<p class="hint">Tip: to work on a hand-picked group of people, open a section and paste their Employee IDs in the filter. To mark many people as left (not deleting) use the <a href="/employees">Employees</a> page.</p></div>
 {% else %}
 <div class="panel"><h3>{{ sec.label }} <span class="hint">({{ total }} item{{ 's' if total != 1 }}{% if p %} match the filter{% endif %})</span></h3>
 {% if sec.note %}<p class="hint">{{ sec.note }}</p>{% endif %}
@@ -19,6 +19,7 @@
 <div><label>Search</label><input name="q" value="{{ p.q or '' }}" placeholder="{{ 'code, name, card' if sec.emp_on is not none or sec.key in ('employees','photos') else 'text' }}"></div>
 {% if sec.date_col is not none %}<div><label>From</label><input type="date" name="start" value="{{ p.start or '' }}"></div><div><label>To</label><input type="date" name="end" value="{{ p.end or '' }}"></div>{% endif %}
 {% if (sec.emp_on is not none or sec.company_col is not none) and companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if p.company == c.id|string }}>{{ c.code }}</option>{% endfor %}</select></div>{% endif %}
+{% if sec.emp_on is not none or sec.key in ('employees', 'photos') %}<div style="flex-basis:100%"><label>Only these Employee IDs / card numbers (paste from Excel)</label><textarea name="codes" rows="2" style="width:100%">{{ p.codes or '' }}</textarea></div>{% endif %}
 <button class="sec">Filter</button>{% if p %} <a class="btn sec" href="/delete?s={{ sec.key }}">Clear</a>{% endif %}</form></div>
 
 <form method="post" action="/delete/{{ sec.key }}" id="dform" class="panel">

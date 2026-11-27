@@ -4,7 +4,7 @@
 <div class="panel"><form class="inline" method="get">{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All companies</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == company }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>{% endif %}
 <div><label>Status</label><select name="status"><option value="">All</option>{% for st in ('ACTIVE','INACTIVE') %}<option {{ 'selected' if st == status }}>{{ st }}</option>{% endfor %}</select></div>
 <div><label>Search code, card or name</label><input name="q" value="{{ q }}"></div><button class="sec">Search</button>
-{% if 'employees.edit' in user.perms %}<a class="btn" href="/employees/new">+ Add employee</a>{% endif %}{% if 'data.delete' in user.perms %} <a class="btn sec" href="/bulk">Bulk actions</a>{% endif %}</form></div>
+{% if 'employees.edit' in user.perms %}<a class="btn" href="/employees/new">+ Add employee</a>{% endif %}{% if 'data.delete' in user.perms %} <a class="btn sec" href="/delete?s=employees">Delete employees</a>{% endif %}</form></div>
 {% if 'employees.edit' in user.perms %}
 <div class="grid2">
 <div class="panel"><h3>Import employees from Excel</h3>
@@ -17,7 +17,19 @@
 <input type="file" name="files" accept=".zip,image/*" multiple required><button>Upload photos</button></form></div>
 </div>{% endif %}
 {{ report_bar(r) }}
-{% call(e) report_table(r, empty='No employees yet - import the Excel template.') %}{% if e.photo %}<img class="thumb" src="/employees/{{ e.id }}/photo" alt="" loading="lazy"> {% endif %}<a href="/employees/{{ e.id }}">Profile</a>{% if 'employees.edit' in user.perms %} · <a href="/employees/{{ e.id }}/edit">Edit</a>{% endif %}{% endcall %}
+{% call(e) report_table(r, empty='No employees yet - import the Excel template.') %}{% if 'employees.edit' in user.perms %}<input type="checkbox" class="pick" form="statusform" name="ids" value="{{ e.id }}" title="tick to mark as left"> {% endif %}{% if e.photo %}<img class="thumb" src="/employees/{{ e.id }}/photo" alt="" loading="lazy"> {% endif %}<a href="/employees/{{ e.id }}">Profile</a>{% if 'employees.edit' in user.perms %} · <a href="/employees/{{ e.id }}/edit">Edit</a>{% endif %}{% endcall %}
+{% if 'employees.edit' in user.perms and r.rows %}<form method="post" action="/employees/status" id="statusform" class="panel" style="margin-top:12px">
+<input type="hidden" name="back_qs" value="{{ request.url.query }}">
+<h3>Mark as left - many at once</h3>
+<p class="hint">Tick employees in the list above (<label style="display:inline;color:inherit"><input type="checkbox" id="allpick"> tick all on this page</label>, <span id="pickcnt">0</span> ticked) or paste Employee IDs. Nothing is deleted - they move to Former employees and keep their history.</p>
+<div class="form-grid">
+<div><label>Do</label><select name="action"><option value="LEFT">Mark as left</option><option value="ACTIVE">Make active again</option></select></div>
+<div><label>Left on (blank = today)</label><input type="date" name="left_on"></div>
+<div class="wide"><label>or these Employee IDs (paste from Excel)</label><textarea name="codes" rows="2"></textarea></div>
+</div><p><button>Apply</button></p></form>
+<script>(function(){var a=document.getElementById('allpick'),c=document.getElementById('pickcnt');function u(){c.textContent=document.querySelectorAll('.pick:checked').length;}
+if(a)a.addEventListener('change',function(){document.querySelectorAll('.pick').forEach(function(x){x.checked=a.checked});u();});
+document.querySelectorAll('.pick').forEach(function(x){x.addEventListener('change',u)});})();</script>{% endif %}
 <div class="pager">{% set base = request.url.query|replace('page=' ~ page, '') %}{% if page > 1 %}<a class="btn sec" href="?{{ base }}&page={{ page-1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }}</span>
 {% if page < pages %}<a class="btn sec" href="?{{ base }}&page={{ page+1 }}">Next ›</a>{% endif %}</div>
 <p class="hint">Card no. must be unique across all companies (the machines are shared). Excel/PDF export contains all pages with the chosen columns.</p>
