@@ -1130,6 +1130,16 @@ def main():
     ok(requests.get(BASE + "/login", allow_redirects=False, timeout=30).status_code == 200, "HTTPS switch off again")
 
     step("backup: make, download, upload, change data, restore, data is back")
+    # an older installation where someone made a role "SUPPER_ADMIN" by hand for their own login: after the restart
+    # (restore) the login must be on the built-in SUPER_ADMIN role and may delete
+    post(s, "/users/save", {"username": "roni", "role": "HR", "password": "Roni@123456", "active": "1"}, must="saved")
+    import os
+    import sqlite3
+    dbf = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "LailaPayroll", "laila_payroll.db")
+    with sqlite3.connect(dbf) as con:
+        con.execute("INSERT INTO roles (name, label, permissions, builtin) VALUES ('SUPPER_ADMIN', 'my own', "
+                    "'dashboard.view,users.manage', 0)")
+        con.execute("UPDATE users SET role='SUPPER_ADMIN', super_admin=0 WHERE username='roni'")
     r = post(s, "/backup/create", must="Backup saved")
     name = re.search(r"(LailaPayroll_backup_[0-9_]+_manual\.zip)", r.text).group(1)
     zdata = page(s, f"/backup/download/{name}").content
@@ -1154,6 +1164,10 @@ def main():
     ok("MADE AFTER BACKUP" not in r.text and "Language Day" in r.text, "restore did not bring the backup data back")
     page(s, "/backup", must="before_restore")
     page(s, "/employees?q=12127", must="Abdul Karim")
+    rs = requests.Session()
+    r = post(rs, "/login", {"username": "roni", "password": "Roni@123456"}, must="Dashboard")
+    ok("roni (SUPER_ADMIN)" in r.text, "hand-made SUPPER_ADMIN login moved to the built-in SUPER_ADMIN after restart")
+    page(rs, "/delete", must="Punch records")
     print("\nALL CHECKS PASSED", flush=True)
 
 
