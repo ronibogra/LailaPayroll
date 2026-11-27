@@ -34,7 +34,13 @@ PERMS: dict[str, str] = {
     "self.service": "My page: own profile, attendance, leave requests, payslips and assets (Staff)",
 }
 
-ADMIN_ROLES = ("SUPER_ADMIN", "ADMIN")       # these roles always have every permission (not editable)
+ADMIN_ROLES = ("SUPER_ADMIN", "ADMIN")
+# order of the role pickers (other roles follow, A-Z)
+ROLE_ORDER = ["SUPER_ADMIN", "ADMIN", "HR", "PAYROLL", "STAFF", "MERCHANDISER", "ACCOUNTS", "CFO", "DEPT_HEAD", "VIEWER"]
+
+
+def role_sort_key(name: str):
+    return (ROLE_ORDER.index(name) if name in ROLE_ORDER else len(ROLE_ORDER), name)       # these roles always have every permission (not editable)
 
 
 def super_like(name: str) -> bool:
@@ -66,6 +72,11 @@ BUILTIN_ROLES: dict[str, tuple[str, list[str]]] = {
     "ACCOUNTS": ("Accounts", ["dashboard.view", "reports.export", "employees.view", "salary.view", "punches.view",
                               "attendance.view", "attendance.process", "payroll.view", "payroll.process",
                               "payroll.finalize", "policy.edit"]),
+    "PAYROLL": ("Payroll - salary sheets, advances & deductions, payslips", [
+        "dashboard.view", "reports.export", "employees.view", "salary.view", "punches.view", "attendance.view",
+        "payroll.view", "payroll.process", "self.service"]),
+    "MERCHANDISER": ("Merchandiser - own page, plus staff list and attendance (no salaries)", [
+        "dashboard.view", "reports.export", "self.service", "employees.view", "attendance.view"]),
     "VIEWER": ("Viewer - attendance only, no salaries", ["dashboard.view", "reports.export", "employees.view",
                                                           "punches.view", "attendance.view"]),
     "DEPT_HEAD": ("Department Head - approves leave of own departments", [

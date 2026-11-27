@@ -853,6 +853,18 @@ def main():
     post(requests.Session(), "/login", {"username": "12160", "password": "12345678"}, must="Wrong username or password",
          must_not=None)
     post(s, "/users/staff-login", {"enabled": "1", "default_password": "12345678"}, must="settings saved")
+    page(s, "/users", must="Employee logins")
+    post(s, "/users/employee-roles", {"role": "ADMIN", "codes": "LTL-0001"}, must="Choose a role", must_not=None)
+    post(s, "/users/employee-roles", {"role": "MERCHANDISER", "codes": "LTL-0001"}, must="MERCHANDISER:")
+    r = page(s, "/users?sq=LTL-0001")
+    ok("<option selected>MERCHANDISER</option>" in r.text, "employee login got the Merchandiser role")
+    uid = re.search(r'name="role_(\d+)"', r.text).group(1)
+    post(s, "/users/employee-logins", {f"role_{uid}": "STAFF", f"active_{uid}": "1"}, must="1 employee login(s) changed")
+    post(s, "/users/staff-login", {"enabled": "1", "default_password": "12345678", "default_role": "ADMIN"},
+         must="not Admin", must_not=None)
+    post(s, "/users/staff-login", {"enabled": "1", "default_password": "12345678", "default_role": "STAFF"},
+         must="settings saved")
+    page(s, "/users?role=PAYROLL", must="Edit role PAYROLL")
     r = page(s, "/me", must="not linked to an employee")             # admin without an employee record
     ok('href="/me"' not in page(s, "/").text, "My page link only for linked logins")
     post(s, "/users/save", {"username": "admin", "role": "SUPER_ADMIN", "active": "1", "employee_code": "12127"},

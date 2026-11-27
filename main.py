@@ -31,6 +31,7 @@ from reports.payslip import payslips_pdf
 from security import (hash_password, verify_password, create_token, decode_token, page_user,
                       LoginRequired, COOKIE)
 from services.permissions import (PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, SUPER_PERMS, ADMIN_ROLES, super_like,
+                                  role_sort_key,
                                   parse as parse_perms)
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
 from services import leave as leave_svc, documents as docs, components as comp_svc, disbursement as disb
@@ -638,6 +639,12 @@ def staff_default_password(db) -> str:
     return get_setting(db, "staff_default_password", default="12345678") or "12345678"
 
 
+def staff_role(db) -> str:
+    """Role given to an employee's login when it is made at their first login (Users & roles > Employee logins)."""
+    r = get_setting(db, "staff_role", default="STAFF") or "STAFF"
+    return r if r not in ADMIN_ROLES and db.scalar(select(Role).where(Role.name == r)) else "STAFF"
+
+
 def _staff_first_login(db, code: str, password: str):
     """An employee's first login with Employee ID + the default password creates their Staff account
     (they must choose their own password straight away)."""
@@ -648,7 +655,7 @@ def _staff_first_login(db, code: str, password: str):
     emp = db.scalar(select(Employee).where(Employee.employee_code == code, Employee.employment_status == "ACTIVE"))
     if not emp:
         return None
-    u = User(username=code, full_name=emp.full_name, role="STAFF", employee_id=emp.id, company_id=None,
+    u = User(username=code, full_name=emp.full_name, role=staff_role(db), employee_id=emp.id, company_id=None,
              password_hash=hash_password(password), must_change=True, active=True)
     db.add(u)
     audit(db, code, "STAFF_ACCOUNT", f"created at first login for {emp.full_name}", commit=False)
@@ -3848,8 +3855,16 @@ def backup_delete(name: str = Form(...), user=Depends(page_user), db: Session = 
 @app.get("/users", response_class=HTMLResponse)
 def users_page(request: Request, role: str = "", edit: str = "", user=Depends(page_user), db: Session = Depends(get_db)):
     need(user, "users.manage")
-    roles = db.scalars(select(Role).order_by(Role.builtin.desc(), Role.name)).all()
+    roles = sorted(db.scalars(select(Role)).all(), key=lambda r: role_sort_key(r.name))
+    sq = request.query_params.get("sq", "").strip()
+    emp_logins = select(User, Employee).join(Employee, Employee.id == User.employee_id).where(
+        User.role.not_in(ADMIN_ROLES))
+    if sq:
+        emp_logins = emp_logins.where(or_(Employee.employee_code.ilike(f"%{sq}%"), Employee.full_name.ilike(f"%{sq}%"),
+                                          User.role.ilike(f"%{sq}%"), Employee.designation.ilike(f"%{sq}%")))
     return render(request, "users.html", user, users=db.scalars(select(User).order_by(User.username)).all(),
+                  emp_logins=db.execute(emp_logins.order_by(Employee.employee_code).limit(500)).all(), sq=sq,
+                  staff_role=staff_role(db), departments=db.scalars(select(Department).order_by(Department.name)).all(),
                   eu=(eu := db.scalar(select(User).where(User.username == edit)) if edit else None),
                   linked_code=(db.get(Employee, eu.employee_id).employee_code
                                if eu and eu.employee_id and db.get(Employee, eu.employee_id) else ""),
@@ -4103,12 +4118,12 @@ def me_password_save(request: Request, current: str = Form(...), new: str = Form
 
 @app.post("/users/staff-login")
 def staff_login_settings(enabled: str = Form(""), default_password: str = Form(""), reset_code: str = Form(""),
-                         user=Depends(page_user), db: Session = Depends(get_db)):
+                         default_role: str = Form(""), user=Depends(page_user), db: Session = Depends(get_db)):
     """Admin: staff login on/off, the default password, and resetting one employee back to the default."""
     need(user, "users.manage")
     if reset_code.strip():
         u = db.scalar(select(User).where(User.username == reset_code.strip()))
-        if not u or u.role != "STAFF":
+        if not u or u.role in ADMIN_ROLES or not u.employee_id:
             return go("/users#staff", err=f"No staff login for {reset_code.strip()} yet - they can log in with the "
                                            "default password")
         u.password_hash, u.must_change, u.active = hash_password(staff_default_password(db)), True, True
@@ -4120,9 +4135,86 @@ def staff_login_settings(enabled: str = Form(""), default_password: str = Form("
         return go("/users#staff", err="Default password needs 6+ characters")
     set_setting(db, "staff_login", "1" if enabled else "0", commit=False)
     set_setting(db, "staff_default_password", pw, commit=False)
+    if default_role:
+        if default_role in ADMIN_ROLES or not db.scalar(select(Role).where(Role.name == default_role)):
+            return go("/users#staff", err="Choose a role that is not Admin for new employee logins")
+        set_setting(db, "staff_role", default_role, commit=False)
     audit(db, user, "STAFF_LOGIN_SETTINGS", f"enabled={bool(enabled)}", commit=False)
     db.commit()
     return go("/users#staff", msg="Staff login settings saved")
+
+
+@app.post("/users/employee-roles")
+async def employee_roles(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Admin: give employees a login with a role (or change the role of their login) - by Employee IDs pasted
+    from Excel, a whole department or company. New logins use Employee ID + default password."""
+    need(user, "users.manage")
+    f = await request.form()
+    role = str(f.get("role") or "")
+    if role in ADMIN_ROLES or not db.scalar(select(Role).where(Role.name == role)):
+        return go("/users#emplogins", err="Choose a role (Admin roles are given in the user form above)")
+    stmt = select(Employee).where(Employee.employment_status == "ACTIVE")
+    codes = [c for c in re.split(r"[\s,;]+", str(f.get("codes") or "")) if c]
+    dept = str(f.get("department") or "")
+    comp = str(f.get("company") or "")
+    if codes:
+        stmt = stmt.where(or_(Employee.employee_code.in_(codes), Employee.card_no.in_(codes)))
+    elif dept.isdigit() or comp.isdigit():
+        if dept.isdigit():
+            stmt = stmt.where(Employee.department_id == int(dept))
+        if comp.isdigit():
+            stmt = stmt.where(Employee.company_id == int(comp))
+    else:
+        return go("/users#emplogins", err="Paste Employee IDs, or choose a department or company")
+    if user.get("company_id"):
+        stmt = stmt.where(Employee.company_id == user["company_id"])
+    made = changed = skipped = 0
+    for e in db.scalars(stmt):
+        u = db.scalar(select(User).where(User.employee_id == e.id)) or \
+            db.scalar(select(User).where(User.username == e.employee_code))
+        if u is None:
+            db.add(User(username=e.employee_code, full_name=e.full_name, role=role, employee_id=e.id,
+                        password_hash=hash_password(staff_default_password(db)), must_change=True, active=True))
+            made += 1
+        elif u.role in ADMIN_ROLES:
+            skipped += 1
+        else:
+            u.role, u.employee_id = role, u.employee_id or e.id
+            changed += 1
+    found = made + changed + skipped
+    if not found:
+        return go("/users#emplogins", err="No active employee matched")
+    audit(db, user, "EMPLOYEE_ROLES", f"{role}: {made} new login(s), {changed} changed, {skipped} admin skipped",
+          commit=False)
+    db.commit()
+    msg = f"{role}: {made} new login(s) made, {changed} login(s) changed"
+    if made:
+        msg += f". New logins: Employee ID + password {staff_default_password(db)} (they choose their own at first login)"
+    if skipped:
+        msg += f". {skipped} Admin login(s) left as they are"
+    return go("/users#emplogins", msg=msg)
+
+
+@app.post("/users/employee-logins")
+async def employee_logins_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Admin: change role / active of the employee logins listed on the Users page."""
+    need(user, "users.manage")
+    f = await request.form()
+    valid = {r.name for r in db.scalars(select(Role))} - set(ADMIN_ROLES)
+    n = 0
+    for key in f.keys():
+        if not key.startswith("role_") or not key[5:].isdigit():
+            continue
+        u = db.get(User, int(key[5:]))
+        if not u or u.role in ADMIN_ROLES or u.username == user["username"]:
+            continue
+        new_role, active = str(f.get(key)), bool(f.get(f"active_{u.id}"))
+        if new_role in valid and (new_role != u.role or active != u.active):
+            u.role, u.active = new_role, active
+            n += 1
+    audit(db, user, "EMPLOYEE_LOGINS_SAVE", f"{n} changed", commit=False)
+    db.commit()
+    return go("/users#emplogins", msg=f"{n} employee login(s) changed")
 
 
 @app.get("/punches/photos", response_class=HTMLResponse)
