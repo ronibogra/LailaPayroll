@@ -30,6 +30,7 @@ PERMS: dict[str, str] = {
     "users.manage": "Users and roles",
     "backup.manage": "Backup and restore",
     "logs.view": "Error log and activity log",
+    "data.delete": "DELETE data - Delete centre and bulk delete (employees, punches, payslips, photos ...)",
     "reports.export": "Export reports to Excel / PDF",
     "self.service": "My page: own profile, attendance, leave requests, payslips and assets (Staff)",
 }
@@ -49,8 +50,7 @@ def super_like(name: str) -> bool:
     return bool(re.fullmatch(r"SU+P+E*R[\s_-]*ADMIN(ISTRATOR)?", (name or "").strip().upper()))
 
 
-# not a role permission: only the SUPER_ADMIN role gets it
-SUPER_PERMS = {"data.delete": "Delete data - Delete centre and bulk delete (Super Admin)"}
+SUPER_PERMS: dict[str, str] = {}
 
 GROUPS = [
     ("General", ["dashboard.view", "reports.export", "self.service"]),
@@ -60,12 +60,12 @@ GROUPS = [
     ("Attendance", ["attendance.view", "attendance.process", "shifts.manage", "holidays.manage"]),
     ("Leave", ["leave.manage", "leave.approve_dept", "leave.approve_final", "leave.policy"]),
     ("Payroll", ["payroll.view", "payroll.process", "payroll.finalize", "payroll.edit", "policy.edit"]),
-    ("Administration", ["company.manage", "users.manage", "backup.manage", "logs.view"]),
+    ("Administration", ["company.manage", "users.manage", "backup.manage", "logs.view", "data.delete"]),
 ]
 
 BUILTIN_ROLES: dict[str, tuple[str, list[str]]] = {
-    "SUPER_ADMIN": ("Super Admin - everything, including deleting data", list(PERMS)),
-    "ADMIN": ("Administrator - everything except deleting data", list(PERMS)),
+    "SUPER_ADMIN": ("Super Admin - everything; deleting as ticked per user", list(PERMS)),
+    "ADMIN": ("Administrator - everything except deleting data", [p for p in PERMS if p != "data.delete"]),
     "HR": ("HR", ["dashboard.view", "reports.export", "employees.view", "employees.edit", "salary.view",
                   "punches.view", "punches.edit", "machines.manage", "attendance.view", "attendance.process",
                   "leave.manage", "holidays.manage", "payroll.view", "payroll.process", "logs.view"]),

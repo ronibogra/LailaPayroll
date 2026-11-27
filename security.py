@@ -79,16 +79,16 @@ def page_user(request: Request) -> dict:
         row = db.query(User).filter(User.username == user["username"]).first()
         if not row or not row.active:
             raise LoginRequired()
-        if row.role == "SUPER_ADMIN":
-            perms = set(PERMS) | {"data.delete"}
-        elif row.role == "ADMIN":
-            perms = set(PERMS)
+        if row.role in ("SUPER_ADMIN", "ADMIN"):
+            perms = set(PERMS) - {"data.delete"}          # deleting: only if ticked for this user
         else:
             role = db.query(Role).filter(Role.name == row.role).first()
             perms = parse(role.permissions) if role else set()
+        if getattr(row, "super_admin", False):            # user form: "May delete data"
+            perms.add("data.delete")
         return {"username": row.username, "role": row.role, "company_id": row.company_id, "perms": perms,
                 "full_name": row.full_name or row.username, "employee_id": row.employee_id,
                 "must_change": bool(row.must_change),
-                "super_admin": row.role == "SUPER_ADMIN", "is_admin": row.role in ("SUPER_ADMIN", "ADMIN")}
+                "super_admin": row.role == "SUPER_ADMIN", "can_delete": "data.delete" in perms, "is_admin": row.role in ("SUPER_ADMIN", "ADMIN")}
     finally:
         db.close()

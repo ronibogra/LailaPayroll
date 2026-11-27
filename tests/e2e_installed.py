@@ -1080,8 +1080,8 @@ def main():
          must="saved")
     a2 = requests.Session()
     post(a2, "/login", {"username": "admin2", "password": "Admin2@12345"}, must="Dashboard")
-    r = page(a2, "/delete", must="Only a Super Admin can delete data")
-    ok("Super Admin now: <b>admin</b>" in r.text and 'name="ids"' not in r.text, "ordinary Admin sees who can delete")
+    r = page(a2, "/delete", must="You may not delete data")
+    ok("May delete now: <b>admin</b>" in r.text and 'name="ids"' not in r.text, "ordinary Admin sees who can delete")
     ok(a2.post(BASE + "/delete/holidays", data={"scope": "all", "confirm": "DELETE"}, timeout=30).status_code == 403,
        "an ordinary Admin cannot delete")
     ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "an ordinary Admin cannot use bulk delete")
@@ -1089,6 +1089,14 @@ def main():
     post(a2, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1"},
          must="Only a Super Admin can make a Super Admin", must_not=None)
     post(s, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1"}, must="saved")
+    ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "a Super Admin without the Delete tick cannot delete")
+    post(s, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1", "can_delete": "1",
+                            "can_delete_shown": "1"}, must="saved")
+    post(s, "/users/save", {"username": "admin", "role": "SUPER_ADMIN", "active": "1", "can_delete_shown": "1"},
+         must="cannot take away your own Delete right", must_not=None)
+    post(s, "/roles/save", {"name": "HR_DEL", "label": "HR who may delete", "perm_employees.view": "1",
+                            "perm_data.delete": "1"}, must="Role HR_DEL saved")
+    ok('name="perm_data.delete" value="1" checked' in page(s, "/users?role=HR_DEL").text, "DELETE ticked in a role")
     post(s, "/roles/save", {"name": "SUPPER_ADMIN", "label": "x"}, must="built-in SUPER_ADMIN", must_not=None)
     r = page(a2, "/delete", must="Punch records")
     ok("Only a Super Admin" not in r.text, "Super Admin sees the Delete centre")

@@ -8,19 +8,20 @@
 <div><label>Company access</label><select name="company_id"><option value="">All companies (Head Office)</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if eu and eu.company_id == c.id }}>{{ c.code }} only</option>{% endfor %}</select></div>
 <div><label>Linked employee (Employee ID, optional)</label><input name="employee_code" value="{{ linked_code }}" placeholder="for My page - e.g. 12127"></div>
 <div><label>{{ 'New password (blank = keep current)' if eu else 'Password (8+ characters)' }}</label><input name="password" type="password" autocomplete="new-password"></div>
-<div><label><input type="checkbox" name="active" value="1" {{ 'checked' if not eu or eu.active }}> Active (untick to block login)</label></div></div>
+<div><label><input type="checkbox" name="active" value="1" {{ 'checked' if not eu or eu.active }}> Active (untick to block login)</label></div>
+{% if user.can_delete %}<div><input type="hidden" name="can_delete_shown" value="1"><label style="color:#b3261e"><input type="checkbox" name="can_delete" value="1" {{ 'checked' if eu and eu.super_admin }}> <b>May DELETE data</b> (Delete centre, bulk delete)</label></div>{% endif %}</div>
 <p><button>Save user</button>{% if eu %} <a class="btn sec" href="/users">Cancel</a>{% endif %}</p></form>
 <p class="hint">Click <b>Edit</b> next to a user below to change their name, role, company access or password, or to block them. A user limited to one company only sees that company's staff, punches and payroll.</p></div>
 <div class="panel" id="roleform"><h3>{{ 'Edit role ' ~ edit_role.name if edit_role else 'New role' }}</h3>
 <form method="get" action="/users" class="inline" style="margin-bottom:10px"><div><label>Choose a role to change its access</label>
 <select name="role" onchange="this.form.submit()"><option value="">- new role -</option>{% for r in roles if r.name not in ('ADMIN', 'SUPER_ADMIN') %}<option value="{{ r.name }}" {{ 'selected' if edit_role and edit_role.name == r.name }}>{{ r.name }} - {{ r.label }}</option>{% endfor %}</select></div><noscript><button class="sec">Open</button></noscript></form>
-<p class="hint" style="margin-top:0">SUPER_ADMIN (everything + deleting) and ADMIN (everything) cannot be limited. Tick what this role may see and do, then Save.</p>
+<p class="hint" style="margin-top:0">SUPER_ADMIN and ADMIN always have everything except DELETE - who may delete is ticked per user in the user form ("May DELETE data") or per role here. Tick what this role may see and do, then Save.</p>
 <form method="post" action="/roles/save">
 <div class="form-grid"><div><label>Role name (e.g. HR_LAUNDRY)</label><input name="name" required value="{{ edit_role.name if edit_role else '' }}" {{ 'readonly' if edit_role }}></div>
 <div><label>Description</label><input name="label" value="{{ edit_role.label if edit_role else '' }}"></div></div>
 {% set have = role_perms.get(edit_role.name, []) if edit_role else [] %}
 {% for gname, plist in groups %}<div style="margin-top:10px"><b style="font-size:13px">{{ gname }}</b><br>
-{% for p in plist %}<label style="display:inline-block;margin:3px 14px 3px 0;color:inherit;font-size:13px"><input type="checkbox" name="perm_{{ p }}" value="1" {{ 'checked' if p in have }}> {{ perms[p] }}</label>{% endfor %}</div>{% endfor %}
+{% for p in plist %}<label style="display:inline-block;margin:3px 14px 3px 0;color:{{ '#b3261e' if p == 'data.delete' else 'inherit' }};font-size:13px"><input type="checkbox" name="perm_{{ p }}" value="1" {{ 'checked' if p in have }} {{ 'disabled' if p not in user.perms }}> {{ perms[p] }}{% if p not in user.perms %} <i>(you cannot give this)</i>{% endif %}</label>{% endfor %}</div>{% endfor %}
 <p><button>Save role</button>{% if edit_role %} <a class="btn sec" href="/users">New role</a>{% endif %}</p></form></div>
 </div>
 <div class="panel" id="staff"><h3>Staff login (employees)</h3>
@@ -54,7 +55,7 @@
 <td>{% if r.name not in ('ADMIN', 'SUPER_ADMIN') %}<a href="/users?role={{ r.name }}">Edit</a>{% endif %}
 {% if not r.builtin %}<form method="post" action="/roles/{{ r.name }}/delete" style="display:inline" onsubmit="return confirm('Remove role {{ r.name }}?')"><button class="link">Remove</button></form>{% endif %}</td></tr>{% endfor %}</table></div></div>
 <div class="panel"><h3>Users</h3><div class="table-wrap"><table><tr><th>Username</th><th>Name</th><th>Role</th><th>Company access</th><th>Active</th><th></th></tr>
-{% for u in users if u.role in ('ADMIN', 'SUPER_ADMIN') or not u.employee_id %}<tr><td>{{ u.username }}</td><td>{{ u.full_name or '' }}</td><td>{{ u.role }}{% if u.role == 'SUPER_ADMIN' %} <span class="tag ABSENT">may delete data</span>{% endif %}</td><td>{% for c in companies if c.id == u.company_id %}{{ c.code }} only{% else %}All{% endfor %}</td><td>{{ 'yes' if u.active else 'no' }}</td>
+{% for u in users if u.role in ('ADMIN', 'SUPER_ADMIN') or not u.employee_id %}<tr><td>{{ u.username }}</td><td>{{ u.full_name or '' }}</td><td>{{ u.role }}{% if u.super_admin %} <span class="tag ABSENT">may delete</span>{% endif %}</td><td>{% for c in companies if c.id == u.company_id %}{{ c.code }} only{% else %}All{% endfor %}</td><td>{{ 'yes' if u.active else 'no' }}</td>
 <td>{% if (u.role != 'ADMIN' or user.is_admin) and (u.role != 'SUPER_ADMIN' or user.super_admin) %}<a href="/users?edit={{ u.username|urlencode }}#userform">Edit</a>{% endif %}</td></tr>{% endfor %}</table></div></div>
 </div>
 {% endblock %}

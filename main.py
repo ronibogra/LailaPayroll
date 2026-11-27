@@ -278,24 +278,37 @@ async def _value_error(request: Request, exc: ValueError):
 
 
 def ensure_super_admin(db: Session) -> None:
-    """SUPER_ADMIN is a built-in role. Moves to it: users ticked Super Admin in 4.2.53/54, users on a hand-made
-    role like SUPPER_ADMIN; and if there is still none, the first (oldest) active administrator."""
+    """SUPER_ADMIN is a built-in role; who may DELETE is a tick per user (User.super_admin = "may delete data") or a
+    tick in a role. Old set-ups are moved over once; there is always somebody who may delete."""
     r = db.scalar(select(Role).where(Role.name == "SUPER_ADMIN"))
     if r is not None and not r.builtin:              # someone had made a role with that name
         r.builtin, r.label = True, BUILTIN_ROLES["SUPER_ADMIN"][0]
-    for u in db.scalars(select(User).where(User.role == "ADMIN", User.super_admin == True)):  # noqa: E712
-        u.role = "SUPER_ADMIN"
-    for role in db.scalars(select(Role).where(Role.builtin == False)):  # noqa: E712
-        if super_like(role.name) and role.name != "SUPER_ADMIN":
+    if r is not None:
+        r.label = BUILTIN_ROLES["SUPER_ADMIN"][0]
+    if get_setting(db, "super_role_v1", default="") != "1":     # 4.2.53/54: ADMIN + tick = super admin
+        for u in db.scalars(select(User).where(User.role == "ADMIN", User.super_admin == True)):  # noqa: E712
+            u.role = "SUPER_ADMIN"
+        set_setting(db, "super_role_v1", "1", commit=False)
+    for role in list(db.scalars(select(Role).where(Role.builtin == False))):  # noqa: E712
+        if super_like(role.name) and role.name != "SUPER_ADMIN":   # hand-made SUPPER_ADMIN, SUPERADMIN ...
             for u in db.scalars(select(User).where(User.role == role.name)):
-                u.role = "SUPER_ADMIN"
+                u.role, u.super_admin = "SUPER_ADMIN", True
                 db.add(AuditLog(username="system", action="ROLE_TO_SUPER_ADMIN", detail=f"{u.username}: {role.name}"))
-            db.delete(role)                          # the hand-made copy is no longer needed
+            db.delete(role)
+    db.flush()
+    if get_setting(db, "delete_flag_v1", default="") != "1":   # super admins keep deleting after the update
+        for u in db.scalars(select(User).where(User.role == "SUPER_ADMIN")):
+            u.super_admin = True
+        set_setting(db, "delete_flag_v1", "1", commit=False)
     db.flush()
     if not db.scalar(select(func.count(User.id)).where(User.role == "SUPER_ADMIN", User.active == True)):  # noqa: E712
         first = db.scalar(select(User).where(User.role == "ADMIN", User.active == True).order_by(User.id))  # noqa: E712
         if first:
             first.role = "SUPER_ADMIN"
+    if not db.scalar(select(func.count(User.id)).where(User.super_admin == True, User.active == True)):  # noqa: E712
+        first = db.scalar(select(User).where(User.role == "SUPER_ADMIN", User.active == True).order_by(User.id))  # noqa: E712
+        if first:
+            first.super_admin = True
 
 
 @app.on_event("startup")
@@ -336,7 +349,7 @@ def startup():
                 set_setting(db, "ho_ot_default_done", "1", commit=False)
         if db.scalar(select(func.count(Shift.id))) == 0:
             db.add(Shift(code="GENERAL", name="General 09:00-18:00", start=time(9, 0), end=time(18, 0)))
-            db.commit()
+        db.commit()
     finally:
         db.close()
     devices.start_poller()
@@ -584,7 +597,7 @@ async def setup_save(request: Request, db: Session = Depends(get_db)):
         except ValueError as exc:
             return go("/setup", err=f"Logo: {exc}")
     db.add(User(full_name="Administrator", username=username, password_hash=hash_password(password),
-                role="SUPER_ADMIN"))
+                role="SUPER_ADMIN", super_admin=True))
     for code, name in companies:
         db.add(Company(code=code, name=name))
     set_setting(db, "weekend_days", weekend, commit=False)
@@ -3879,7 +3892,7 @@ def users_page(request: Request, role: str = "", edit: str = "", user=Depends(pa
 @app.post("/users/save")
 def user_save(username: str = Form(...), role: str = Form(...), password: str = Form(""), active: str = Form(""),
               company_id: str = Form(""), full_name: str = Form(""), employee_code: str = Form(""),
-              user=Depends(page_user),
+              can_delete: str = Form(""), can_delete_shown: str = Form(""), user=Depends(page_user),
               db: Session = Depends(get_db)):
     need(user, "users.manage")
     if not db.scalar(select(Role).where(Role.name == role)):
@@ -3912,6 +3925,12 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
         return go("/users", err="You cannot change your own role, company limit or active status")
     u.role, u.active, u.full_name = role, bool(active), full_name.strip() or u.full_name
     u.company_id = int(company_id) if company_id else None
+    if can_delete_shown and "data.delete" in user["perms"]:      # only someone who may delete can give / take it
+        want = bool(can_delete)
+        if u.username == user["username"] and not want:
+            db.rollback()
+            return go("/users", err="You cannot take away your own Delete right - ask another user who may delete")
+        u.super_admin = want
     code = employee_code.strip()
     if code:      # this login is also an employee: gives them My page (own attendance, leave, payslips)
         emp = db.scalar(select(Employee).where(or_(Employee.employee_code == code, Employee.card_no == code)))
@@ -3930,6 +3949,7 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
     elif role != "STAFF":
         u.employee_id = None
     audit(db, user, "USER_SAVE", f"{u.username} role={role} company={company_id or 'ALL'} active={bool(active)}"
+          + (" may delete" if u.super_admin else "")
           + (" password changed" if password else ""), commit=False)
     db.commit()
     return go("/users", msg=f"User {u.username} saved")
@@ -3945,11 +3965,14 @@ async def role_save(request: Request, user=Depends(page_user), db: Session = Dep
     if name in ADMIN_ROLES or super_like(name):
         return go("/users", err="SUPER_ADMIN and ADMIN always have every permission and cannot be changed (a role called like Super Admin is the built-in SUPER_ADMIN)")
     chosen = [p for p in PERMS if f.get(f"perm_{p}")]
-    if not user.get("is_admin"):
-        extra = [p for p in chosen if p not in user["perms"]]
-        if extra:
-            return go(f"/users?role={name}", err="You cannot give permissions you do not have: " + ", ".join(extra))
     r = db.scalar(select(Role).where(Role.name == name))
+    had = parse_perms(r.permissions) if r else set()
+    # nobody can give (or take away) a permission they do not have themselves - e.g. an Admin cannot give DELETE
+    chosen = [p for p in chosen if p in user["perms"]] + [p for p in PERMS if p in had and p not in user["perms"]]
+    asked = [p for p in PERMS if f.get(f"perm_{p}") and p not in user["perms"] and p not in had]
+    if asked:
+        return go(f"/users?role={name}", err="You cannot give permissions you do not have: "
+                                             + ", ".join(PERMS[p] for p in asked))
     if not r:
         r = Role(name=name, builtin=False)
         db.add(r)
@@ -4426,7 +4449,10 @@ def delete_centre(request: Request, s: str = "", page: int = 1, user=Depends(pag
     if "data.delete" not in user["perms"]:
         if not user.get("is_admin"):
             need(user, "data.delete")
-        supers = db.scalars(select(User).where(User.role == "SUPER_ADMIN", User.active == True)  # noqa: E712
+        del_roles = [r.name for r in db.scalars(select(Role)) if "data.delete" in parse_perms(r.permissions)
+                     and r.name not in ADMIN_ROLES]
+        supers = db.scalars(select(User).where(User.active == True,  # noqa: E712
+                                               or_(User.super_admin == True, User.role.in_(del_roles or ["-"])))  # noqa: E712
                             .order_by(User.username)).all()
         return render(request, "delete_centre.html", user, not_super=True, supers=supers, sections=[], groups=[],
                       counts={}, sec=None, p={}, qs="", companies=[])
