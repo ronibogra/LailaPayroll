@@ -27,10 +27,8 @@
 <div class="table-wrap" style="max-height:520px;overflow:auto"><table><tr><th><input type="checkbox" id="all" title="Tick all on this page"></th>{% for label, fn in sec.cols %}<th>{{ label }}</th>{% endfor %}</tr>
 {% for r in rows %}<tr><td><input type="checkbox" class="pick" name="ids" value="{{ r.id }}"></td>{% for label, fn in sec.cols %}<td>{{ fn(r) if fn(r) is not none else '' }}</td>{% endfor %}</tr>{% endfor %}</table></div>
 {% if pages > 1 %}<div class="pager">{% if page > 1 %}<a class="btn sec" href="/delete?{{ qs }}&page={{ page - 1 }}">‹ Prev</a>{% endif %}<span class="hint">Page {{ page }} of {{ pages }} (100 per page)</span>{% if page < pages %}<a class="btn sec" href="/delete?{{ qs }}&page={{ page + 1 }}">Next ›</a>{% endif %}</div>{% endif %}
-<div class="form-grid" style="margin-top:10px">
-{% if sec.key in ('employees', 'payroll', 'payslips', 'companies') %}<div class="wide"><label class="chk"><input type="checkbox" name="with_final" value="1"> including <b>finalized</b> (already paid) payroll</label></div>{% endif %}
-{% if sec.key == 'employees' %}<div class="wide"><label class="chk"><input type="checkbox" name="with_punches" value="1"> also their punch records</label></div>{% endif %}
-</div>
+{% if sec.key in ('employees', 'payroll', 'payslips', 'companies') %}<p style="margin:12px 0 4px"><label style="color:inherit;font-size:14px"><input type="checkbox" name="with_final" value="1"> including <b>finalized</b> (already paid) payroll</label></p>{% endif %}
+{% if sec.key == 'employees' %}<p style="margin:4px 0"><label style="color:inherit;font-size:14px"><input type="checkbox" name="with_punches" value="1"> also delete their punch records</label></p>{% endif %}
 <p><button class="red" name="scope" value="selected" id="delsel">{{ 'Clear' if sec.clears else 'Delete' }} ticked (<span id="cnt">0</span>)</button></p>
 <div class="dc-all"><b>Everything that matches the filter ({{ total }})</b>
 <div class="inline" style="margin-top:6px"><div><label>Type DELETE</label><input name="confirm" autocomplete="off"></div><button class="red" name="scope" value="all" id="delall">{{ 'Clear' if sec.clears else 'Delete' }} all {{ total }}</button></div></div>
