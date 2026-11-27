@@ -34,7 +34,16 @@ PERMS: dict[str, str] = {
     "self.service": "My page: own profile, attendance, leave requests, payslips and assets (Staff)",
 }
 
-# not a role permission: only users ticked "Super Admin" (always ADMIN role) get it
+ADMIN_ROLES = ("SUPER_ADMIN", "ADMIN")       # these roles always have every permission (not editable)
+
+
+def super_like(name: str) -> bool:
+    """A role someone made by hand for the super admin: SUPER_ADMIN, SUPPER_ADMIN, SUPERADMIN, Super Admin ..."""
+    import re
+    return bool(re.fullmatch(r"SU+P+E*R[\s_-]*ADMIN(ISTRATOR)?", (name or "").strip().upper()))
+
+
+# not a role permission: only the SUPER_ADMIN role gets it
 SUPER_PERMS = {"data.delete": "Delete data - Delete centre and bulk delete (Super Admin)"}
 
 GROUPS = [
@@ -49,7 +58,8 @@ GROUPS = [
 ]
 
 BUILTIN_ROLES: dict[str, tuple[str, list[str]]] = {
-    "ADMIN": ("Administrator - everything", list(PERMS)),
+    "SUPER_ADMIN": ("Super Admin - everything, including deleting data", list(PERMS)),
+    "ADMIN": ("Administrator - everything except deleting data", list(PERMS)),
     "HR": ("HR", ["dashboard.view", "reports.export", "employees.view", "employees.edit", "salary.view",
                   "punches.view", "punches.edit", "machines.manage", "attendance.view", "attendance.process",
                   "leave.manage", "holidays.manage", "payroll.view", "payroll.process", "logs.view"]),

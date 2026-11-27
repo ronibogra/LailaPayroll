@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block title %}Leave approvals{% endblock %}{% block heading %}Leave approvals{% endblock %}
 {% block content %}
-<p class="hint">Workflow: <b>{{ workflow }}</b>.{% if my_depts %} You are Department Head of: {{ my_depts|map(attribute='name')|join(', ') }}.{% elif 'leave.approve_dept' in user.perms and user.role != 'ADMIN' %} You are not set as Department Head of any department yet - an Admin sets this on the Leave policy page.{% endif %}</p>
+<p class="hint">Workflow: <b>{{ workflow }}</b>.{% if my_depts %} You are Department Head of: {{ my_depts|map(attribute='name')|join(', ') }}.{% elif 'leave.approve_dept' in user.perms and not user.is_admin %} You are not set as Department Head of any department yet - an Admin sets this on the Leave policy page.{% endif %}</p>
 {% for lv in rows %}{% set e = lv.employee %}{% set t = types.get(lv.leave_type) %}
 <div class="req"><div class="row">
 <div><b><a href="/employees/{{ e.id }}">{{ e.full_name }}</a></b> · {{ e.employee_code }} · {{ e.company.code if e.company }}{{ ' · ' ~ e.department.name if e.department }}{{ ' · ' ~ e.designation if e.designation }}<br>

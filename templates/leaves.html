@@ -11,7 +11,7 @@
 <div><label>To</label><input type="date" name="end_date" id="d2" required value="{{ today }}"></div>
 <div><label id="doclab">Document (if the rule needs one)</label><input type="file" name="document" accept=".pdf,.jpg,.jpeg,.png,.webp"></div>
 <div><label>Note / reason</label><input name="note"></div>
-{% if user.role == 'ADMIN' %}<div><label><input type="checkbox" name="over_balance" value="1"> Allow more than the yearly balance (Admin)</label></div>{% endif %}
+{% if user.is_admin %}<div><label><input type="checkbox" name="over_balance" value="1"> Allow more than the yearly balance (Admin)</label></div>{% endif %}
 </div><p class="hint" id="dochint"></p><p><button>Save leave</button></p></form>
 {{ import_box("leaves", "leave") }}
 <p class="hint">HR-granted leave is approved at once. Leave without pay is deducted like an absent day. Document rules and yearly days are set on the <b>Leave policy</b> page (Admin).</p></div>

@@ -79,14 +79,16 @@ def page_user(request: Request) -> dict:
         row = db.query(User).filter(User.username == user["username"]).first()
         if not row or not row.active:
             raise LoginRequired()
-        if row.role == "ADMIN":
-            perms = set(PERMS) | ({"data.delete"} if getattr(row, "super_admin", False) else set())
+        if row.role == "SUPER_ADMIN":
+            perms = set(PERMS) | {"data.delete"}
+        elif row.role == "ADMIN":
+            perms = set(PERMS)
         else:
             role = db.query(Role).filter(Role.name == row.role).first()
             perms = parse(role.permissions) if role else set()
         return {"username": row.username, "role": row.role, "company_id": row.company_id, "perms": perms,
                 "full_name": row.full_name or row.username, "employee_id": row.employee_id,
                 "must_change": bool(row.must_change),
-                "super_admin": row.role == "ADMIN" and bool(getattr(row, "super_admin", False))}
+                "super_admin": row.role == "SUPER_ADMIN", "is_admin": row.role in ("SUPER_ADMIN", "ADMIN")}
     finally:
         db.close()

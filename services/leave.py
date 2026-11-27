@@ -130,7 +130,7 @@ def first_status(db, emp: Employee) -> str:
 
 
 def can_act(user: dict, lv: Leave, emp: Employee) -> bool:
-    if user["role"] == "ADMIN" and lv.status in OPEN:
+    if user.get("is_admin") and lv.status in OPEN:
         return True
     if lv.status == "PENDING_DEPT":
         return "leave.approve_dept" in user["perms"] and bool(emp.department) and \

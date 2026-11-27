@@ -30,7 +30,8 @@ from reports.excel import (salary_sheet, attendance_month, attendance_day, punch
 from reports.payslip import payslips_pdf
 from security import (hash_password, verify_password, create_token, decode_token, page_user,
                       LoginRequired, COOKIE)
-from services.permissions import PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, SUPER_PERMS, parse as parse_perms
+from services.permissions import (PERMS, GROUPS, BUILTIN_ROLES, ROLE_MIGRATIONS, SUPER_PERMS, ADMIN_ROLES, super_like,
+                                  parse as parse_perms)
 from services import mobile, devices, maintenance, migrate, branding, backup as backups
 from services import leave as leave_svc, documents as docs, components as comp_svc, disbursement as disb
 from services.datadelete import (wipe_employee as _wipe_employee, unlink_photo as _unlink_photo,
@@ -276,13 +277,24 @@ async def _value_error(request: Request, exc: ValueError):
 
 
 def ensure_super_admin(db: Session) -> None:
-    """There is always a Super Admin: the first (oldest) active administrator, if nobody is ticked."""
-    if db.scalar(select(func.count(User.id)).where(User.super_admin == True, User.active == True,  # noqa: E712
-                                                   User.role == "ADMIN")):
-        return
-    first = db.scalar(select(User).where(User.role == "ADMIN", User.active == True).order_by(User.id))  # noqa: E712
-    if first:
-        first.super_admin = True
+    """SUPER_ADMIN is a built-in role. Moves to it: users ticked Super Admin in 4.2.53/54, users on a hand-made
+    role like SUPPER_ADMIN; and if there is still none, the first (oldest) active administrator."""
+    r = db.scalar(select(Role).where(Role.name == "SUPER_ADMIN"))
+    if r is not None and not r.builtin:              # someone had made a role with that name
+        r.builtin, r.label = True, BUILTIN_ROLES["SUPER_ADMIN"][0]
+    for u in db.scalars(select(User).where(User.role == "ADMIN", User.super_admin == True)):  # noqa: E712
+        u.role = "SUPER_ADMIN"
+    for role in db.scalars(select(Role).where(Role.builtin == False)):  # noqa: E712
+        if super_like(role.name) and role.name != "SUPER_ADMIN":
+            for u in db.scalars(select(User).where(User.role == role.name)):
+                u.role = "SUPER_ADMIN"
+                db.add(AuditLog(username="system", action="ROLE_TO_SUPER_ADMIN", detail=f"{u.username}: {role.name}"))
+            db.delete(role)                          # the hand-made copy is no longer needed
+    db.flush()
+    if not db.scalar(select(func.count(User.id)).where(User.role == "SUPER_ADMIN", User.active == True)):  # noqa: E712
+        first = db.scalar(select(User).where(User.role == "ADMIN", User.active == True).order_by(User.id))  # noqa: E712
+        if first:
+            first.role = "SUPER_ADMIN"
 
 
 @app.on_event("startup")
@@ -570,8 +582,8 @@ async def setup_save(request: Request, db: Session = Depends(get_db)):
             branding.save_logo(await logo.read())
         except ValueError as exc:
             return go("/setup", err=f"Logo: {exc}")
-    db.add(User(full_name="Administrator", username=username, password_hash=hash_password(password), role="ADMIN",
-                super_admin=True))
+    db.add(User(full_name="Administrator", username=username, password_hash=hash_password(password),
+                role="SUPER_ADMIN"))
     for code, name in companies:
         db.add(Company(code=code, name=name))
     set_setting(db, "weekend_days", weekend, commit=False)
@@ -591,7 +603,7 @@ async def setup_save(request: Request, db: Session = Depends(get_db)):
     _state["setup_done"] = True
     branding.refresh(db)
     resp = go("/devices", msg="Setup complete. Next: connect the punch machines, then import employees.")
-    resp.set_cookie(COOKIE, create_token(username, "ADMIN"), **cookie_kwargs(request, settings.session_hours))
+    resp.set_cookie(COOKIE, create_token(username, "SUPER_ADMIN"), **cookie_kwargs(request, settings.session_hours))
     return resp
 
 
@@ -2542,7 +2554,7 @@ async def leave_add(request: Request, user=Depends(page_user), db: Session = Dep
     try:
         s, e = parse_day(str(f.get("start_date"))), parse_day(str(f.get("end_date")))
         has_doc = bool(getattr(f.get("document"), "filename", ""))
-        over = bool(f.get("over_balance")) and user["role"] == "ADMIN"
+        over = bool(f.get("over_balance")) and user.get("is_admin")
         days = leave_svc.validate(db, emp, lt, s, e, has_doc, ignore_balance=over)
         stored = await _leave_document(f, emp)
     except ValueError as exc:
@@ -2592,7 +2604,7 @@ def leave_document(leave_id: int, user=Depends(page_user), db: Session = Depends
 
 @app.get("/leaves/approvals", response_class=HTMLResponse)
 def leave_approvals(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
-    if not {"leave.approve_dept", "leave.approve_final"} & user["perms"] and user["role"] != "ADMIN":
+    if not {"leave.approve_dept", "leave.approve_final"} & user["perms"] and not user.get("is_admin"):
         raise HTTPException(403, "Only Department Heads and final approvers see leave requests")
     rows = leave_svc.pending_for(db, user, user.get("company_id"))
     recent = db.scalars(select(Leave).where(Leave.source == "SELF", Leave.status.in_(("APPROVED", "REJECTED")),
@@ -2622,7 +2634,7 @@ def leave_decide(leave_id: int, action: str = Form(...), reason: str = Form(""),
         lt = db.scalar(select(LeaveType).where(LeaveType.code == lv.leave_type))
         try:      # balance may have changed since the request was made
             leave_svc.validate(db, emp, lt, lv.start_date, lv.end_date, True, exclude_id=lv.id,
-                               ignore_balance=user["role"] == "ADMIN")
+                               ignore_balance=bool(user.get("is_admin")))
         except ValueError as exc:
             return go("/leaves/approvals", err=f"{emp.employee_code}: {exc}")
         st = leave_svc.approve(db, lv, user)
@@ -3845,19 +3857,21 @@ def users_page(request: Request, role: str = "", edit: str = "", user=Depends(pa
                   staff_count=db.scalar(select(func.count(User.id)).where(User.role == "STAFF")) or 0,
                   roles=roles, edit_role=db.scalar(select(Role).where(Role.name == role)) if role else None,
                   companies=db.scalars(select(Company).order_by(Company.code)).all(), perms=PERMS, groups=GROUPS,
-                  role_perms={r.name: (set(PERMS) if r.name == "ADMIN" else parse_perms(r.permissions)) for r in roles},
+                  role_perms={r.name: (set(PERMS) if r.name in ADMIN_ROLES else parse_perms(r.permissions)) for r in roles},
                   counts=dict(db.execute(select(User.role, func.count()).group_by(User.role)).all()))
 
 
 @app.post("/users/save")
 def user_save(username: str = Form(...), role: str = Form(...), password: str = Form(""), active: str = Form(""),
               company_id: str = Form(""), full_name: str = Form(""), employee_code: str = Form(""),
-              super_admin: str = Form(""), super_admin_shown: str = Form(""), user=Depends(page_user),
+              user=Depends(page_user),
               db: Session = Depends(get_db)):
     need(user, "users.manage")
     if not db.scalar(select(Role).where(Role.name == role)):
         return go("/users", err="Unknown role")
-    if role == "ADMIN" and user["role"] != "ADMIN":
+    if role == "SUPER_ADMIN" and not user.get("super_admin"):
+        return go("/users", err="Only a Super Admin can make a Super Admin")
+    if role == "ADMIN" and not user.get("is_admin"):
         return go("/users", err="Only an administrator can create administrators")
     name = username.strip()
     if len(name) < 3:
@@ -3872,25 +3886,16 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
         if len(password) < 8:
             return go("/users", err="Password must be 8+ characters")
         u.password_hash = hash_password(password)
-    if u.super_admin and not user.get("super_admin"):
+    if u.role == "SUPER_ADMIN" and not user.get("super_admin"):
         db.rollback()
         return go("/users", err="Only a Super Admin can change a Super Admin")
-    if u.role == "ADMIN" and user["role"] != "ADMIN":
+    if u.role == "ADMIN" and not user.get("is_admin"):
         db.rollback()
         return go("/users", err="Only an administrator can change an administrator")
     if u.username == user["username"] and (role != user["role"] or not active or company_id):
         db.rollback()
         return go("/users", err="You cannot change your own role, company limit or active status")
     u.role, u.active, u.full_name = role, bool(active), full_name.strip() or u.full_name
-    if user.get("super_admin") and super_admin_shown:   # only a Super Admin can make / remove another one
-        want = bool(super_admin) and role == "ADMIN"
-        if u.username == user["username"] and not want:
-            db.rollback()
-            return go("/users", err="You cannot remove your own Super Admin right - ask another Super Admin")
-        u.super_admin = want
-    elif role != "ADMIN":
-        u.super_admin = False
-    u.company_id = int(company_id) if company_id else None
     code = employee_code.strip()
     if code:      # this login is also an employee: gives them My page (own attendance, leave, payslips)
         emp = db.scalar(select(Employee).where(or_(Employee.employee_code == code, Employee.card_no == code)))
@@ -3909,7 +3914,7 @@ def user_save(username: str = Form(...), role: str = Form(...), password: str = 
     elif role != "STAFF":
         u.employee_id = None
     audit(db, user, "USER_SAVE", f"{u.username} role={role} company={company_id or 'ALL'} active={bool(active)}"
-          + (" SUPER ADMIN" if u.super_admin else "")
+
           + (" password changed" if password else ""), commit=False)
     db.commit()
     return go("/users", msg=f"User {u.username} saved")
@@ -3922,10 +3927,10 @@ async def role_save(request: Request, user=Depends(page_user), db: Session = Dep
     name = str(f.get("name", "")).strip().upper().replace(" ", "_")[:30]
     if not name or not name.replace("_", "").isalnum():
         return go("/users", err="Role name: letters, numbers and _ only")
-    if name == "ADMIN":
-        return go("/users", err="ADMIN always has every permission and cannot be changed")
+    if name in ADMIN_ROLES or super_like(name):
+        return go("/users", err="SUPER_ADMIN and ADMIN always have every permission and cannot be changed (a role called like Super Admin is the built-in SUPER_ADMIN)")
     chosen = [p for p in PERMS if f.get(f"perm_{p}")]
-    if user["role"] != "ADMIN":
+    if not user.get("is_admin"):
         extra = [p for p in chosen if p not in user["perms"]]
         if extra:
             return go(f"/users?role={name}", err="You cannot give permissions you do not have: " + ", ".join(extra))
@@ -4327,9 +4332,9 @@ def _dd_params(src) -> dict:
 @app.get("/delete", response_class=HTMLResponse)
 def delete_centre(request: Request, s: str = "", page: int = 1, user=Depends(page_user), db: Session = Depends(get_db)):
     if "data.delete" not in user["perms"]:
-        if user["role"] != "ADMIN":
+        if not user.get("is_admin"):
             need(user, "data.delete")
-        supers = db.scalars(select(User).where(User.super_admin == True, User.active == True)  # noqa: E712
+        supers = db.scalars(select(User).where(User.role == "SUPER_ADMIN", User.active == True)  # noqa: E712
                             .order_by(User.username)).all()
         return render(request, "delete_centre.html", user, not_super=True, supers=supers, sections=[], groups=[],
                       counts={}, sec=None, p={}, qs="", companies=[])

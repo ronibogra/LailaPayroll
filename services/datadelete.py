@@ -202,8 +202,8 @@ def _del_user(db, u, o):
     me = o.get("me")
     if u.username == me:
         return f"{u.username}: you cannot delete yourself"
-    if getattr(u, "super_admin", False):
-        left = db.scalar(select(func.count(User.id)).where(User.super_admin == True, User.active == True,  # noqa: E712
+    if u.role == "SUPER_ADMIN":
+        left = db.scalar(select(func.count(User.id)).where(User.role == "SUPER_ADMIN", User.active == True,  # noqa: E712
                                                            User.id != u.id)) or 0
         if not left:
             return f"{u.username}: the last Super Admin"

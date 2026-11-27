@@ -855,12 +855,12 @@ def main():
     post(s, "/users/staff-login", {"enabled": "1", "default_password": "12345678"}, must="settings saved")
     r = page(s, "/me", must="not linked to an employee")             # admin without an employee record
     ok('href="/me"' not in page(s, "/").text, "My page link only for linked logins")
-    post(s, "/users/save", {"username": "admin", "role": "ADMIN", "active": "1", "employee_code": "12127"},
+    post(s, "/users/save", {"username": "admin", "role": "SUPER_ADMIN", "active": "1", "employee_code": "12127"},
          must="already linked", must_not=None)
-    post(s, "/users/save", {"username": "admin", "role": "ADMIN", "active": "1", "employee_code": "HO-0001"},
+    post(s, "/users/save", {"username": "admin", "role": "SUPER_ADMIN", "active": "1", "employee_code": "HO-0001"},
          must="User admin saved")
     page(s, "/me", must="Md. Rahim")
-    post(s, "/users/save", {"username": "admin", "role": "ADMIN", "active": "1", "employee_code": ""}, must="saved")
+    post(s, "/users/save", {"username": "admin", "role": "SUPER_ADMIN", "active": "1", "employee_code": ""}, must="saved")
     post(s, "/users/save", {"username": "12160", "role": "STAFF", "active": "1", "password": "Staff@12160"}, must="saved")
     sx = requests.Session()
     post(sx, "/login", {"username": "12160", "password": "Staff@12160"}, must="My page")    # hand-made Staff user works
@@ -1074,8 +1074,10 @@ def main():
        "an ordinary Admin cannot delete")
     ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "an ordinary Admin cannot use bulk delete")
     ok(h.get(BASE + "/delete", timeout=30).status_code == 403, "HR cannot open the Delete centre")
-    post(s, "/users/save", {"username": "admin2", "role": "ADMIN", "active": "1", "super_admin": "1",
-                              "super_admin_shown": "1"}, must="saved")
+    post(a2, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1"},
+         must="cannot change your own role", must_not=None)
+    post(s, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1"}, must="saved")
+    post(s, "/roles/save", {"name": "SUPPER_ADMIN", "label": "x"}, must="built-in SUPER_ADMIN", must_not=None)
     r = page(a2, "/delete", must="Punch records")
     ok("Only a Super Admin" not in r.text, "Super Admin sees the Delete centre")
     post(s, "/delete/users", {"scope": "all", "q": "admin2", "confirm": "DELETE"}, must="User logins: 1 deleted")

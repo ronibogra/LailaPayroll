@@ -328,3 +328,11 @@ def test_next_increment_due():
     assert next_due(date(2025, 3, 1), date(2025, 12, 1)) == date(2026, 3, 1)
     assert next_due(date(2022, 3, 1), date(2025, 12, 1)) == date(2025, 3, 1)
     assert next_due(date(2024, 2, 29), date(2024, 6, 1)) == date(2025, 2, 28)
+
+
+def test_super_admin_role_names():
+    from services.permissions import super_like
+    for n in ("SUPER_ADMIN", "SUPPER_ADMIN", "Super Admin", "superadmin", "SUPER-ADMIN"):
+        assert super_like(n), n
+    for n in ("ADMIN", "HR", "SUPERVISOR", "HR_ADMIN"):
+        assert not super_like(n), n
