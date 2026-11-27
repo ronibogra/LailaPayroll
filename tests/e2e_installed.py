@@ -1078,12 +1078,12 @@ def main():
     ok("May delete now: <b>admin</b>" in r.text and 'name="ids"' not in r.text, "ordinary Admin sees who can delete")
     ok(a2.post(BASE + "/delete/holidays", data={"scope": "all", "confirm": "DELETE"}, timeout=30).status_code == 403,
        "an ordinary Admin cannot delete")
-    ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "an ordinary Admin cannot use bulk delete")
     ok(h.get(BASE + "/delete", timeout=30).status_code == 403, "HR cannot open the Delete centre")
     post(a2, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1"},
          must="Only a Super Admin can make a Super Admin", must_not=None)
     post(s, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1"}, must="saved")
-    ok(a2.get(BASE + "/bulk", timeout=30).status_code == 403, "a Super Admin without the Delete tick cannot delete")
+    ok(a2.post(BASE + "/delete/holidays", data={"scope": "all", "confirm": "DELETE"}, timeout=30).status_code == 403,
+       "a Super Admin without the Delete tick cannot delete")
     post(s, "/users/save", {"username": "admin2", "role": "SUPER_ADMIN", "active": "1", "can_delete": "1",
                             "can_delete_shown": "1"}, must="saved")
     post(s, "/users/save", {"username": "admin", "role": "SUPER_ADMIN", "active": "1", "can_delete_shown": "1"},
