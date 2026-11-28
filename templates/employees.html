@@ -2,6 +2,8 @@
 {% block title %}Employees{% endblock %}{% block heading %}Employees ({{ r.total }}){% endblock %}
 {% block content %}
 <div class="panel"><form class="inline" method="get">{% if companies|length > 1 %}<div><label>Company</label><select name="company"><option value="">All companies</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if c.id == company }}>{{ c.code }} - {{ c.name }}</option>{% endfor %}</select></div>{% endif %}
+<div><label>Department</label><select name="department"><option value="">All departments</option>{% for v, l in departments %}<option value="{{ v }}" {{ 'selected' if v == department }}>{{ l }}</option>{% endfor %}</select></div>
+<div><label>Designation</label><select name="designation"><option value="">All designations</option>{% for v, l in designations %}<option value="{{ v }}" {{ 'selected' if v == designation }}>{{ l }}</option>{% endfor %}</select></div>
 <div><label>Status</label><select name="status"><option value="">All</option>{% for st in ('ACTIVE','INACTIVE') %}<option {{ 'selected' if st == status }}>{{ st }}</option>{% endfor %}</select></div>
 <div><label>Search code, card or name</label><input name="q" value="{{ q }}"></div><button class="sec">Search</button>
 {% if 'employees.edit' in user.perms %}<a class="btn" href="/employees/new">+ Add employee</a>{% endif %}{% if 'data.delete' in user.perms %} <a class="btn sec" href="/delete?s=employees">Delete employees</a>{% endif %}</form></div>

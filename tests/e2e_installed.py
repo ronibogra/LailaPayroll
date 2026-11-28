@@ -1010,6 +1010,23 @@ def main():
     r = s.get(BASE + "/reports/attendance?start=99/99/2026", timeout=30, headers={"Accept": "text/html"})
     ok(r.status_code == 400 and "Please check" in r.text and "not understood" in r.text, "bad date: readable message")
     page(s, "/letters/promotion", must="Promotion letter")
+    # salary certificate with the signature picture; Employees list filters
+    r = page(s, "/letters/salary", must="Signature on letters")
+    ok("authorized signature from the ID card" in r.text, "letters use the ID card authorized signature until one is uploaded")
+    from PIL import Image as _Img, ImageDraw as _Draw
+    im = _Img.new("RGB", (400, 140), "white")
+    _Draw.Draw(im).line([(20, 100), (120, 30), (220, 110), (380, 40)], fill="black", width=6)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    post(s, "/letters-signature", {"back": "/letters/salary"}, files={"file": ("sign.png", buf.getvalue(), "image/png")},
+         must="Signature saved")
+    ok("Uploaded for letters" in page(s, "/letters/salary").text, "letter signature uploaded")
+    r = s.post(BASE + f"/employees/{kid}/letter/salary", data={"purpose": "bank loan", "save_copy": "1"}, timeout=60)
+    ok(r.content[:4] == b"%PDF" and len(r.content) > 3000, "salary certificate PDF")
+    page(s, f"/employees/{kid}", must="Salary certificate")
+    r = page(s, "/employees?designation=Senior+Accounts+Officer", must="Senior Accounts Officer")
+    ok("Ms. Karima" not in r.text, "Employees list filtered by designation")
+    page(s, "/employees?department=999999")
     ok(h.post(BASE + f"/employees/{kid}/changes", data={"kind": "INCREMENT"}, timeout=30).status_code == 403,
        "only Admin records increments")
 

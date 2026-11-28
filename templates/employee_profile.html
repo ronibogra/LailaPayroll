@@ -183,6 +183,7 @@
 <div><label>Letter date</label><input type="date" name="letter_date" value="{{ today }}"></div></div>
 <label style="margin-top:6px">Remarks (printed in the letter, optional)</label><textarea name="remarks" rows="2" style="width:100%" placeholder="e.g. Your performance during probation has been excellent."></textarea>
 <label style="color:inherit"><input type="checkbox" name="save_copy" value="1" checked> Save a copy in Documents and mark as confirmed</label>
+<label style="color:inherit"><input type="checkbox" name="no_sign" value="1"> Without the signature picture (sign by hand)</label>
 <p><button>Make confirmation letter</button> <a class="btn sec" href="/letters/confirmation">Edit text</a></p></form>
 <div style="border:1px solid #e3e6eb;border-radius:10px;padding:12px">
 <b>Release letter / Experience certificate</b>
@@ -192,8 +193,18 @@
 <label style="margin-top:6px">Remarks (printed, optional)</label><textarea name="remarks" rows="2" style="width:100%">{{ sep.remarks or '' }}</textarea>
 <label style="color:inherit"><input type="checkbox" name="save_copy" value="1" checked> Save a copy in Documents</label>
 <label style="color:inherit"><input type="checkbox" name="override" value="1"> Issue even if items are not returned</label>
+<label style="color:inherit"><input type="checkbox" name="no_sign" value="1"> Without the signature picture (sign by hand)</label>
 <p><button>Make release letter</button> <button class="sec" formaction="/employees/{{ e.id }}/letter/experience">Experience certificate</button> <a class="btn sec" href="/letters/release">Edit texts</a></p></form>{% endif %}
-</div></div></div>{% endif %}
+</div>
+{% if 'salary.view' in user.perms %}<form method="post" action="/employees/{{ e.id }}/letter/salary" target="_blank" style="border:1px solid #e3e6eb;border-radius:10px;padding:12px">
+<b>Salary certificate</b> <span class="hint">gross Tk {{ '{:,.0f}'.format(e.gross or 0) }} with the salary breakdown</span>
+<div class="form-grid" style="margin-top:6px"><div><label>Letter date</label><input type="date" name="letter_date" value="{{ today }}"></div>
+<div><label>For (purpose, optional)</label><input name="purpose" placeholder="e.g. bank loan, visa application"></div></div>
+<label style="margin-top:6px">Remarks (printed, optional)</label><textarea name="remarks" rows="2" style="width:100%"></textarea>
+<label style="color:inherit"><input type="checkbox" name="save_copy" value="1" checked> Save a copy in Documents</label>
+<label style="color:inherit"><input type="checkbox" name="no_sign" value="1"> Without the signature picture (sign by hand)</label>
+<p><button>Make salary certificate</button> <a class="btn sec" href="/letters/salary">Edit text &amp; signature</a></p></form>{% endif %}
+</div></div>{% endif %}
 <div class="panel" id="history"><h3>History</h3><div class="table-wrap" style="max-height:360px"><table>
 {% for when, ico, text in history %}<tr><td style="white-space:nowrap">{{ when.strftime('%d/%m/%Y') }}</td><td>{{ ico }}</td><td>{{ text }}</td></tr>
 {% else %}<tr><td class="hint">Nothing yet.</td></tr>{% endfor %}</table></div></div>

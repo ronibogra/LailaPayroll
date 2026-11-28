@@ -839,7 +839,9 @@ def employees_page(request: Request, page: int = 1, user=Depends(page_user), db:
     r = report_ctx(db, user, "employees", params)
     return render(request, "employees.html", user, r=r, q=params.get("q", ""), page=max(page, 1),
                   pages=max(1, -(-r["total"] // 50)), company=company_filter(user, params.get("company")) or "",
-                  status=params.get("status", ""), companies=visible_companies(db, user))
+                  status=params.get("status", ""), companies=visible_companies(db, user),
+                  departments=filter_options(db, user, "departments"), designations=filter_options(db, user, "designations"),
+                  department=params.get("department", ""), designation=params.get("designation", ""))
 
 
 @app.get("/employees/template.xlsx")
@@ -1700,8 +1702,10 @@ async def employee_letter(request: Request, emp_id: int, kind: str, user=Depends
     """Confirmation letter, release letter, experience certificate (with remarks) - Admin."""
     need(user, "employees.view", "appointment.letter")
     from services import appointment as apt
-    if kind not in letter_svc.KINDS:
+    if kind not in letter_svc.KINDS or kind in ("promotion", "increment"):
         raise HTTPException(404, "Unknown letter")
+    if kind == "salary":
+        need(user, "salary.view")
     emp = _emp_or_404(db, user, emp_id)
     back = f"/employees/{emp.id}#letters"
     f = await request.form()
@@ -1722,7 +1726,7 @@ async def employee_letter(request: Request, emp_id: int, kind: str, user=Depends
                                 "tick 'issue anyway'")
     if kind == "confirmation":
         conf = conf or now_local().date()
-    code = {"confirmation": "CNF", "release": "REL", "experience": "EXP"}[kind]
+    code = {"confirmation": "CNF", "release": "REL", "experience": "EXP", "salary": "SAL"}[kind]
     ref = str(f.get("ref") or "").strip()[:60] or \
         f"{emp.company.code if emp.company else 'HO'}/HR/{code}/{letter_date:%Y}/{emp.employee_code}"
     base = apt.load_template(db)
@@ -1734,9 +1738,11 @@ async def employee_letter(request: Request, emp_id: int, kind: str, user=Depends
                   last_working_day=f"{lwd:%d %B %Y}" if lwd else "-", notice_date=(f"{sep.notice_date:%d %B %Y}"
                                                                                     if sep and sep.notice_date else "-"),
                   separation_type=letter_svc.SEP_TYPES.get(sep.sep_type, "separation") if sep else "-",
-                  reason=(sep.reason or "") if sep else "", service_length=letter_svc.service_length(emp.joined_on, lwd))
+                  reason=(sep.reason or "") if sep else "", service_length=letter_svc.service_length(emp.joined_on, lwd),
+                  purpose=(f" for {str(f.get('purpose')).strip()[:150]}" if str(f.get("purpose") or "").strip() else ""))
     title = letter_svc.KINDS[kind][0]
-    pdf = apt.letter_pdf(emp, values, {**base, **tpl}, acceptance=False, title=title, to_block=kind != "experience")
+    pdf = apt.letter_pdf(emp, values, {**base, **tpl}, acceptance=False, title=title,
+                         to_block=kind not in ("experience", "salary"), signature=f.get("no_sign") != "1")
     if kind == "confirmation" and f.get("save_copy") != "no":
         emp.confirmed_on = conf
     if f.get("save_copy"):
@@ -1760,9 +1766,49 @@ def letter_template_page(request: Request, kind: str, user=Depends(page_user), d
                   confirmation_date="Confirmation date",
                   last_working_day="Last working day", notice_date="Resignation / notice date",
                   separation_type="resignation / termination ...", reason="Reason for leaving",
-                  service_length="Length of service, e.g. 2 years 3 months")
+                  service_length="Length of service, e.g. 2 years 3 months",
+                  purpose="Salary certificate: ' for <purpose>' typed when making it (e.g. bank loan, visa)")
+    from services.appointment import signature_file
+    sig = signature_file()
     return render(request, "letter_template.html", user, kind=kind, kinds=letter_svc.KINDS,
-                  tpl=letter_svc.template(db, kind), fields=fields)
+                  tpl=letter_svc.template(db, kind), fields=fields, sig=sig.name if sig else "",
+                  sig_v=int(sig.stat().st_mtime) if sig else 0)
+
+
+@app.get("/letters-signature.png")
+def letters_signature(user=Depends(page_user)):
+    need(user, "appointment.letter")
+    from services.appointment import signature_file
+    p = signature_file()
+    if not p:
+        raise HTTPException(404, "No signature")
+    return FileResponse(p, media_type="image/png")
+
+
+@app.post("/letters-signature")
+async def letters_signature_save(request: Request, user=Depends(page_user), db: Session = Depends(get_db)):
+    """Signature printed on all letters and certificates (photo / scan; the paper background is removed)."""
+    need(user, "appointment.letter")
+    f = await request.form()
+    back = str(f.get("back") or "/letters/salary")
+    if not back.startswith("/letters/"):
+        back = "/letters/salary"
+    target = branding.BRAND_DIR / "letter_signature.png"
+    if f.get("remove"):
+        target.unlink(missing_ok=True)
+        audit(db, user, "LETTER_SIGNATURE", "removed")
+        return go(back, msg="Letter signature removed")
+    up = f.get("file")
+    if up is None or not getattr(up, "filename", ""):
+        return go(back, err="Choose a signature picture")
+    from services.photos import clean_signature
+    try:
+        branding.BRAND_DIR.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(clean_signature(await up.read()))
+    except Exception as exc:  # noqa: BLE001
+        return go(back, err=f"Signature picture: {exc}")
+    audit(db, user, "LETTER_SIGNATURE", "uploaded")
+    return go(back, msg="Signature saved - it is printed on every letter and certificate")
 
 
 @app.post("/letters/{kind}")

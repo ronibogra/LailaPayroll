@@ -51,6 +51,16 @@ We are pleased to inform you that the management has approved an increment in yo
 Remarks: {remarks}
 
 All other terms and conditions of your employment remain unchanged. We appreciate your contribution and hope you will continue your good work.""")
+KINDS["salary"] = ("Salary certificate", "Salary Certificate", """TO WHOM IT MAY CONCERN
+
+This is to certify that {name}, son / daughter of {father_name}, Employee ID {employee_code}, has been working with {company} as {designation} in the {department} department since {joining_date}.
+
+{name} draws a monthly gross salary of Tk {gross} ({gross_words}), as follows:
+{salary_table}
+
+Remarks: {remarks}
+
+This certificate is issued on request{purpose} and does not carry any financial liability for the company.""")
 CHANGE_FIELDS = {"old_designation": "Designation before", "new_designation": "New designation",
                  "old_grade": "Grade before", "new_grade": "New grade", "new_department": "New department",
                  "effective_date": "Effective date", "old_gross": "Gross before", "new_gross": "New gross",

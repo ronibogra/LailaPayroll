@@ -133,14 +133,24 @@ def values_for(db, e, letter_date: date, joining: date | None, ref: str, tpl: di
     }
 
 
+def signature_file():
+    """Signature printed on letters: the one uploaded for letters, else the ID card authorized signature."""
+    from services.branding import BRAND_DIR
+    for name in ("letter_signature.png", "auth_signature.png"):
+        p = BRAND_DIR / name
+        if p.exists():
+            return p
+    return None
+
+
 def letter_pdf(e, values: dict, tpl: dict, components=(), acceptance: bool = True, title: str = "",
-               to_block: bool = True) -> bytes:
+               to_block: bool = True, signature: bool = True) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_JUSTIFY
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     from config import settings
     from services.branding import BRAND, PRODUCT_LOGO, logo_path
@@ -212,7 +222,19 @@ def letter_pdf(e, values: dict, tpl: dict, components=(), acceptance: bool = Tru
         else:
             para.append(line.strip())
     flush()
-    sign = [Spacer(1, 26), Paragraph("_______________________", small),
+    sig_img = signature_file() if signature else None
+    sig = []
+    if sig_img:
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(sig_img) as im:
+                w, h = im.size
+            hh = 16 * mm
+            ww = min(55 * mm, hh * w / max(h, 1))
+            sig = [Spacer(1, 10), Image(str(sig_img), width=ww, height=ww * h / max(w, 1), hAlign="LEFT")]
+        except Exception:  # noqa: BLE001
+            sig = []
+    sign = (sig or [Spacer(1, 26)]) + [Paragraph("_______________________", small),
             Paragraph(f"<b>{esc(values['signatory_name'] or 'Authorised signatory')}</b>", small),
             Paragraph(esc(values["signatory_title"]), small), Paragraph(esc(values["company"]), small)]
     story.append(KeepTogether(sign))

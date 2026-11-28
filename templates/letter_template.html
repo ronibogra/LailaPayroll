@@ -8,6 +8,13 @@
 <label>Subject</label><input name="subject" value="{{ tpl.subject }}" style="width:100%">
 <label style="margin-top:10px">Letter text</label><textarea name="body" rows="20" style="width:100%;font-family:inherit;line-height:1.45">{{ tpl.body }}</textarea>
 <p><button>Save text</button> <button class="sec" name="reset" value="1" onclick="return confirm('Go back to the standard text?')">Standard text</button></p></form></div>
-<div class="panel"><h3>Fields you can use</h3><div class="table-wrap"><table>{% for k, v in fields.items() if k != 'salary_table' %}<tr><td><code>{{ '{' ~ k ~ '}' }}</code></td><td>{{ v }}</td></tr>{% endfor %}</table></div></div>
+<div><div class="panel"><h3>Signature on letters</h3>
+{% if sig %}<p><img src="/letters-signature.png?v={{ sig_v }}" alt="signature" style="max-height:70px;max-width:260px;border:1px dashed #ccd;padding:4px;background:#fff"></p>
+<p class="hint">{{ 'Uploaded for letters.' if sig == 'letter_signature.png' else 'Using the authorized signature from the ID card design - upload one here to use a different one on letters.' }} It is printed above the name of the signatory on every letter and certificate (untick it when making a letter to sign by hand).</p>
+{% else %}<p class="hint">No signature yet - letters have an empty line to sign by hand. Upload a photo or scan of the signature (white paper is removed automatically).</p>{% endif %}
+<form method="post" action="/letters-signature" enctype="multipart/form-data" class="inline"><input type="hidden" name="back" value="/letters/{{ kind }}">
+<input type="file" name="file" accept="image/*"><button class="sec">Upload signature</button>{% if sig == 'letter_signature.png' %} <button class="link" name="remove" value="1">remove</button>{% endif %}</form>
+<p class="hint">Name and title of the signatory: <a href="/appointment-letter">Appointment letter settings</a>.</p></div>
+<div class="panel"><h3>Fields you can use</h3><div class="table-wrap"><table>{% for k, v in fields.items() if k != 'salary_table' %}<tr><td><code>{{ '{' ~ k ~ '}' }}</code></td><td>{{ v }}</td></tr>{% endfor %}</table></div></div></div>
 </div>
 {% endblock %}
